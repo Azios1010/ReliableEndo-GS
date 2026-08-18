@@ -1,0 +1,7 @@
+experiment:
+  name: infrastructure_smoke
+  seed: 42
+  output_root: outputs
+
+runtime:
+  device: cpu
