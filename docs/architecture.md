@@ -253,3 +253,7 @@ The architecture answers the required review questions as follows:
 10. **Are unimplemented components clearly marked as planned?** Yes; the status table and future layout distinguish implemented, planned, and optional work.
 
 The supporting specifications are `docs/contracts.md`, `docs/third_party_integration.md`, `docs/artifact_lifecycle.md`, `docs/execution_pipeline.md`, and `docs/testing_strategy.md`.
+
+## Implementation roadmap
+
+The gated implementation sequence is maintained in [PLAN.md](../PLAN.md). Its milestone plans operationalize this architecture without changing the component boundaries or scientific claims defined here.
