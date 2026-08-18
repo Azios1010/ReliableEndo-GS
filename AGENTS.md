@@ -145,7 +145,7 @@ Most scientific source areas below are planned and must not be created until req
 | Area | Responsibility | Status |
 | --- | --- | --- |
 | `src/reliable_endo_gs/contracts/` | Shared scientific and data interfaces | Planned |
-| `src/reliable_endo_gs/data/` | Dataset adapters only; root `data/` is runtime-only | Planned |
+| `src/reliable_endo_gs/data/` | Dataset identity, paths, split contracts, and adapter scaffolds; root `data/` is runtime-only | Active: no parsing/tensors |
 | `src/reliable_endo_gs/baseline/` | Upstream Endo-E2E-GS isolation | Planned |
 | `src/reliable_endo_gs/uncertainty/` | Uncertainty estimation and calibration | Planned |
 | `src/reliable_endo_gs/geometry/` | Camera and stereo geometry | Planned |
