@@ -2,7 +2,7 @@
 
 ## Status
 
-PLANNED
+COMPLETE
 
 ## Research stage
 
@@ -179,12 +179,26 @@ Record dependency versions, contract schema versions, config hash, Git revision/
 
 ## Completion checklist
 
-- [ ] PyTorch dependency and CPU/CUDA separation are documented.
-- [ ] Tensor/device/dtype policy is explicit.
-- [ ] Six Phase I contracts and validations are implemented.
-- [ ] Scientific seeding is deterministic and recorded.
-- [ ] CPU unit, contract, smoke, and existing tests pass.
-- [ ] No upstream or dataset integration was introduced.
+- [x] PyTorch dependency and CPU/CUDA separation are documented.
+- [x] Tensor/device/dtype policy is explicit.
+- [x] Six Phase I contracts and validations are implemented.
+- [x] Scientific seeding is deterministic and recorded.
+- [x] CPU unit, contract, smoke, and existing tests pass.
+- [x] No upstream or dataset integration was introduced.
+
+## Implementation record
+
+- Completion date: 2026-08-19.
+- Implementation commit: pending; this task was not authorized to commit.
+- Validation: editable install passed; Ruff and formatting passed; mypy passed
+  on 33 source files; 71 tests passed; CLI help, infrastructure smoke, data CLI
+  help, and bytecode compilation passed; `git diff --check` passed.
+- Prompt-level filename clarification: the implementation uses `cameras.py`,
+  `samples.py`, and `gaussians.py` as explicitly required by Prompt 07, while
+  retaining the plan's internal `common.py` for shared metadata-only checks.
+- CUDA environment: deliberately not created because neither Plan 00 nor the
+  verified local dependency metadata establishes a final CUDA strategy. The CPU
+  environment requests PyTorch 2.x without a CUDA toolkit.
 
 ## Handoff to next plan
 

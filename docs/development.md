@@ -8,7 +8,10 @@ ReliableEndo-GS supports Python 3.10 and newer. From the repository root, instal
 python -m pip install -e ".[dev]"
 ```
 
-The runtime dependency set currently contains only PyYAML. The `dev` extra adds pytest, pytest-cov, Ruff, mypy, pre-commit, and YAML typing support.
+The runtime dependency set contains PyYAML and PyTorch 2.x. PyTorch provides the
+tensor contracts and scientific random-number foundation introduced by Plan 00;
+it does not imply a CUDA requirement. The `dev` extra adds pytest, pytest-cov,
+Ruff, mypy, pre-commit, and YAML typing support.
 
 ## Quality commands
 
@@ -29,7 +32,11 @@ reg --help
 reg smoke --config configs/experiment/infrastructure_smoke.yaml
 ```
 
-The smoke command loads and validates configuration, seeds Python's `random` module, computes a canonical configuration hash, reads Git metadata without changing Git state, and creates a unique run directory. It never imports a scientific model or accesses a dataset.
+The smoke command loads and validates configuration, seeds Python's `random`
+module and PyTorch, computes a canonical configuration hash, reads Git metadata
+without changing Git state, and creates a unique run directory. The manifest
+records the PyTorch version and seeding policy. It never imports a scientific
+model or accesses a dataset.
 
 On Windows, activate the project virtual or Conda environment before invoking `reg`. Windows also ships a system executable named `reg.exe`, so the active environment's `Scripts` directory must precede `System32` on `PATH`.
 
@@ -61,8 +68,25 @@ Run directories are never overwritten. Runtime contents under `outputs/`, `artif
 4. Do not add large frameworks preemptively.
 5. CUDA dependencies must never be required by CPU CI.
 
-Hydra, Lightning, WandB, pandas, OpenCV, NumPy, PyTorch, SciPy, torchvision, LPIPS, and other scientific packages are intentionally absent. Scientific dependencies and CUDA environments will be introduced only by later, scoped implementation tasks.
+Hydra, Lightning, WandB, pandas, OpenCV, NumPy as a direct dependency, SciPy,
+torchvision, LPIPS, and other scientific packages remain intentionally absent.
+PyTorch is the only scientific framework currently required. No CUDA toolkit,
+CUDA-only package, or final GPU environment strategy is defined by Plan 00.
 
 ## CPU environment and CI
 
-`environments/cpu.yml` creates a lightweight Conda environment and installs `.[dev]`. CPU CI installs the same project extras, runs linting, formatting checks, type checking, tests, the smoke command, bytecode compilation, and a tracked-file cleanliness check. It neither downloads datasets nor requires a GPU.
+`environments/cpu.yml` creates a CPU-capable Conda environment, resolves a
+PyTorch 2.x build without requesting a CUDA toolkit, and installs `.[dev]`.
+CPU CI installs the same project extras, runs linting, formatting checks, type
+checking, tests, the smoke command, bytecode compilation, and a tracked-file
+cleanliness check. It neither downloads datasets nor requires a GPU.
+
+## Tensor contract policy
+
+The contracts under `reliable_endo_gs.contracts` validate shapes, floating or
+boolean dtypes, batch/spatial agreement, and devices using tensor metadata only.
+They do not scan values, cast, copy, move devices, access files, or execute
+models. Coupled tensors within a contract share a device and, for one semantic
+numeric representation, a dtype. Any floating precision supported by PyTorch is
+allowed, so callers retain explicit control over float64 calibration and future
+mixed-precision boundaries.

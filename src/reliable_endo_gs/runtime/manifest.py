@@ -4,6 +4,7 @@ import platform
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
 from reliable_endo_gs.utils.io import write_json_atomic
@@ -22,6 +23,8 @@ class RunManifest:
     config_hash: str
     seed: int
     python_version: str
+    torch_version: str
+    seed_policy: str
 
     def to_dict(self) -> dict[str, object]:
         """Return a JSON-compatible representation of the manifest."""
@@ -34,6 +37,8 @@ class RunManifest:
             "config_hash": self.config_hash,
             "seed": self.seed,
             "python_version": self.python_version,
+            "torch_version": self.torch_version,
+            "seed_policy": self.seed_policy,
         }
 
 
@@ -70,6 +75,7 @@ def create_run_manifest(
     seed: int,
     timestamp_utc: str | None = None,
     python_version: str | None = None,
+    torch_version: str | None = None,
 ) -> RunManifest:
     """Create an immutable manifest without scientific metadata."""
 
@@ -81,7 +87,18 @@ def create_run_manifest(
         config_hash=config_hash,
         seed=seed,
         python_version=python_version if python_version is not None else platform.python_version(),
+        torch_version=torch_version if torch_version is not None else _installed_torch_version(),
+        seed_policy="python_random+torch_manual_seed+cuda_manual_seed_all_if_available",
     )
+
+
+def _installed_torch_version() -> str:
+    """Return installed PyTorch package metadata without importing PyTorch."""
+
+    try:
+        return version("torch")
+    except PackageNotFoundError:
+        return "unavailable"
 
 
 def write_run_manifest(path: Path, manifest: RunManifest) -> None:

@@ -2,13 +2,23 @@
 
 ## Scope and status
 
-This document specifies future public scientific contracts. Every contract below is **PLANNED**; no corresponding Python class, tensor loader, or scientific package is implemented by this document.
+Plan 00 implements the Phase I structural contracts `CameraBatch`, `StereoBatch`,
+`StereoPrediction`, `GaussianField`, `RenderOutput`, and `ReconstructionState`
+under `reliable_endo_gs.contracts`. Region, action, cost, and router contracts
+remain **PLANNED**. No tensor loader, model, geometry formula, renderer, or
+training package is implied by the implemented containers.
 
-Contracts isolate scientific meaning from the pinned baseline, renderer implementation, training framework, and routing policy. Concrete types may later be dataclasses, protocols, or validated containers, but their implementation form must preserve the semantics and invariants defined here.
+Contracts isolate scientific meaning from the pinned baseline, renderer
+implementation, training framework, and routing policy. The implemented Phase I
+types are frozen, slotted dataclasses with lightweight structural validation.
 
 ## Versioning and compatibility
 
 Each persisted or exchanged contract carries a schema name and schema version. Compatible additive fields may increment a minor version. A breaking change to shapes, coordinate conventions, units, validity meaning, covariance meaning, or feature semantics requires a schema version bump and an explicit migration or rejection path.
+
+Implemented classes expose `SCHEMA_NAME` and `SCHEMA_VERSION = "1.0"` as class
+metadata. Serialization and migration are deferred until an artifact milestone
+requires them.
 
 The ReliableEndo-GS package version is not a substitute for contract schema versions. Consumers validate supported schemas before use. Missing provenance or incompatible semantics are errors, not warnings followed by best-effort guessing.
 
@@ -22,6 +32,11 @@ Notation used below:
 
 Floating-point dtype and device must be preserved or converted explicitly at component boundaries. Shape alone never establishes a coordinate convention.
 
+Implemented structural validation reads tensor metadata only. It does not scan
+tensor values, synchronize accelerators, cast dtypes, or move devices. Coupled
+tensors share a device. Numeric tensors use a floating dtype and masks use
+`torch.bool`; no particular floating precision is forced.
+
 ## CameraBatch
 
 `CameraBatch` describes calibrated cameras associated with a batch.
@@ -30,9 +45,13 @@ Floating-point dtype and device must be preserved or converted explicitly at com
 | --- | --- | --- | --- |
 | `intrinsics` | Yes | `[B, 3, 3]` | Camera intrinsic matrices under an explicitly named pixel convention. |
 | `world_from_camera` | Yes | `[B, 4, 4]` | Homogeneous transforms from camera coordinates to world coordinates. |
-| `camera_ids` | Recommended | `[B]` logical values | Stable identifiers for provenance and stereo association. |
 
-The pixel-center convention, image-resize relationship, handedness, axis orientation, transform multiplication convention, and units are deliberately **TBD until verified against the pinned baseline and datasets**. Once chosen, they must be explicit in the schema metadata and tests. Callers may not assume common computer-vision defaults.
+The pixel-center convention, image-resize relationship, handedness, axis
+orientation, transform multiplication convention, and units are deliberately
+**TBD until verified against the pinned baseline and datasets**. Once chosen,
+they must be explicit in schema metadata and tests. Camera identity currently
+comes from `StereoBatch` sample/sequence association; an explicit camera-ID field
+is deferred until a concrete producer requires it.
 
 ## StereoBatch
 
@@ -95,9 +114,8 @@ Invalid entries must remain masked. Nonpositive scales, invalid rotations, non-f
 | Field | Required | Shape | Semantics |
 | --- | --- | --- | --- |
 | `image` | Yes | `[B, C, H, W]` | Rendered image with declared color space and range. |
-| `depth` | Yes | `[B, 1, H, W]` | Rendered depth under the requested camera convention. |
-| `visibility` | Yes | versioned pixel- or Gaussian-level tensor | Explicit visibility or contribution evidence; representation is fixed by schema. |
-| `diagnostics` | Optional | structured mapping | Backend and numerical diagnostics that do not change output semantics. |
+| `depth` | Optional | `[B, 1, H, W]` | Rendered depth under the requested camera convention when the backend exposes it. |
+| `visibility` | Optional | batch-leading pixel- or Gaussian-level tensor | Explicit visibility or contribution evidence; exact representation is deferred to a concrete renderer. |
 
 Production GPU and deterministic CPU reference renderers must satisfy the same public contract for the supported subset. Numerical tolerances may be backend-specific and declared in tests.
 
@@ -107,11 +125,11 @@ Production GPU and deterministic CPU reference renderers must satisfy the same p
 
 | Field | Required | Semantics |
 | --- | --- | --- |
-| `input` | Yes | The `StereoBatch` or an immutable reference to its versioned data identity. |
-| `prediction` | Yes | The normalized `StereoPrediction`. |
-| `field` | Yes | The current `GaussianField`. |
-| `left_render` | Yes | Reference-view `RenderOutput`. |
-| `right_render` | Optional | Cross-view `RenderOutput` when available. |
+| `batch` | Yes | The `StereoBatch`. |
+| `stereo` | Yes | The normalized `StereoPrediction`. |
+| `gaussians` | Yes | The current `GaussianField`. |
+| `render_left` | Yes | Reference-view `RenderOutput`. |
+| `render_right` | Optional | Cross-view `RenderOutput` when available. |
 | `diagnostics` | Yes | Named Phase I evidence, calibration summaries, and validity counts. |
 | `provenance` | Yes | Artifact IDs, schema versions, configuration hash, code revision, split/sample identity, and backend identities. |
 
@@ -195,6 +213,13 @@ The owner modules in `docs/architecture.md` perform conversions. Geometry tests 
 
 ## Mutation, masking, and diagnostics
 
-Scientific contracts are treated as immutable values at component boundaries. Functions return new values and report changed fields. Validity masks are explicit and propagate through derived quantities. Empty masks and zero-valid-element batches are supported as explicit outcomes or rejected with a clear typed error; they never produce a plausible-looking aggregate from an accidental denominator clamp.
+Scientific contract containers are frozen at component boundaries and copy
+metadata mappings into read-only views. They intentionally reference tensor
+objects without cloning storage, so callers must not mutate those tensors in
+place. Functions return new contract values and report changed fields. Validity
+masks are explicit and propagate through derived quantities. Empty masks and
+zero-valid-element batches are supported as explicit outcomes or rejected with
+a clear typed error; they never produce a plausible-looking aggregate from an
+accidental denominator clamp.
 
 NaN, infinity, singular covariance, and out-of-range parameters are detected at their owning boundary. Any stabilization rule records its configured threshold and affected count in diagnostics and provenance.

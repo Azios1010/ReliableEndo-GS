@@ -50,7 +50,7 @@ This is a conceptual dependency graph, not a directory-presence claim. Dependenc
 | `data` | **IMPLEMENTED** | External dataset path resolution, registry metadata, adapters, and split contracts without tensor loading. |
 | `utils` | **IMPLEMENTED** | Small cross-cutting utilities that do not own scientific semantics. |
 | `cli` | **IMPLEMENTED** | Minimal command-line entry points for implemented infrastructure. |
-| `contracts` | **PLANNED** | Stable typed exchange objects described in `docs/contracts.md`. |
+| `contracts` | **IMPLEMENTED** | Stable PyTorch tensor exchange objects described in `docs/contracts.md`; no scientific algorithms. |
 | `baseline` | **PLANNED** | Adapter-owned execution of the pinned Endo-E2E-GS baseline. |
 | `uncertainty` | **PLANNED** | Proxy/oracle and learned disparity uncertainty for Phase I. |
 | `geometry` | **PLANNED** | Disparity/depth conversion, backprojection, and center-covariance propagation. |
@@ -74,7 +74,7 @@ src/reliable_endo_gs/
   config/               # IMPLEMENTED
   runtime/              # IMPLEMENTED
   data/                 # IMPLEMENTED
-  contracts/            # PLANNED
+  contracts/            # IMPLEMENTED
   baseline/             # PLANNED
   uncertainty/          # PLANNED
   geometry/              # PLANNED

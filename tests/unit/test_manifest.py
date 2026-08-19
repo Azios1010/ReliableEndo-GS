@@ -28,8 +28,14 @@ def test_manifest_contains_required_fields_and_valid_timestamp() -> None:
         "config_hash",
         "seed",
         "python_version",
+        "torch_version",
+        "seed_policy",
     } <= serialized.keys()
     assert serialized["config_hash"] == config_hash
+    assert serialized["torch_version"]
+    assert serialized["seed_policy"] == (
+        "python_random+torch_manual_seed+cuda_manual_seed_all_if_available"
+    )
     parsed = datetime.fromisoformat(manifest.timestamp_utc.replace("Z", "+00:00"))
     assert parsed.tzinfo is not None
 
