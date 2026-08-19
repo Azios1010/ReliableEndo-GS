@@ -29,6 +29,13 @@ data/*
 *.pth
 *.ckpt
 
+# Pinned upstream source stays clean; generated baseline material is external.
+third_party/endo_e2e_gs/experiments/
+third_party/endo_e2e_gs/test_*_out/
+third_party/endo_e2e_gs/pretrain model/
+third_party/endo_e2e_gs/*.ply
+third_party/endo_e2e_gs/*.png
+
 .idea/
 .vscode/
 .DS_Store

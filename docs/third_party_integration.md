@@ -2,14 +2,17 @@
 
 ## Scope and current status
 
-This document defines how the future Endo-E2E-GS baseline is incorporated without allowing upstream implementation details to become ReliableEndo-GS architecture. No repository is cloned, no upstream commit is selected, and no submodule or baseline adapter is created by this specification.
+Plan 01 selected the official repository directly and pinned commit
+`186fa2b4a2159b28393492f6df1aa444b54391a8` as a Git submodule at
+`third_party/endo_e2e_gs`. The tree is unpatched. CPU-safe translations and
+provenance checks live under `reliable_endo_gs.baseline`; full official
+checkpoint inference and GPU numerical parity remain unverified.
 
 The required integration chain is:
 
 ```text
-official upstream
-    -> research fork, only if required
-    -> pinned commit in third_party/endo_e2e_gs
+official upstream at immutable commit
+    -> direct Git submodule in third_party/endo_e2e_gs
     -> ReliableEndo-GS baseline adapter
     -> ReliableEndo-GS contracts
 ```
@@ -44,11 +47,24 @@ The future integration milestone must perform a documented review before selecti
 
 There is no floating branch dependency. Tags alone are insufficient unless resolved and recorded as an immutable commit. Updating the pin is a reviewed change with reproduction evidence, adapter contract tests, and artifact compatibility analysis.
 
-The choice between a direct upstream submodule and a research-fork submodule remains deferred until the baseline API and required changes are inspected. This document does not guess the commit.
+No research fork or patch is currently required. Updating the selected commit
+requires a new API/license audit and parity evidence; tracking `main` is not an
+acceptable scientific identity.
 
 ## License and attribution
 
-Before third-party code or weights enter the repository workflow, the integration milestone must verify that their licenses permit the intended research use and redistribution behavior. Required notices and citations remain adjacent to the integration metadata and in resulting reports where appropriate.
+The repository-level `LICENSE` is MIT, copyright 2025
+Intelligent-Imaging-Center, and is preserved inside the submodule. However,
+`gaussian_renderer/__init__.py` and `lib/graphics_utils.py` retain Graphdeco
+headers referring to non-commercial research/evaluation terms in a
+`LICENSE.md` that is not present in the selected upstream tree. The external
+`diff-gaussian-rasterization` also has its own terms. Redistribution and use
+beyond the stated research scope therefore require clarification; the top-level
+MIT file alone is not treated as resolving those embedded notices.
+
+The official README supplies a checkpoint filename convention and CLI argument
+but no weight download, hash, or separate checkpoint terms. No checkpoint is
+committed or represented as verified until all three are available.
 
 Dataset access terms are independent from source-code terms. A usable code license does not authorize committing datasets, weights, derived patient data, or artifacts. Any ambiguity is resolved before distribution.
 
@@ -98,7 +114,7 @@ An output that lacks the upstream commit cannot be promoted into a Phase I, orac
 
 ## Validation before scientific use
 
-The future integration milestone is accepted only after:
+The integration milestone is accepted only after:
 
 - upstream installation and license requirements are documented;
 - a pinned revision is reproducible in the supported environment;
@@ -109,3 +125,6 @@ The future integration milestone is accepted only after:
 - CPU-safe contract tests do not claim to validate GPU numerical performance.
 
 Baseline integration precedes uncertainty, geometry, probabilistic Gaussian, action, oracle, or routing implementation.
+
+The source/API inspection record and current blockers are maintained in
+`docs/endo_e2e_gs_api_audit.md`.

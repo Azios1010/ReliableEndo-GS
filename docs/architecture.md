@@ -7,6 +7,8 @@ This document is the canonical component-level architecture for ReliableEndo-GS.
 Status labels have strict meanings:
 
 - **IMPLEMENTED**: code or documentation exists in this repository and is covered by the current validation workflow.
+- **IN PROGRESS**: an approved milestone has established a real boundary, but
+  required external execution evidence remains blocked or unverified.
 - **PLANNED**: required by the approved research design, but not implemented yet.
 - **FUTURE / OPTIONAL**: intentionally outside the MVP and permitted only after the stage gates justify it.
 
@@ -51,7 +53,7 @@ This is a conceptual dependency graph, not a directory-presence claim. Dependenc
 | `utils` | **IMPLEMENTED** | Small cross-cutting utilities that do not own scientific semantics. |
 | `cli` | **IMPLEMENTED** | Minimal command-line entry points for implemented infrastructure. |
 | `contracts` | **IMPLEMENTED** | Stable PyTorch tensor exchange objects described in `docs/contracts.md`; no scientific algorithms. |
-| `baseline` | **PLANNED** | Adapter-owned execution of the pinned Endo-E2E-GS baseline. |
+| `baseline` | **IN PROGRESS** | Pinned Endo-E2E-GS source, CPU-safe contract translation, checkpoint/provenance checks, and optional-import boundary exist; native checkpoint inference and GPU parity remain unverified. |
 | `uncertainty` | **PLANNED** | Proxy/oracle and learned disparity uncertainty for Phase I. |
 | `geometry` | **PLANNED** | Disparity/depth conversion, backprojection, and center-covariance propagation. |
 | `probabilistic_gs` | **PLANNED** | Gaussian attributes, surface covariance, and uncertainty marginalization. |
@@ -75,7 +77,7 @@ src/reliable_endo_gs/
   runtime/              # IMPLEMENTED
   data/                 # IMPLEMENTED
   contracts/            # IMPLEMENTED
-  baseline/             # PLANNED
+  baseline/             # IN PROGRESS
   uncertainty/          # PLANNED
   geometry/              # PLANNED
   probabilistic_gs/     # PLANNED

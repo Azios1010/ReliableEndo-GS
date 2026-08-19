@@ -146,7 +146,7 @@ Most scientific source areas below are planned and must not be created until req
 | --- | --- | --- |
 | `src/reliable_endo_gs/contracts/` | Shared scientific and data interfaces | Active: structural PyTorch contracts only |
 | `src/reliable_endo_gs/data/` | Dataset identity, paths, split contracts, and adapter scaffolds; root `data/` is runtime-only | Active: no parsing/tensors |
-| `src/reliable_endo_gs/baseline/` | Upstream Endo-E2E-GS isolation | Planned |
+| `src/reliable_endo_gs/baseline/` | Upstream Endo-E2E-GS isolation | Active: pinned adapter and CPU conversions; native parity not yet verified |
 | `src/reliable_endo_gs/uncertainty/` | Uncertainty estimation and calibration | Planned |
 | `src/reliable_endo_gs/geometry/` | Camera and stereo geometry | Planned |
 | `src/reliable_endo_gs/probabilistic_gs/` | Gaussian uncertainty representation | Planned |

@@ -1,0 +1,3 @@
+[submodule "third_party/endo_e2e_gs"]
+	path = third_party/endo_e2e_gs
+	url = https://github.com/Intelligent-Imaging-Center/Endo-E2E-GS.git

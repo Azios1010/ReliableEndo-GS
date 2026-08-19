@@ -1,0 +1,11 @@
+schema_version: "1.0"
+baseline:
+  upstream_root: third_party/endo_e2e_gs
+  upstream_commit: 186fa2b4a2159b28393492f6df1aa444b54391a8
+  upstream_config: config/stage2.yaml
+  entry_point: render.py
+  device: cuda
+  enforce_clean: true
+  checkpoint_id: null
+  checkpoint_path: null
+  checkpoint_sha256: null

@@ -2,7 +2,7 @@
 
 ## Status
 
-PLANNED
+IN PROGRESS
 
 ## Research stage
 
@@ -178,12 +178,31 @@ Record origin/fork URLs, commit SHA, submodule dirty state, patch IDs, license f
 ## Completion checklist
 
 - [ ] Official source, license, and checkpoint terms verified.
-- [ ] Exact revision and optional patches pinned.
-- [ ] API and convention audit completed.
-- [ ] Adapter produces only ReliableEndo-GS contracts.
+- [x] Exact revision and optional patches pinned.
+- [x] API and convention audit completed.
+- [x] Adapter produces only ReliableEndo-GS contracts.
 - [ ] Upstream-versus-adapter parity passes.
-- [ ] Direct-import and regression tests pass.
+- [x] Direct-import and regression tests pass.
 
 ## Handoff to next plan
 
 Plan 02 may assume a pinned adapter and verified input/camera requirements. It may not assume any SCARED filesystem layout, calibration interpretation, or rectification status until authoritative data inspection is complete.
+
+## Implementation record (2026-08-19)
+
+- Direct official Git submodule pinned at
+  `186fa2b4a2159b28393492f6df1aa444b54391a8`; no patch or fork.
+- CPU-safe contract translations, strict baseline config, checkpoint hashing,
+  provenance, capability detection, and isolated optional imports implemented.
+- Actual API, formulas, entry points, dependencies, license notices, accessible
+  evidence, and unresolved conventions recorded in
+  `docs/endo_e2e_gs_api_audit.md`.
+- Official checkpoint terms/download/hash, legal fixture, CUDA 11.8 environment,
+  external rasterizer revision, and end-to-end native parity remain blocked.
+- CPU validation: 92 passed and one explicitly skipped optional renderer import;
+  Ruff, Ruff format, mypy, compileall, CLI smoke/data help, and diff checks pass.
+- Current capability probe: source and Python dependencies available, CUDA
+  available, `diff_gaussian_rasterization` unavailable; native inference and
+  checkpoint loading were not executed.
+- Status remains **IN PROGRESS**. CPU conversion parity cannot satisfy the
+  acceptance criterion requiring unmodified upstream inference.

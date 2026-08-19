@@ -73,6 +73,33 @@ torchvision, LPIPS, and other scientific packages remain intentionally absent.
 PyTorch is the only scientific framework currently required. No CUDA toolkit,
 CUDA-only package, or final GPU environment strategy is defined by Plan 00.
 
+## Pinned baseline integration
+
+Initialize the official Endo-E2E-GS source with:
+
+```bash
+git submodule update --init --recursive
+git submodule status
+```
+
+The project pins commit `186fa2b4a2159b28393492f6df1aa444b54391a8`
+under `third_party/endo_e2e_gs`. Importing ReliableEndo-GS, its contracts, its
+data subsystem, or its baseline adapter does not import the upstream model or
+CUDA rasterizer. Optional capability detection reports missing CUDA, compiled
+rasterizer, and upstream Python dependencies; it never substitutes a fake
+backend.
+
+`configs/baseline/endo_e2e_gs.yaml` identifies the revision and official
+entry point but intentionally leaves checkpoint identity, path, and hash null.
+The official repository publishes no checkpoint download or separate weight
+terms, so local weights cannot be treated as verified scientific identity.
+
+Upstream documents a Python 3.10, PyTorch 2.0.1, CUDA 11.8 environment plus an
+externally compiled `diff-gaussian-rasterization`. That stack conflicts with
+the currently validated ReliableEndo-GS PyTorch 2.2+ CPU policy and omits
+several imports used by the source. No unverified CUDA environment is therefore
+advertised as supported. See `docs/endo_e2e_gs_api_audit.md` for exact blockers.
+
 ## CPU environment and CI
 
 `environments/cpu.yml` creates a CPU-capable Conda environment, resolves a
