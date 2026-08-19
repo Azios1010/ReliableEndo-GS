@@ -202,7 +202,12 @@ Plan 02 may assume a pinned adapter and verified input/camera requirements. It m
 - CPU validation: 92 passed and one explicitly skipped optional renderer import;
   Ruff, Ruff format, mypy, compileall, CLI smoke/data help, and diff checks pass.
 - Current capability probe: source and Python dependencies available, CUDA
-  available, `diff_gaussian_rasterization` unavailable; native inference and
-  checkpoint loading were not executed.
+  available, `diff_gaussian_rasterization` unavailable; full native inference
+  and checkpoint loading were not completed.
+- Server runtime follow-up: RTX 2050 and PyTorch CUDA are present, but no CUDA
+  toolkit/MSVC toolchain, `corr_sampler`, authorized checkpoint, or legal
+  fixture is available. Native inference therefore stops before disparity and
+  rasterization. Exact runtime/provenance evidence is in
+  `docs/endo_e2e_gs_runtime_parity_record.md`.
 - Status remains **IN PROGRESS**. CPU conversion parity cannot satisfy the
   acceptance criterion requiring unmodified upstream inference.

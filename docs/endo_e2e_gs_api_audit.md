@@ -175,3 +175,18 @@ there is no verified checkpoint or legal fixture, the compiled runtime is not
 available, and key camera/input conventions remain blocked on Plan 02. Those
 acceptance criteria remain open; synthetic conversion parity is not presented
 as baseline reproduction.
+
+## Server runtime update (2026-08-19)
+
+The server has an RTX 2050 and a CUDA-capable PyTorch 2.9.0+cu128 runtime, but
+not the upstream's Python 3.10/PyTorch 2.0.1/CUDA 11.8 stack. It has neither a
+CUDA toolkit (`nvcc`/`CUDA_HOME`) nor MSVC compiler tools. The official Graphdeco
+rasterizer source was identified at
+`59f5f77e3ddbac3ed9db93ec2cfe99ed6c5d121d`; its direct build attempt correctly
+stopped before compilation because `CUDA_HOME` is absent. The unmodified
+upstream model also stops before rasterization because its configured
+`reg_cuda` correlation implementation requires an absent `corr_sampler`.
+
+The complete compatibility matrix, external-source provenance, license states,
+synthetic diagnostic, and blocked numerical-parity table are in
+`docs/endo_e2e_gs_runtime_parity_record.md`.

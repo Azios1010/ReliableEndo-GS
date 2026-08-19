@@ -57,7 +57,11 @@ def load_upstream_checkpoint(
             f"expected {expected_sha256}, got {actual_sha256}"
         )
     try:
-        checkpoint = torch.load(path, map_location=map_location, weights_only=True)
+        # Upstream calls ``torch.load(path, map_location='cuda')`` under
+        # PyTorch 2.0.1, where full trusted-checkpoint unpickling is the
+        # effective default. State the equivalent behavior explicitly because
+        # modern PyTorch versions changed their default loading policy.
+        checkpoint = torch.load(path, map_location=map_location, weights_only=False)
     except (OSError, RuntimeError, ValueError) as error:
         raise CheckpointError(f"unable to load checkpoint {path}: {error}") from error
     if not isinstance(checkpoint, dict) or "network" not in checkpoint:

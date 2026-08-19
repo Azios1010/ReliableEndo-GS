@@ -79,3 +79,31 @@ def test_checkpoint_loader_rejects_changed_or_invalid_files(tmp_path: Path) -> N
             expected_sha256=digest,
             map_location="cpu",
         )
+
+
+def test_checkpoint_loader_matches_upstream_torch_load_semantics(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    path = tmp_path / "official.pth"
+    path.write_bytes(b"checkpoint identity only")
+    observed: dict[str, object] = {}
+
+    def load_like_upstream(
+        path_argument: Path, *, map_location: str, weights_only: bool
+    ) -> dict[str, object]:
+        observed["path"] = path_argument
+        observed["map_location"] = map_location
+        observed["weights_only"] = weights_only
+        return {"network": {}}
+
+    monkeypatch.setattr(torch, "load", load_like_upstream)
+    result = load_upstream_checkpoint(
+        torch.nn.Identity(),
+        path,
+        expected_sha256=sha256_file(path),
+        map_location="cuda",
+    )
+
+    assert observed == {"path": path, "map_location": "cuda", "weights_only": False}
+    assert result.missing_keys == ()
+    assert result.unexpected_keys == ()
