@@ -1,0 +1,51 @@
+From 6068c1a26f84f8132de10f60b2bc0ce61568e085 Mon Sep 17 00:00:00 2001
+From: ReliableEndo-GS Maintainers <dev@reliable-endo-gs.local>
+Date: Thu, 27 Aug 2026 00:00:00 +0000
+Subject: [PATCH] Fix PyTorch 2.x AT_DISPATCH_FLOATING_TYPES_AND_HALF compatibility in sampler_kernel.cu
+
+BUILD_API_COMPATIBILITY_ONLY
+Target repository: https://github.com/princeton-vl/RAFT-Stereo
+Target commit: 6068c1a26f84f8132de10f60b2bc0ce61568e085
+Target file: sampler/sampler_kernel.cu
+
+Rationale:
+PyTorch 2.x deprecated and removed `Tensor.type()` returning dispatchable types in AT_DISPATCH macros.
+Replacing `volume.type()` with `volume.scalar_type()` conforms to the modern ATen dispatch API (`at::ScalarType`).
+
+Unchanged-science intent:
+This change modifies strictly the dispatch macro operand. It does not alter CUDA kernel bounds checks,
+indexing, thread geometry, float/half math, or return shapes.
+The C++/Python binding interface remains strictly preserved:
+  - forward(volume, coords, radius)
+  - backward(volume, coords, grad_output, radius)
+
+Runtime-equivalence requirement:
+When a compatible GPU build toolchain and authorized checkpoint are available, the compiled extension
+must be verified against the baseline mathematical specification for exact numerical equivalence.
+---
+ sampler/sampler_kernel.cu | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/sampler/sampler_kernel.cu b/sampler/sampler_kernel.cu
+index a8c634c..4fb9017 100644
+--- a/sampler/sampler_kernel.cu
++++ b/sampler/sampler_kernel.cu
+@@ -123,7 +123,7 @@ std::vector<torch::Tensor> sampler_cuda_forward(
+   torch::Tensor corr = torch::zeros(
+     {batch_size, 2*radius+1, ht, wd}, opts);
+ 
+-  AT_DISPATCH_FLOATING_TYPES_AND_HALF(volume.type(), "sampler_forward_kernel", ([&] {
++  AT_DISPATCH_FLOATING_TYPES_AND_HALF(volume.scalar_type(), "sampler_forward_kernel", ([&] {
+     sampler_forward_kernel<scalar_t><<<blocks, threads>>>(
+       volume.packed_accessor32<scalar_t,4,torch::RestrictPtrTraits>(),
+       coords.packed_accessor32<float,4,torch::RestrictPtrTraits>(),
+@@ -154,7 +154,7 @@ std::vector<torch::Tensor> sampler_cuda_backward(
+   const dim3 threads(BLOCK, BLOCK);
+ 
+ 
+-  AT_DISPATCH_FLOATING_TYPES_AND_HALF(volume.type(), "sampler_backward_kernel", ([&] {
++  AT_DISPATCH_FLOATING_TYPES_AND_HALF(volume.scalar_type(), "sampler_backward_kernel", ([&] {
+     sampler_backward_kernel<scalar_t><<<blocks, threads>>>(
+       coords.packed_accessor32<float,4,torch::RestrictPtrTraits>(),
+       corr_grad.packed_accessor32<scalar_t,4,torch::RestrictPtrTraits>(),
+-- 

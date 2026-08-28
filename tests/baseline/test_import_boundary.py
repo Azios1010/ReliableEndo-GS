@@ -1,6 +1,7 @@
 """Enforce third-party isolation and lightweight CPU import behavior."""
 
 import ast
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -21,7 +22,13 @@ def _imported_modules(path: Path) -> set[str]:
 
 def test_no_project_module_outside_baseline_imports_upstream_internals() -> None:
     source_root = Path("src/reliable_endo_gs")
-    forbidden_roots = {"core", "lib", "gaussian_renderer", "diff_gaussian_rasterization"}
+    forbidden_roots = {
+        "core",
+        "lib",
+        "gaussian_renderer",
+        "diff_gaussian_rasterization",
+        "corr_sampler",
+    }
     violations: list[str] = []
     for path in source_root.rglob("*.py"):
         if "baseline" in path.relative_to(source_root).parts:
@@ -35,14 +42,18 @@ def test_no_project_module_outside_baseline_imports_upstream_internals() -> None
 def test_core_import_does_not_load_cuda_rasterizer() -> None:
     code = (
         "import sys; import reliable_endo_gs; import reliable_endo_gs.contracts; "
-        "import reliable_endo_gs.data; "
-        "assert 'diff_gaussian_rasterization' not in sys.modules"
+        "import reliable_endo_gs.data; import reliable_endo_gs.baseline; "
+        "assert 'diff_gaussian_rasterization' not in sys.modules; "
+        "assert 'corr_sampler' not in sys.modules"
     )
+    environment = dict(os.environ)
+    environment["PYTHONDONTWRITEBYTECODE"] = "1"
     result = subprocess.run(
         [sys.executable, "-c", code],
         check=False,
         capture_output=True,
         text=True,
+        env=environment,
     )
     assert result.returncode == 0, result.stderr
 

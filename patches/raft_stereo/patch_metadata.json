@@ -1,0 +1,15 @@
+{
+  "patch_id": "0001-corr-sampler-scalar-type-compatibility",
+  "classification": "BUILD_API_COMPATIBILITY_ONLY",
+  "target_repository": "https://github.com/princeton-vl/RAFT-Stereo",
+  "target_commit": "6068c1a26f84f8132de10f60b2bc0ce61568e085",
+  "target_files": [
+    "sampler/sampler_kernel.cu"
+  ],
+  "preserved_signatures": [
+    "forward(volume, coords, radius)",
+    "backward(volume, coords, grad_output, radius)"
+  ],
+  "scientific_status": "unchanged_science",
+  "runtime_equivalence_requirement": "gpu_numerical_verification_required"
+}

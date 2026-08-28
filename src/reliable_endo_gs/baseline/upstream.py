@@ -31,25 +31,38 @@ class UpstreamGitState:
 
 @dataclass(frozen=True, slots=True)
 class BaselineCapabilities:
-    """Read-only detection result; it never imports or initializes the rasterizer."""
+    """Read-only detection result; it never imports or initializes the rasterizer or CUDA kernels."""
 
     upstream_source: bool
     python_dependencies: bool
     rasterizer: bool
+    corr_sampler: bool
     cuda: bool
+    renderer_ready: bool
+    native_inference_ready: bool
     cuda_baseline_runnable: bool
     missing_python_dependencies: tuple[str, ...]
+
+    @property
+    def renderer_import_ready(self) -> bool:
+        """Alias for renderer import readiness."""
+        return self.renderer_ready
+
+    @property
+    def native_inference_dependency_ready(self) -> bool:
+        """Alias for native inference dependency readiness."""
+        return self.native_inference_ready
 
 
 def _module_available(name: str) -> bool:
     try:
         return importlib.util.find_spec(name) is not None
-    except (ImportError, ModuleNotFoundError, ValueError):
+    except (ImportError, ModuleNotFoundError, ValueError, AttributeError):
         return False
 
 
 def inspect_capabilities(upstream_root: Path) -> BaselineCapabilities:
-    """Inspect source, dependencies, CUDA, and compiled-rasterizer availability."""
+    """Inspect source, dependencies, CUDA, rasterizer, and corr_sampler availability."""
 
     required_source = (
         "LICENSE",
@@ -61,16 +74,26 @@ def inspect_capabilities(upstream_root: Path) -> BaselineCapabilities:
     source_available = all((upstream_root / relative).is_file() for relative in required_source)
     dependency_modules = ("cv2", "scipy", "torchvision", "yacs")
     missing = tuple(name for name in dependency_modules if not _module_available(name))
+    python_deps_ok = len(missing) == 0
     rasterizer_available = _module_available("diff_gaussian_rasterization")
+    corr_sampler_available = _module_available("corr_sampler")
     cuda_available = torch.cuda.is_available()
+
+    renderer_ready = source_available and python_deps_ok and rasterizer_available
+    native_inference_ready = (
+        source_available and python_deps_ok and rasterizer_available and corr_sampler_available
+    )
+    cuda_baseline_runnable = native_inference_ready and cuda_available
+
     return BaselineCapabilities(
         upstream_source=source_available,
-        python_dependencies=not missing,
+        python_dependencies=python_deps_ok,
         rasterizer=rasterizer_available,
+        corr_sampler=corr_sampler_available,
         cuda=cuda_available,
-        cuda_baseline_runnable=(
-            source_available and not missing and rasterizer_available and cuda_available
-        ),
+        renderer_ready=renderer_ready,
+        native_inference_ready=native_inference_ready,
+        cuda_baseline_runnable=cuda_baseline_runnable,
         missing_python_dependencies=missing,
     )
 
@@ -132,9 +155,12 @@ def _isolated_upstream_import_path(upstream_root: Path) -> Iterator[None]:
     already_present = root in sys.path
     if not already_present:
         sys.path.insert(0, root)
+    previous_dont_write_bytecode = sys.dont_write_bytecode
+    sys.dont_write_bytecode = True
     try:
         yield
     finally:
+        sys.dont_write_bytecode = previous_dont_write_bytecode
         if not already_present:
             try:
                 sys.path.remove(root)
@@ -147,6 +173,7 @@ def import_upstream_module(
     upstream_root: Path,
     *,
     require_rasterizer: bool = False,
+    require_corr_sampler: bool = False,
 ) -> ModuleType:
     """Import one verified upstream module only when baseline execution asks."""
 
@@ -160,6 +187,10 @@ def import_upstream_module(
     if require_rasterizer and not capabilities.rasterizer:
         raise UpstreamUnavailableError(
             "diff_gaussian_rasterization is unavailable; install the pinned baseline GPU environment"
+        )
+    if require_corr_sampler and not capabilities.corr_sampler:
+        raise UpstreamUnavailableError(
+            "corr_sampler is unavailable; install the compiled RAFT stereo sampler extension"
         )
     try:
         with _isolated_upstream_import_path(upstream_root):

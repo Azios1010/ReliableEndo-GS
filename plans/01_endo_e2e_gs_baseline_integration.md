@@ -211,3 +211,24 @@ Plan 02 may assume a pinned adapter and verified input/camera requirements. It m
   `docs/endo_e2e_gs_runtime_parity_record.md`.
 - Status remains **IN PROGRESS**. CPU conversion parity cannot satisfy the
   acceptance criterion requiring unmodified upstream inference.
+
+## Implementation record update (2026-08-27)
+
+- Current hardware/environment state:
+  - Hardware: NVIDIA GeForce RTX 5070 Ti x2.
+  - Python: 3.10.11.
+  - PyTorch: `2.7.1+cu128`.
+  - CUDA toolkit: private CUDA 12.8.1 toolkit prepared.
+- Rasterizer state:
+  - `diff_gaussian_rasterization` prior build and smoke check passed in the prepared environment, but was not rerun in this execution scope under the hard no-GPU rule.
+- Correlation sampler compatibility:
+  - Provenance resolved: `https://github.com/princeton-vl/RAFT-Stereo` at commit `6068c1a26f84f8132de10f60b2bc0ce61568e085`.
+  - Minimal compatibility patch prepared under `patches/raft_stereo/0001-corr-sampler-scalar-type-compatibility.patch` and documented under `patches/raft_stereo/README.md` (`BUILD_API_COMPATIBILITY_ONLY`, updating `volume.type()` to `volume.scalar_type()` in `sampler/sampler_kernel.cu` for PyTorch 2.x ATen dispatch compliance while preserving `forward`/`backward` bindings and underlying kernel math).
+  - Patch is statically validated; it has not been compiled or GPU-tested in this scope.
+- Capability detection:
+  - Refactored `BaselineCapabilities` and `inspect_capabilities` in `src/reliable_endo_gs/baseline/upstream.py` to separately report `upstream_source`, `python_dependencies`, `rasterizer`, `corr_sampler`, `cuda`, `renderer_ready` (`renderer_import_ready`), and `native_inference_ready` (`native_inference_dependency_ready`). Native inference readiness requires `corr_sampler` and is false when absent, while renderer readiness remains independently true when the rasterizer is present.
+- Remaining blockers:
+  - Official/author-provided checkpoint authorization and download/hash remain blocked.
+  - Legal SCARED dataset fixture remains blocked on Plan 02 data inspection.
+  - End-to-end native baseline inference and native-versus-adapter parity have not been run.
+- Status: **Plan 01 remains IN PROGRESS**; **Plan 02 remains UNSTARTED**.

@@ -111,3 +111,19 @@ Obtain an authorized official checkpoint and legally usable fixture with hash
 and terms. Then run the unmodified upstream path first and compare its produced
 tensors with adapter translations on the identical input. Plan 02 must not
 start until that evidence is recorded or an approved Plan 01 pivot is made.
+
+## Runtime and compatibility update (2026-08-27)
+
+| Field | Value | Status |
+| --- | --- | --- |
+| GPU hardware | NVIDIA GeForce RTX 5070 Ti x2 | Prepared |
+| Python | 3.10.11 | Prepared |
+| PyTorch | `2.7.1+cu128` | Prepared |
+| CUDA toolkit | Private CUDA 12.8.1 toolkit | Prepared |
+| `diff_gaussian_rasterization` | Built and smoke-checked in earlier environment session | Not rerun in this CPU/static scope |
+| `corr_sampler` provenance | `https://github.com/princeton-vl/RAFT-Stereo` @ `6068c1a26f84f8132de10f60b2bc0ce61568e085` | **RESOLVED** |
+| `corr_sampler` compatibility | Patch prepared under `patches/raft_stereo/0001-corr-sampler-scalar-type-compatibility.patch` (`BUILD_API_COMPATIBILITY_ONLY`, `volume.scalar_type()` dispatch) | **PREPARED / STATICALLY VALIDATED**; not GPU-tested |
+| Checkpoint | Official/author-provided checkpoint authorization and download | **BLOCKED** |
+| Dataset fixture | Authorized legal SCARED fixture | **BLOCKED** on Plan 02 data inspection |
+| Native inference & parity | End-to-end native execution vs adapter | **NOT RUN** (hard no-GPU rule in effect) |
+| Milestone status | Plan 01 | **IN PROGRESS** (Plan 02 unstarted) |

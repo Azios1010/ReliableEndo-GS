@@ -190,3 +190,12 @@ upstream model also stops before rasterization because its configured
 The complete compatibility matrix, external-source provenance, license states,
 synthetic diagnostic, and blocked numerical-parity table are in
 `docs/endo_e2e_gs_runtime_parity_record.md`.
+
+## Runtime preparation and patch update (2026-08-27)
+
+- Dual RTX 5070 Ti hardware with Python 3.10.11, PyTorch `2.7.1+cu128`, and private CUDA 12.8.1 toolkit prepared.
+- `diff_gaussian_rasterization` previously passed build and smoke tests in the runtime environment.
+- External `corr_sampler` provenance resolved to `https://github.com/princeton-vl/RAFT-Stereo` at `6068c1a26f84f8132de10f60b2bc0ce61568e085`.
+- Minimal `BUILD_API_COMPATIBILITY_ONLY` patch prepared at `patches/raft_stereo/0001-corr-sampler-scalar-type-compatibility.patch` for PyTorch 2.x `volume.scalar_type()` dispatch compatibility in `sampler/sampler_kernel.cu`.
+- Upstream capability inspection refactored to separately track `corr_sampler`, `renderer_ready`, and `native_inference_ready`.
+- Checkpoint authorization, legal dataset fixture, and end-to-end GPU parity remain blocked. Plan 01 remains **IN PROGRESS**.
