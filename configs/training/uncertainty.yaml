@@ -1,0 +1,21 @@
+schema_version: "1"
+device: cpu
+seed: 42
+optimizer:
+  name: Adam
+  learning_rate: 0.001
+  weight_decay: 0.0
+schedule:
+  name: none
+head:
+  hidden_channels: 16
+  epsilon: 0.0001
+loss:
+  name: laplace_nll_v1
+checkpoint:
+  policy: explicit_artifact_path
+  identity: REQUIRED_RAW_UNCERTAINTY_CHECKPOINT_IDENTITY
+provenance:
+  architecture_id: laplace_uncertainty_head.v1
+  feature_schema: audited_pre_render_stereo_features.v1
+  output_schema: calibrated_disparity_sigma.v1

@@ -1,0 +1,23 @@
+schema_version: phase1d_probabilistic_gs.v1
+representation_config: configs/probabilistic_gs/two_covariance.yaml
+renderer_config: configs/rendering/production.yaml
+
+validation:
+  synthetic_contracts: true
+  real_data: false
+  production_renderer: false
+  gpu: false
+
+variants:
+  - name: baseline
+    status: available
+  - name: covariance_only
+    status: available
+  - name: stereo_covariance_corrected
+    status: available
+  - name: opacity_only
+    status: deferred_undefined_mapping
+  - name: fixed_isotropic
+    status: deferred_unconfigured_scale
+
+scientific_selection: pending_real_validation

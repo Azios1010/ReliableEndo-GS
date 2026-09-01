@@ -1,0 +1,23 @@
+schema_version: probabilistic_gaussian_representation.v1
+variant: stereo_covariance_corrected
+
+surface_covariance:
+  source: baseline_rotations_and_positive_physical_scales
+  quaternion_order: wxyz
+  formula: R_diag_scale_squared_R_transpose
+
+center_covariance:
+  source: plan06_sigma_geo
+  frame: explicit_input_required
+  length_unit: explicit_input_required
+
+marginalization:
+  rule: cov_surface_plus_cov_center
+  opacity_correction: determinant_ratio
+  rank1_optimization: false
+  diagonal_jitter: false
+
+status:
+  local_validation: analytic_and_contract_only
+  production_renderer_parity: pending
+  real_data_validation: pending

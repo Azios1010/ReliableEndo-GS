@@ -1,0 +1,18 @@
+schema_version: phase1e_cross_view.v1
+mode: development_only
+training_config: configs/training/phase1.yaml
+evaluation_config: configs/evaluation/cross_view.yaml
+dataset: synthetic_fixture_only
+runtime:
+  device: cpu
+  server_execution: false
+  gpu: false
+protocol:
+  same_gaussian_state_for_left_right: true
+  right_camera_source: explicit_stereo_batch_right_camera
+  native_renderer_required_for_scientific_claim: true
+  test_tuning_forbidden: true
+status:
+  local_integration: available
+  real_camera_validation: pending
+  scientific_acceptance: pending

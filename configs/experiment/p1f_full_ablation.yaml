@@ -1,0 +1,18 @@
+schema_version: phase1f_full_ablation.v1
+mode: development_only
+base_config: configs/experiment/p1e_cross_view.yaml
+variants:
+  - baseline
+  - covariance_only
+  - stereo_covariance_corrected
+cross_view:
+  off_on_comparison: configured_for_future_real_validation
+  robust_losses: [l1, charbonnier]
+runtime:
+  device: cpu
+  server_execution: false
+  gpu: false
+status:
+  local_mechanics_only: true
+  real_ablation: pending
+  gate_i: pending

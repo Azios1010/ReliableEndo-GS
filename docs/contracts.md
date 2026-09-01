@@ -110,6 +110,14 @@ The three covariance fields are not aliases. `cov_surface` describes the represe
 
 Invalid entries must remain masked. Nonpositive scales, invalid rotations, non-finite values, or covariance matrices that violate the configured numerical policy are contract violations or explicitly reported filtered cases.
 
+Plan 07 keeps the covariance meanings explicit: `cov_surface` is intrinsic
+Gaussian support, `cov_center` is the Plan 06 center-position uncertainty, and
+`cov_effective = cov_surface + cov_center` is the per-primitive covariance
+requested by the probabilistic representation variant. The determinant-ratio
+opacity correction applies only to actual opacity values, not logits. A
+renderer request names `surface`, `effective`, or `none`; the local request
+validator does not claim production/native renderer parity.
+
 ## RenderOutput
 
 `RenderOutput` is backend-neutral output for one requested view.
@@ -199,6 +207,16 @@ The accepted feature form is versioned; a raw `RegionState` may be encoded by a 
 The router does not call the baseline, update disparity, modify Gaussians, render, or measure oracle utility. A runtime coordinator validates the decision and invokes the chosen `RepairAction`.
 
 ## Coordinate and geometry policy
+
+The Plan 06 analytic development path records an explicit, provisional
+convention in `GeometryConvention` and `configs/geometry/stereo_geometry.yaml`:
+positive left-reference disparity in resized pixels, integer pixel centres,
+axial depth `D = f_x B / d`, camera-frame rays `K^-1 [u,v,1]^T`, metres, and
+left-camera means/covariances with `x` right, `y` down, and `z` forward. This
+development convention is covered by analytic fixtures and is not a claim
+that the real SCARED-C resize, rectification, baseline, units, or camera-frame
+semantics have been verified. Those values remain pending the baseline/data
+convention audit before real-data validation.
 
 Before geometry implementation, the following values must be resolved and stored as contract metadata:
 

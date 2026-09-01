@@ -2,7 +2,11 @@
 
 ## Status
 
-PLANNED
+IMPLEMENTATION COMPLETE
+
+Local analytic/synthetic validation: PASS (focused Plan 06 geometry tests).
+Real-data validation: PENDING.
+Scientific acceptance: PENDING.
 
 ## Research stage
 
@@ -43,6 +47,7 @@ Plan 07 requires observation-derived covariance with known meaning. Centralizing
 
 - Canonical disparity/depth, backprojection, and covariance-propagation modules.
 - Derived depth uncertainty and `cov_center`/`Sigma_geo` with diagnostics.
+  `Sigma_geo` is propagated center-position covariance, not Gaussian support covariance.
 - Numerical policy for invalid/near-zero disparity, PSD, rank, eigenvalues, and optional localization term.
 - Geometry validation report and fixtures for Plan 07.
 
@@ -111,6 +116,8 @@ An optional later extension is `J_uv Sigma_uv J_uv^T + epsilon I`. These are sta
 - Configure the near-zero threshold, epsilon, and optional eigenvalue cap; record affected counts.
 - Test symmetry, PSD within tolerance, near-rank-1 structure, and the viewing-ray principal eigenvector.
 - Mixed precision is not accepted until compared to a float64 reference on analytic cases.
+- SCARED-C real-data calibration, units, rectification, and depth semantics remain unresolved;
+  no real-data validation is claimed by this plan.
 
 ## Configuration changes
 
@@ -188,11 +195,14 @@ Record uncertainty-provider artifact, formula/schema version, camera convention,
 
 ## Completion checklist
 
-- [ ] Canonical depth, backprojection, and propagation owners exist.
-- [ ] Analytic camera and finite-difference tests pass.
-- [ ] Invalid and near-zero disparity policies are explicit.
-- [ ] PSD/rank/eigenvalue diagnostics are retained.
-- [ ] No surface covariance or renderer logic was added.
+- [x] Canonical depth, backprojection, and propagation owners exist.
+- [x] Analytic camera and finite-difference tests pass on local synthetic fixtures.
+- [x] Invalid and near-zero disparity policies are explicit.
+- [x] PSD/rank/eigenvalue diagnostics are retained.
+- [x] No surface covariance or renderer logic was added.
+
+Real-data validation and scientific acceptance remain pending, including unresolved SCARED-C
+real-data semantics.
 
 ## Handoff to next plan
 

@@ -1,0 +1,20 @@
+experiment:
+  name: p1b_uncertainty_calibration
+  seed: 42
+  output_root: outputs
+
+runtime:
+  device: cpu
+
+uncertainty_config: configs/uncertainty/laplace_head.yaml
+training_config: configs/training/uncertainty.yaml
+protocol:
+  baseline_artifact_id: REQUIRED_FROZEN_BASELINE_ARTIFACT
+  training_split_hash: REQUIRED_IMMUTABLE_TRAINING_SPLIT_HASH
+  calibration_split_hash: REQUIRED_IMMUTABLE_VALIDATION_SPLIT_HASH
+  calibration_split_role: validation
+  raw_checkpoint_identity: REQUIRED_RAW_UNCERTAINTY_CHECKPOINT_IDENTITY
+  calibration_artifact_identity: REQUIRED_VALIDATION_CALIBRATION_ARTIFACT_IDENTITY
+  provider_schema: calibrated_disparity_sigma.v1
+  test_evaluation_split_hash: REQUIRED_IMMUTABLE_TEST_SPLIT_HASH
+  test_tuning_forbidden: true

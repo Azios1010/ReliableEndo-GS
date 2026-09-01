@@ -1,0 +1,50 @@
+# Deferred Plan 04 protocol only.  This file records the future headroom
+# comparison; it must not be consumed by a geometry or renderer entry point.
+experiment:
+  name: p1c_covariance_oracle
+  status: deferred
+  seed: 42
+  output_root: outputs
+
+runtime:
+  device: cpu
+  execution: prohibited_until_upstream_artifacts_are_frozen
+
+protocol:
+  uncertainty_source: oracle_absolute_disparity_error
+  uncertainty_record: non_deployable_oracle_target
+  oracle_sigma_d: derive_only_after_plan06_geometry_protocol
+  prediction_mask: baseline_valid_mask
+  supervision_mask: ground_truth_valid_mask
+  mask_policy: joint_valid_only
+  calibration_split_role: validation
+  evaluation_split_role: test
+  test_tuning_forbidden: true
+  covariance_implementation_owner: plan07
+  geometry_implementation_owner: plan06
+
+comparison_variants:
+  - baseline
+  - opacity_only
+  - fixed_isotropic_filter
+  - oracle_center_covariance
+
+metrics:
+  - depth_mae
+  - depth_rmse
+  - point_error
+  - outlier_rate
+  - right_view_reliability
+  - latency
+  - peak_memory
+
+upstream_artifacts:
+  phase1_geometry_artifact_id: REQUIRED_FROZEN_PLAN06_ARTIFACT
+  baseline_artifact_id: REQUIRED_FROZEN_BASELINE_ARTIFACT
+  split_hash: REQUIRED_IMMUTABLE_EVALUATION_SPLIT_HASH
+
+constraints:
+  conceptual_specification_only: true
+  implement_geometry_here: false
+  implement_covariance_here: false
+  implement_renderer_here: false
