@@ -110,6 +110,14 @@ The three covariance fields are not aliases. `cov_surface` describes the represe
 
 Invalid entries must remain masked. Nonpositive scales, invalid rotations, non-finite values, or covariance matrices that violate the configured numerical policy are contract violations or explicitly reported filtered cases.
 
+Plan 07 keeps the covariance meanings explicit: `cov_surface` is intrinsic
+Gaussian support, `cov_center` is the Plan 06 center-position uncertainty, and
+`cov_effective = cov_surface + cov_center` is the per-primitive covariance
+requested by the probabilistic representation variant. The determinant-ratio
+opacity correction applies only to actual opacity values, not logits. A
+renderer request names `surface`, `effective`, or `none`; the local request
+validator does not claim production/native renderer parity.
+
 ## RenderOutput
 
 `RenderOutput` is backend-neutral output for one requested view.

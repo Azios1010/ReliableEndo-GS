@@ -2,7 +2,11 @@
 
 ## Status
 
-PLANNED
+IMPLEMENTATION COMPLETE (LOCAL CONTRACT ONLY)
+
+Local analytic/synthetic validation: PASS
+Real-data validation: PENDING
+Scientific acceptance: PENDING
 
 ## Research stage
 
@@ -68,7 +72,7 @@ This is the key Phase I representation hypothesis. It follows verified propagati
 - `src/reliable_endo_gs/probabilistic_gs/support_covariance.py`
 - `src/reliable_endo_gs/probabilistic_gs/marginalization.py`
 - `src/reliable_endo_gs/probabilistic_gs/stability.py`
-- `src/reliable_endo_gs/rendering/production.py`
+- `src/reliable_endo_gs/rendering/` protocol and CPU contract helpers
 - `src/reliable_endo_gs/rendering/reference.py`
 - `src/reliable_endo_gs/rendering/protocol.py`
 - `configs/probabilistic_gs/two_covariance.yaml`
@@ -88,7 +92,7 @@ This is the key Phase I representation hypothesis. It follows verified propagati
 
 ## Interfaces and contracts
 
-`surface_covariance(rotations, scales)` owns `cov_surface`. `marginalize(cov_surface, cov_center, opacity, policy)` returns `cov_effective`, effective opacity, masks, and diagnostics while preserving both inputs. A renderer request declares which covariance it consumes. Production and reference backends implement the supported common contract; only production results support scientific performance claims.
+`surface_covariance(rotations, scales)` owns `cov_surface`. `marginalize(cov_surface, cov_center, opacity, policy)` returns `cov_effective`, effective opacity, masks, and diagnostics while preserving both inputs. A renderer request declares which covariance it consumes. The current implementation provides a CPU tensor contract and reference validation only; a production/native backend remains unvalidated, and only production results can support scientific performance claims.
 
 ## Scientific formulation
 
@@ -199,7 +203,7 @@ Record baseline/uncertainty/geometry artifact IDs, formula and renderer versions
 
 - [ ] Surface and center covariance remain semantically separate.
 - [ ] Full and rank-1 formulas are tested.
-- [ ] Production/reference renderer contracts are verified.
+- [x] Renderer request/reference contracts are explicit; production/native parity remains pending.
 - [ ] Oracle headroom and required ablations are complete.
 - [ ] Numerical and overhead diagnostics are retained.
 - [ ] Claim boundary excludes exact full-image expectation.
