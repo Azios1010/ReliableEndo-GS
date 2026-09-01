@@ -1,0 +1,39 @@
+schema_version: "1.0"
+
+convention:
+  frame: left_camera
+  axis_convention: x_right_y_down_z_forward
+  length_unit: m
+  focal_length_unit: px
+  disparity_unit: px
+  pixel_coordinate_convention: integer_pixel_centers
+
+numerical:
+  min_abs_disparity_px: 0.001
+  epsilon_m2: 0.0
+  max_eigenvalue_m2: null
+  rank_tolerance_m2: 1.0e-12
+  diagnostic_depth_bins_m: [0.0, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.0]
+
+pixel_localization_covariance:
+  enabled: false
+  variance_px2: null
+  note: "Not implemented in Plan 06; any future use requires independent validation."
+
+eigenvalue_cap:
+  method: disabled
+  validation_calibration_split: unconfigured_analytic_fixture
+  note: "No cap may be enabled until a value is frozen from a validation percentile."
+
+provenance:
+  geometry_schema_version: geometry_center_covariance.v1
+  uncertainty_provider_artifact: unconfigured_analytic_fixture
+  calibration_split: unconfigured_analytic_fixture
+  note: "Sigma_geo is propagated center-position covariance, not Gaussian support covariance."
+
+audit_fixture:
+  focal_length_x_px: 200.0
+  baseline_m: 0.005
+  principal_point_px: [1.0, 1.0]
+  disparity_values_px: [2.0, 4.0, 8.0]
+  sigma_d_px: [0.1, 0.1, 0.2]

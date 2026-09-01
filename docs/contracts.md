@@ -200,6 +200,16 @@ The router does not call the baseline, update disparity, modify Gaussians, rende
 
 ## Coordinate and geometry policy
 
+The Plan 06 analytic development path records an explicit, provisional
+convention in `GeometryConvention` and `configs/geometry/stereo_geometry.yaml`:
+positive left-reference disparity in resized pixels, integer pixel centres,
+axial depth `D = f_x B / d`, camera-frame rays `K^-1 [u,v,1]^T`, metres, and
+left-camera means/covariances with `x` right, `y` down, and `z` forward. This
+development convention is covered by analytic fixtures and is not a claim
+that the real SCARED-C resize, rectification, baseline, units, or camera-frame
+semantics have been verified. Those values remain pending the baseline/data
+convention audit before real-data validation.
+
 Before geometry implementation, the following values must be resolved and stored as contract metadata:
 
 - whether integer pixel coordinates refer to centers or corners;
