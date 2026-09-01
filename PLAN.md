@@ -86,6 +86,10 @@ Each transition records immutable upstream identities. No milestone discovers sc
 ## Execution rules
 
 - Plans are executed in dependency order; a plan may start only when its prerequisites and required gate decision exist.
+- Explicit exception: Plan 03A may implement development-only evaluation,
+  profiling, and preflight infrastructure before Plans 01-02 scientific
+  acceptance. This exception does not waive prerequisites for Plan 03B or
+  authorize an accepted baseline artifact.
 - Code existence is not completion. Every plan requires its tests, validation, experiment evidence, acceptance criteria, and artifact/provenance checklist.
 - The baseline remains scientifically unmodified. Research behavior enters only after the baseline artifact is accepted.
 - Phase I never imports Phase II concepts. Phase II consumes one frozen Phase I identity.

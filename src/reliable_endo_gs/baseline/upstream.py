@@ -174,10 +174,11 @@ def import_upstream_module(
     *,
     require_rasterizer: bool = False,
     require_corr_sampler: bool = False,
+    enforce_clean: bool = True,
 ) -> ModuleType:
     """Import one verified upstream module only when baseline execution asks."""
 
-    require_pinned_upstream(upstream_root)
+    require_pinned_upstream(upstream_root, enforce_clean=enforce_clean)
     capabilities = inspect_capabilities(upstream_root)
     if not capabilities.python_dependencies:
         raise UpstreamUnavailableError(

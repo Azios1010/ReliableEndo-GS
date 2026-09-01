@@ -2,7 +2,18 @@
 
 ## Status
 
-PLANNED
+IN PROGRESS — EARLY DEVELOPMENT REPRODUCTION INFRASTRUCTURE
+
+This milestone is split into two gates:
+
+- **03A — development infrastructure:** contract-level evaluation, aggregation,
+  synchronized profiling, provenance, and a fail-closed reproduction preflight.
+- **03B — scientific reproduction:** **BLOCKED** until Plans 01 and 02 are
+  scientifically accepted, the authorized checkpoint and native runtime are
+  available, and the final grouped SCARED protocol is frozen.
+
+03A does not reproduce the official baseline, create an accepted immutable
+baseline artifact, or authorize training.
 
 ## Research stage
 

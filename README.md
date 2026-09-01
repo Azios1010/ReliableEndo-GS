@@ -7,13 +7,16 @@ The project is planned as a two-stage research program:
 1. ProbStereo-EndoGS
 2. RiskRoute-GS
 
-Repository status: core PyTorch contract foundation implemented; baseline and
-scientific methods remain staged behind the approved roadmap.
+Repository status: Plan 02 SCARED-C development data contracts and Plan 03A
+baseline evaluation/profiling infrastructure are implemented. Official
+baseline reproduction remains blocked by deferred Plan 01 parity, missing
+checkpoint/runtime prerequisites, and the pending final grouped protocol.
 
 The upstream-independent `reliable_endo_gs.contracts` package provides typed
 camera, stereo, Gaussian, render, and Phase I reconstruction-state containers.
-Scientific methods, dataset tensor loaders, upstream integration, training
-pipelines, and experiments are not implemented yet.
+The external SCARED-C development protocol is kept distinct from original
+SCARED. Training and later scientific methods remain staged behind the
+approved roadmap.
 
 ## Development
 

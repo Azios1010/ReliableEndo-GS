@@ -51,7 +51,10 @@ class StereoBatch:
     sequence_ids: Sequence[str]
     gt_disparity: torch.Tensor | None = None
     gt_depth: torch.Tensor | None = None
+    gt_depth_xyz: torch.Tensor | None = None
+    gt_right_depth_xyz: torch.Tensor | None = None
     masks: Mapping[str, torch.Tensor] = field(default_factory=dict)
+    metadata: Mapping[str, object] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         left = require_tensor("left", self.left)
@@ -100,6 +103,7 @@ class StereoBatch:
         )
 
         expected_map_shape = (batch_size, 1, height, width)
+        expected_xyz_shape = (batch_size, 3, height, width)
         for name, value in (("gt_disparity", self.gt_disparity), ("gt_depth", self.gt_depth)):
             if value is None:
                 continue
@@ -107,6 +111,21 @@ class StereoBatch:
             require_shape(name, tensor, expected_map_shape)
             require_floating(name, tensor)
             require_same_device(name, tensor, "left", left)
+            require_same_dtype(name, tensor, "left", left)
+
+        if self.gt_depth_xyz is not None:
+            tensor = require_tensor("gt_depth_xyz", self.gt_depth_xyz)
+            require_shape("gt_depth_xyz", tensor, expected_xyz_shape)
+            require_floating("gt_depth_xyz", tensor)
+            require_same_device("gt_depth_xyz", tensor, "left", left)
+            require_same_dtype("gt_depth_xyz", tensor, "left", left)
+
+        if self.gt_right_depth_xyz is not None:
+            tensor = require_tensor("gt_right_depth_xyz", self.gt_right_depth_xyz)
+            require_shape("gt_right_depth_xyz", tensor, expected_xyz_shape)
+            require_floating("gt_right_depth_xyz", tensor)
+            require_same_device("gt_right_depth_xyz", tensor, "right", right)
+            require_same_dtype("gt_right_depth_xyz", tensor, "right", right)
 
         frozen_masks = freeze_mapping(self.masks, name="masks")
         for mask_name, mask_value in frozen_masks.items():
@@ -115,6 +134,9 @@ class StereoBatch:
             require_bool(f"masks[{mask_name!r}]", tensor)
             require_same_device(f"masks[{mask_name!r}]", tensor, "left", left)
         object.__setattr__(self, "masks", frozen_masks)
+
+        frozen_metadata = freeze_mapping(self.metadata, name="metadata")
+        object.__setattr__(self, "metadata", frozen_metadata)
 
     @property
     def batch_size(self) -> int:

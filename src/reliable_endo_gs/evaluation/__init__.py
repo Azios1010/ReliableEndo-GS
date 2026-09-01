@@ -1,0 +1,77 @@
+"""Contract-level baseline evaluation utilities."""
+
+from reliable_endo_gs.evaluation.aggregation import (
+    AggregationError,
+    MetricSummary,
+    aggregate_by_sequence,
+    aggregate_metric_results,
+    aggregate_metrics,
+)
+from reliable_endo_gs.evaluation.depth import (
+    compute_depth_metrics,
+    depth_mae,
+    depth_rmse,
+    evaluate_depth,
+)
+from reliable_endo_gs.evaluation.provenance import (
+    ARTIFACT_SCHEMA_NAME,
+    ARTIFACT_SCHEMA_VERSION,
+    ArtifactError,
+    ArtifactManifest,
+    ArtifactPayload,
+    BaselineArtifact,
+    BaselineArtifactManifest,
+    load_artifact,
+    make_artifact,
+    write_artifact,
+)
+from reliable_endo_gs.evaluation.rendering import (
+    UnsupportedMetricError,
+    evaluate_rendering,
+    lpips,
+    psnr,
+    ssim,
+)
+from reliable_endo_gs.evaluation.stereo import (
+    MetricInputError,
+    MetricResult,
+    bad_pixel_rate,
+    d1,
+    endpoint_error,
+    epe,
+    evaluate_stereo,
+)
+
+__all__ = [
+    "ARTIFACT_SCHEMA_NAME",
+    "ARTIFACT_SCHEMA_VERSION",
+    "AggregationError",
+    "ArtifactError",
+    "ArtifactManifest",
+    "ArtifactPayload",
+    "BaselineArtifact",
+    "BaselineArtifactManifest",
+    "MetricInputError",
+    "MetricResult",
+    "MetricSummary",
+    "UnsupportedMetricError",
+    "aggregate_by_sequence",
+    "aggregate_metric_results",
+    "aggregate_metrics",
+    "bad_pixel_rate",
+    "compute_depth_metrics",
+    "depth_mae",
+    "depth_rmse",
+    "d1",
+    "epe",
+    "endpoint_error",
+    "evaluate_depth",
+    "evaluate_rendering",
+    "evaluate_stereo",
+    "load_artifact",
+    "lpips",
+    "make_artifact",
+    "psnr",
+    "ssim",
+    "write_artifact",
+]

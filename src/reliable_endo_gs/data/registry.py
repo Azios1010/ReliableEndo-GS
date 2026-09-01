@@ -2,7 +2,12 @@
 
 from collections.abc import Callable
 
-from reliable_endo_gs.data.adapters import C3vdAdapter, EndoNerfAdapter, ScaredAdapter
+from reliable_endo_gs.data.adapters import (
+    C3vdAdapter,
+    EndoNerfAdapter,
+    ScaredAdapter,
+    ScaredCAdapter,
+)
 from reliable_endo_gs.data.base import DatasetAdapter
 
 
@@ -21,6 +26,7 @@ def normalize_dataset_name(name: str) -> str:
 
 _ADAPTER_FACTORIES: dict[str, Callable[[], DatasetAdapter]] = {
     "scared": ScaredAdapter,
+    "scaredc": ScaredCAdapter,
     "endonerf": EndoNerfAdapter,
     "c3vd": C3vdAdapter,
 }

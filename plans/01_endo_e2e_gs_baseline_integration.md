@@ -231,4 +231,4 @@ Plan 02 may assume a pinned adapter and verified input/camera requirements. It m
   - Official/author-provided checkpoint authorization and download/hash remain blocked.
   - Legal SCARED dataset fixture remains blocked on Plan 02 data inspection.
   - End-to-end native baseline inference and native-versus-adapter parity have not been run.
-- Status: **Plan 01 remains IN PROGRESS**; **Plan 02 remains UNSTARTED**.
+- Status: **Plan 01 remains IN PROGRESS**; its final checkpoint/parity validation is deferred. **Plan 02 is IN PROGRESS under the explicit early SCARED-C data-pipeline exception** and does not imply Plan 01 acceptance.

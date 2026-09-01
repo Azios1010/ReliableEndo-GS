@@ -142,7 +142,14 @@ def main(argv: Sequence[str] | None = None) -> int:
                 return 0
             if arguments.data_command == "validate":
                 report = run_data_validate(arguments.config, arguments.data_root)
-                print(json.dumps(report.to_dict(), ensure_ascii=False, indent=2, sort_keys=True))
+                print(
+                    json.dumps(
+                        report.to_dict(redact_paths=True),
+                        ensure_ascii=False,
+                        indent=2,
+                        sort_keys=True,
+                    )
+                )
                 return 0 if report.valid else 1
     except (ConfigError, LookupError, OSError, ValueError) as error:
         parser.exit(status=2, message=f"error: {error}\n")

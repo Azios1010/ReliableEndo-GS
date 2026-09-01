@@ -126,4 +126,56 @@ start until that evidence is recorded or an approved Plan 01 pivot is made.
 | Checkpoint | Official/author-provided checkpoint authorization and download | **BLOCKED** |
 | Dataset fixture | Authorized legal SCARED fixture | **BLOCKED** on Plan 02 data inspection |
 | Native inference & parity | End-to-end native execution vs adapter | **NOT RUN** (hard no-GPU rule in effect) |
-| Milestone status | Plan 01 | **IN PROGRESS** (Plan 02 unstarted) |
+| Milestone status | Plan 01 | **IN PROGRESS** (Plan 02 early implementation in progress) |
+
+## `corr_sampler` focused GPU build and smoke attempt (2026-08-28)
+
+The pinned external RAFT-Stereo source at
+`6068c1a26f84f8132de10f60b2bc0ce61568e085` was freshly cloned outside this
+repository and the patch at
+`patches/raft_stereo/0001-corr-sampler-scalar-type-compatibility.patch` applied
+cleanly. Its external source diff was limited to the two intended
+`volume.type()` -> `volume.scalar_type()` dispatch operands in
+`sampler/sampler_kernel.cu`; neither `third_party/endo_e2e_gs` nor any baseline
+source was modified.
+
+Before GPU execution, `CUDA_VISIBLE_DEVICES=1` produced exactly one logical
+PyTorch `cuda:0`; its properties were `NVIDIA GeForce RTX 5070 Ti`, capability
+`(12, 0)`, matching physical GPU 1 reported by `nvidia-smi`. The requested
+repository-local `.venv` and private CUDA 12.8.1 toolkit were
+not present in the execution environment, so a coordinator-authorized bounded
+attempt used the repository-local `.venv` (Python 3.10.11, PyTorch
+`2.7.1+cu128`) with the only installed compiler, CUDA 12.6.85.
+
+**Result: FAIL / BLOCKED.** With MSVC initialized and
+`TORCH_CUDA_ARCH_LIST=12.0`, the external build reached `nvcc` but CUDA 12.6
+rejected `sm_120` (`nvcc fatal: Value 'sm_120' is not defined for option
+'gpu-name'`); `nvcc --list-gpu-arch` only lists through `compute_90`. No
+extension artifact was produced, `import corr_sampler` failed with
+`ModuleNotFoundError`, and the required forward/backward presence check, tiny
+GPU forward/backward, finite-value/gradient, shape, and CUDA-error checks were
+therefore not run. Provision the actual CUDA 12.8.1 toolkit (with `sm_120`
+support) before repeating the same external build and focused smoke; do not use
+the pure-PyTorch `reg` fallback.
+
+## `corr_sampler` successful isolated GPU build and smoke retry (2026-08-28)
+
+The later retry used the external RAFT-Stereo checkout pinned at
+`6068c1a26f84f8132de10f60b2bc0ce61568e085`. The exact compatibility patch was
+limited to the two `volume.type()` -> `volume.scalar_type()` dispatch operands
+in `sampler/sampler_kernel.cu`; the external build used the private CUDA 12.8.1
+toolkit, whose `nvcc --version` reported `V12.8.93`, and compiled for `sm_120`.
+
+With physical GPU 1 masked as the only visible device, PyTorch exposed it as
+logical `cuda:0`: an NVIDIA GeForce RTX 5070 Ti with capability `(12, 0)`. The
+focused smoke successfully imported `corr_sampler`, found both `forward` and
+`backward`, and ran the tiny GPU forward/backward checks with expected shapes:
+`volume` `(1, 2, 3, 4)`, `coords` `(1, 2, 2, 3)`, forward `corr` `(1, 3, 2, 3)`,
+and backward `volume_grad` `(1, 2, 3, 4)`. Output and gradient values were
+finite, the gradient was nonzero, and synchronization before and after the
+forward/backward calls completed without CUDA errors.
+
+**Result: PASS for isolated `corr_sampler` build and focused GPU smoke only.**
+No `third_party/endo_e2e_gs` or Plan 02 changes were made. Native Endo-E2E-GS
+inference and native-versus-adapter parity remain blocked on an authorized
+checkpoint and a legally usable fixture; this record does not claim either.

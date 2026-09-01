@@ -2,7 +2,11 @@
 
 ## Scope
 
-This document specifies how implemented infrastructure and planned scientific components will be composed. It does not create experiment plans, training code, tensor loaders, baseline integration, or scientific packages.
+This document specifies how implemented infrastructure and planned scientific
+components will be composed. Plan 03A now provides a development-only
+baseline preflight, contract-level evaluation, and synchronized profiling; it
+does not authorize official reproduction, training, or later scientific
+packages.
 
 ## End-to-end runtime
 
@@ -36,6 +40,13 @@ Training and calibration are separate stage-specific programs, not modes of one 
 ### Baseline reproduction
 
 Inputs are the pinned upstream source/checkpoint, an explicit dataset and split, and a baseline reproduction config. Outputs are normalized predictions, metrics, profiling evidence, and a baseline artifact. This flow establishes preprocessing, disparity, camera, and renderer semantics before project-specific models are trained.
+
+The current Plan 03A entry point is explicitly `mode: development` and uses
+the distinct SCARED-C development protocol. It loads and indexes the mounted
+sample, then fails closed when the authorized checkpoint, native input bridge,
+or pinned runtime is unavailable. Its content-addressed artifact is marked
+`scientific_status: development_only` and cannot be used as an accepted
+baseline dependency.
 
 ### Phase I uncertainty
 

@@ -15,18 +15,36 @@ class DatasetValidationReport:
     layout_checked: bool
     valid: bool
     messages: tuple[str, ...]
+    status: str = ""
+    protocol: str | None = None
+    sequence_count: int | None = None
+    sample_count: int | None = None
+    stereo_available: bool | None = None
+    calibration_status: str | None = None
+    depth_status: str | None = None
+    contract_valid: bool | None = None
+    index_hash: str | None = None
 
-    def to_dict(self) -> dict[str, object]:
-        """Return a JSON-compatible report."""
+    def to_dict(self, *, redact_paths: bool = True) -> dict[str, object]:
+        """Return a JSON-compatible report, redacting external paths by default."""
 
         return {
             "dataset_name": self.dataset_name,
-            "root": self.root.as_posix(),
+            "root": "<REDACTED_ABSOLUTE_PATH>" if redact_paths else self.root.as_posix(),
             "exists": self.exists,
             "is_directory": self.is_directory,
             "layout_checked": self.layout_checked,
             "valid": self.valid,
             "messages": list(self.messages),
+            "status": self.status or ("USABLE" if self.valid else "INVALID"),
+            "protocol": self.protocol,
+            "sequence_count": self.sequence_count,
+            "sample_count": self.sample_count,
+            "stereo_available": self.stereo_available,
+            "calibration_status": self.calibration_status,
+            "depth_status": self.depth_status,
+            "contract_valid": self.contract_valid,
+            "index_hash": self.index_hash,
         }
 
 
@@ -42,6 +60,7 @@ def validate_dataset_root_basic(dataset_name: str, root: Path) -> DatasetValidat
             layout_checked=False,
             valid=False,
             messages=("DATASET NOT PRESENT: configured root does not exist.",),
+            status="MISSING",
         )
 
     if not root.is_dir():
@@ -53,6 +72,7 @@ def validate_dataset_root_basic(dataset_name: str, root: Path) -> DatasetValidat
             layout_checked=False,
             valid=False,
             messages=("DATASET PRESENT BUT INVALID: configured root is not a directory.",),
+            status="INVALID",
         )
 
     return DatasetValidationReport(
@@ -66,4 +86,5 @@ def validate_dataset_root_basic(dataset_name: str, root: Path) -> DatasetValidat
             "DATASET PRESENT, BASIC VALIDATION PASSED.",
             "DETAILED LAYOUT VALIDATION NOT IMPLEMENTED YET.",
         ),
+        status="USABLE",
     )

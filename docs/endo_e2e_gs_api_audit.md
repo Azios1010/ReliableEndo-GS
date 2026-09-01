@@ -199,3 +199,45 @@ synthetic diagnostic, and blocked numerical-parity table are in
 - Minimal `BUILD_API_COMPATIBILITY_ONLY` patch prepared at `patches/raft_stereo/0001-corr-sampler-scalar-type-compatibility.patch` for PyTorch 2.x `volume.scalar_type()` dispatch compatibility in `sampler/sampler_kernel.cu`.
 - Upstream capability inspection refactored to separately track `corr_sampler`, `renderer_ready`, and `native_inference_ready`.
 - Checkpoint authorization, legal dataset fixture, and end-to-end GPU parity remain blocked. Plan 01 remains **IN PROGRESS**.
+
+## Native runner construction record (2026-08-28)
+
+The Plan-01 baseline boundary now includes a bounded native runner at
+`reliable_endo_gs.baseline.native`. It accepts only an explicit
+upstream-shaped stage-two input and a fully identified checkpoint
+(`checkpoint_id`, path, and SHA-256); it does not accept `StereoBatch` or
+perform SCARED loading, calibration conversion, image normalization,
+rectification, resizing, or a correlation-backend fallback.
+
+Source inspection at the pinned commit establishes the executable contract
+implemented by that runner:
+
+1. Resolve only `config/stage2.yaml` through a fresh upstream `ConfigStereo`.
+   The YAML overrides stage-two dimensions/iterations but leaves defaults such
+   as `dataset.bg_color=[0,0,0]`, `raft.corr_implementation='reg_cuda'`,
+   `corr_levels=4`, `corr_radius=4`, `n_downsample=3`, and
+   `n_gru_layers=1` in force.
+2. Construct `StereoEndoModel(cfg, with_gs_render=True)`, transfer model and
+   a private cloned native dictionary to CUDA, load
+   `checkpoint['network']` with `strict=True`, and set `eval()`.
+3. Call `model(data, is_train=False)` under `torch.no_grad()`. This calls
+   RAFT with `iters=cfg.raft.val_iters` and `test_mode=True`, so no iteration
+   list is returned; the model stores a detached final `lmain.flow_pred` and
+   mutates `lmain` with `disp_const` viewed as `[B,1,1,1]`, `depth_pred`,
+   `xyz`, `pts_valid`, `rot_maps`, `scale_maps`, and `opacity_maps`.
+4. Call the actual `pts2render(data, bg_color=cfg.dataset.bg_color)`, which
+   filters only `pts_valid`, converts RGB by `x * 0.5 + 0.5`, invokes the
+   CUDA-only Graphdeco rasterizer, and adds `lmain.img_pred`. Its returned
+   `temp` list carries only the final batch item's filtered attributes, so the
+   runner preserves it for native inspection but does not expose it as a
+   batch-aligned contract.
+
+The runner snapshots the native output before calling the existing canonical
+adapter and returns both native mapping and adapter views for a same-execution
+parity comparison. Input tensors are cloned before the upstream mutation path;
+the runner does not retain a model or input dictionary between calls. CPU
+synthetic tests cover construction, schema, strict-load invocation, output
+capture, and rejection of `reg`; they do **not** execute the upstream CUDA
+model and do **not** establish runtime or numerical parity. A real run remains
+blocked on the authorized checkpoint, legal fixture, and working
+`corr_sampler`/rasterizer CUDA environment recorded above.

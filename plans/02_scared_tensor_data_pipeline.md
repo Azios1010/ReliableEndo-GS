@@ -2,7 +2,9 @@
 
 ## Status
 
-PLANNED
+IN PROGRESS — EARLY DATA PIPELINE IMPLEMENTATION
+
+This implementation exception proceeds with the locally available SCARED-C development subset while Plan 01 final native checkpoint/parity validation remains deferred. This plan is not formally accepted: original SCARED validation and the final grouped split require the full applicable protocol data.
 
 ## Research stage
 
@@ -188,6 +190,20 @@ Record dataset name/release, portable config hash, split schema/hash, index sche
 - [ ] Frozen grouped split produced without test tuning.
 - [ ] Mounted-subset `StereoBatch` integration passes.
 - [ ] Privacy and external-storage audit passes.
+
+## Implementation record (2026-08-29)
+
+- The early implementation targets the locally mounted SCARED-C development
+  subset under the separately named `scared_c_endoscope_stereo_calibration_v1`
+  protocol. It does not reinterpret the original SCARED scaffold.
+- The mounted subset produces one contract-valid static `StereoBatch` record;
+  pose direction, coordinate axes, units, rectification, and top-level
+  temporal mapping remain unresolved and are recorded as such.
+- Generic grouped split validation is implemented, but no final split is
+  fabricated from the one-sequence local subset. Original SCARED validation and
+  the final grouped split remain pending full protocol data.
+- Plan 01 remains **IN PROGRESS** because final native checkpoint/parity
+  validation is deferred. Plan 02 remains **IN PROGRESS** and is not accepted.
 
 ## Handoff to next plan
 

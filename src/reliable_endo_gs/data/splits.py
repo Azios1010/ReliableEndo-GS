@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
@@ -11,6 +12,53 @@ SPLIT_SCHEMA_VERSION = 1
 
 class SplitManifestError(ValueError):
     """Raised when a split manifest is malformed or leaks identifiers."""
+
+
+def validate_grouped_membership(
+    manifest: "SplitManifest", sample_to_sequence: Mapping[str, str]
+) -> None:
+    """Ensure every assigned sample belongs to exactly one sequence group.
+
+    The committed manifest stores sequence IDs, not frame IDs.  This helper is
+    also useful for a future sample-level manifest: it rejects a sample map
+    whose sequence group is split across train/validation/test.
+    """
+
+    validate_split_manifest(manifest)
+    known_sequences = set(manifest.train) | set(manifest.validation) | set(manifest.test)
+    split_for_sequence = {
+        sequence_id: split_name
+        for split_name, sequence_ids in (
+            ("train", manifest.train),
+            ("validation", manifest.validation),
+            ("test", manifest.test),
+        )
+        for sequence_id in sequence_ids
+    }
+    for sample_id, sequence_id in sorted(sample_to_sequence.items()):
+        if sequence_id not in known_sequences:
+            raise SplitManifestError(
+                f"sample {sample_id!r} references sequence {sequence_id!r} absent from manifest"
+            )
+        if split_for_sequence[sequence_id] not in {"train", "validation", "test"}:
+            raise SplitManifestError(f"invalid split assignment for sequence {sequence_id!r}")
+
+
+def validate_sequence_groups(
+    assignments: Mapping[str, str], sample_to_sequence: Mapping[str, str]
+) -> None:
+    """Validate a generic sample-to-split mapping without random frame splits."""
+
+    split_for_sequence: dict[str, str] = {}
+    for sample_id, split_name in assignments.items():
+        sequence_id = sample_to_sequence.get(sample_id)
+        if sequence_id is None:
+            raise SplitManifestError(f"sample {sample_id!r} has no sequence group")
+        prior = split_for_sequence.setdefault(sequence_id, split_name)
+        if prior != split_name:
+            raise SplitManifestError(
+                f"sequence group {sequence_id!r} crosses {prior} and {split_name}"
+            )
 
 
 @dataclass(frozen=True)

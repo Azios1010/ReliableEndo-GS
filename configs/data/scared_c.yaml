@@ -1,0 +1,11 @@
+name: scared_c
+root: scared_c
+version: local_development_subset
+split_manifest: null
+options:
+  protocol: scared_c_endoscope_stereo_calibration_v1
+  calibration_source: endoscope_calibration.yaml:M1,M2
+  intrinsics_source: endoscope_calibration.yaml:M1,M2
+  pose_source: frame_data.tar.gz:camera-pose_not_applied
+  depth_source: left_depth_map.tiff/right_depth_map.tiff
+  sample_policy: top_level_static_keyframe_pair

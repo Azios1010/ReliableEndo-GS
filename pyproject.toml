@@ -9,7 +9,10 @@ description = "Research infrastructure for ReliableEndo-GS."
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
+    "numpy>=1.24",
     "PyYAML>=6.0",
+    "Pillow>=10.0",
+    "tifffile>=2023.7",
     "torch>=2.2,<3",
 ]
 

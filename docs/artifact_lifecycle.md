@@ -4,7 +4,12 @@
 
 Scientific stages communicate through immutable, identified artifacts rather than path conventions or an implicit “latest” checkpoint. This makes stage freezing enforceable and allows negative results, reruns, and downstream decisions to be traced to exact evidence.
 
-All artifact classes in this document are **PLANNED**. Existing run metadata and configuration hashing provide infrastructure on which the later implementation can build.
+The development-only baseline artifact schema is implemented under
+`reliable_endo_gs.evaluation.provenance`. Its `scientific_status` is
+`development_only` and it cannot represent an accepted baseline until the
+scientific reproduction gate is satisfied. Phase I, Phase II, and report
+artifacts remain planned. Existing run metadata and configuration hashing
+provide the shared infrastructure.
 
 ## Dependency graph
 

@@ -67,7 +67,10 @@ is deferred until a concrete producer requires it.
 | `sequence_ids` | Yes | `[B]` logical values | Sequence or patient grouping identifiers used for split integrity. |
 | `gt_disparity` | Optional | `[B, 1, H, W]` | Ground-truth disparity under the declared disparity convention. |
 | `gt_depth` | Optional | `[B, 1, H, W]` | Ground-truth metric depth under the declared camera convention. |
+| `gt_depth_xyz` | Optional | `[B, 3, H, W]` | Ground-truth metric 3D point coordinates. |
+| `gt_right_depth_xyz` | Optional | `[B, 3, H, W]` | Ground-truth right-camera 3D point coordinates when independently provided. |
 | `masks` | Optional | named collection of `[B, 1, H, W]` | Explicit input/supervision masks; each mask has a declared meaning rather than one inferred from numeric values. |
+| `metadata` | Optional | structured mapping | Additional sample or sequence metadata frozen at batch creation. |
 
 Optional targets are absent when unavailable, rather than fabricated with zeros. Dataset adapters establish IDs and metadata; future tensor loaders perform decoding and normalization explicitly.
 

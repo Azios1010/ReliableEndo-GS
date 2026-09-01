@@ -1,0 +1,35 @@
+schema_version: "1.0"
+mode: development
+experiment:
+  name: p0_baseline_reproduction
+  seed: 42
+  output_root: outputs
+dataset_config: ../data/scared_c.yaml
+data:
+  protocol: scared_c_endoscope_stereo_calibration_v1
+  scientific_dataset: SCARED-C
+  original_scared_distinct: true
+baseline:
+  upstream_root: ../../third_party/endo_e2e_gs
+  upstream_commit: 186fa2b4a2159b28393492f6df1aa444b54391a8
+  upstream_config: config/stage2.yaml
+  entry_point: render.py
+  device: cuda
+  enforce_clean: true
+  checkpoint_id: null
+  checkpoint_path: null
+  checkpoint_sha256: null
+evaluation:
+  scientific_reproduction: false
+  metric_schema: reliable_endo_gs.evaluation.v1
+  disparity: [epe, d1]
+  depth: [mae, rmse]
+  rendering: [psnr, ssim]
+  lpips: unavailable_without_pinned_backend
+  empty_valid_policy: unavailable
+profiling:
+  enabled: true
+  warmup: 3
+  repetitions: 10
+  batch_size: 1
+  synchronize: required_for_cuda
