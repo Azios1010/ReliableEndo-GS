@@ -1,0 +1,18 @@
+schema_version: cross_view_evaluation.v1
+mode: development_only
+device: cpu
+backend: development_reference_renderer.v1
+production_renderer_parity_validated: false
+
+metrics:
+  right_masked: [psnr, ssim]
+  right_full: [psnr, ssim]
+  left: [psnr, ssim]
+
+mask:
+  required: [geometry_valid]
+  optional: [stereo_valid, in_view, renderer_visibility, depth_valid]
+  exclusions: [occlusion, specularity, tool, saturation]
+  empty_policy: unavailable
+
+scientific_status: development_only

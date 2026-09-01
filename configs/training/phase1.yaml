@@ -1,0 +1,36 @@
+schema_version: phase1_training.v1
+mode: development_only
+seed: 42
+device: cpu
+
+uncertainty:
+  provider: calibrated_sigma_d
+  selection: explicit_injected_provider
+
+representation:
+  variant: stereo_covariance_corrected
+
+renderer:
+  backend: development_reference_renderer.v1
+  production_parity_validated: false
+
+loss:
+  robust: charbonnier
+  charbonnier_epsilon: 0.001
+  left_weight: 1.0
+  right_weight: 1.0
+  reduction: mean_valid_pixel_channel
+
+optimizer:
+  name: Adam
+  learning_rate: 0.001
+  weight_decay: 0.0
+
+checkpoint:
+  schema_version: phase1_checkpoint.v1
+  scientific_status: development_only
+
+provenance:
+  geometry_schema: geometry_center_covariance.v1
+  representation_schema: probabilistic_gaussian_representation.v1
+  dataset: synthetic_fixture_only

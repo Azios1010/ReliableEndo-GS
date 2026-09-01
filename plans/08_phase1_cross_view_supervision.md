@@ -2,7 +2,7 @@
 
 ## Status
 
-PLANNED
+IMPLEMENTATION COMPLETE (LOCAL DEVELOPMENT ONLY)
 
 ## Research stage
 
@@ -189,3 +189,12 @@ Record Plan 07 artifact/config, camera/mask/loss schema, thresholds and calibrat
 ## Handoff to next plan
 
 Plan 09 may assume complete Phase I uncertainty, geometry, representation, cross-view, and overhead evidence with immutable candidate configs. It must make a gate decision rather than continue tuning.
+
+## Local completion status
+
+- Implementation: complete for dependency-injected CPU development infrastructure.
+- Local synthetic/integration validation: pass.
+- Production renderer and verified real left/right camera validation: pending.
+- Real-data training, cross-view ablation, and scientific acceptance: pending.
+- The development reference renderer is not Graphdeco/native renderer parity and
+  must not be used as evidence for a Gate I decision.
