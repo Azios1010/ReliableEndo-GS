@@ -1,0 +1,14 @@
+schema_version: "1"
+evidence:
+  source: disparity_iterations
+  final_window: 4
+proxies:
+  - final_update_magnitude
+  - iteration_disagreement
+calibration:
+  split_role: validation
+  method: laplace_nll_v1
+evaluation:
+  high_error_threshold_source: validation_frozen
+  high_error_comparison: strict_greater_than
+  depth_bin_edges: []

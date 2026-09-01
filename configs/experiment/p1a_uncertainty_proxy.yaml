@@ -1,0 +1,17 @@
+experiment:
+  name: p1a_uncertainty_proxy
+  seed: 42
+  output_root: outputs
+
+runtime:
+  device: cpu
+
+uncertainty_config: configs/uncertainty/proxies.yaml
+protocol:
+  baseline_artifact_id: REQUIRED_FROZEN_BASELINE_ARTIFACT
+  split_hash: REQUIRED_IMMUTABLE_VALIDATION_SPLIT_HASH
+  calibration_split_role: validation
+  high_error_threshold_source: validation_frozen
+  high_error_comparison: strict_greater_than
+  high_error_threshold: REQUIRED_VALIDATION_FROZEN_BAD_PIXEL_THRESHOLD
+  test_tuning_forbidden: true
