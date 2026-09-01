@@ -1,0 +1,17 @@
+schema_version: "1"
+feature_source: audited_pre_render_stereo_feature_required
+feature_schema: audited_pre_render_stereo_features.v1
+architecture_id: laplace_uncertainty_head.v1
+head:
+  hidden_channels: 16
+  epsilon: 0.0001
+loss:
+  name: laplace_nll_v1
+  formula: abs_residual_over_b_plus_log_b
+calibration:
+  split_role: validation
+  method: laplace_nll_v1
+  output_schema: calibrated_disparity_sigma.v1
+provenance:
+  checkpoint_identity: synthetic_untrained_or_explicit_artifact
+  config_identity: explicit_resolved_config_identity_required

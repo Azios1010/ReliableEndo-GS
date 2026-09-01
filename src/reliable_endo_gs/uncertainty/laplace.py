@@ -1,6 +1,9 @@
-"""Canonical Laplace disparity likelihood."""
+"""Canonical Laplace disparity likelihood and scale parameterization."""
+
+import math
 
 import torch
+import torch.nn.functional as functional
 
 from reliable_endo_gs.contracts.common import (
     require_bool,
@@ -9,6 +12,33 @@ from reliable_endo_gs.contracts.common import (
     require_same_dtype,
     require_tensor,
 )
+
+
+def positive_laplace_scale(logits: torch.Tensor, epsilon: float) -> torch.Tensor:
+    """Return ``b = softplus(logits) + epsilon`` in disparity pixels."""
+
+    require_tensor("logits", logits)
+    require_floating("logits", logits)
+    if epsilon <= 0:
+        raise ValueError("epsilon must be strictly positive")
+    if not bool(torch.isfinite(logits).all()):
+        raise ValueError("logits must be finite")
+    result = functional.softplus(logits) + epsilon
+    if not bool(torch.isfinite(result).all()):
+        raise ValueError("positive Laplace scale is non-finite")
+    return result
+
+
+def sigma_from_laplace_scale(scale_b: torch.Tensor) -> torch.Tensor:
+    """Convert Laplace scale to standard deviation: ``sigma_d = sqrt(2) b``."""
+
+    require_tensor("scale_b", scale_b)
+    require_floating("scale_b", scale_b)
+    if scale_b.numel() == 0:
+        raise ValueError("scale_b must be non-empty")
+    if not bool(torch.isfinite(scale_b).all()) or not bool((scale_b > 0).all()):
+        raise ValueError("scale_b must be finite and strictly positive")
+    return math.sqrt(2.0) * scale_b
 
 
 def _validate_laplace_inputs(
