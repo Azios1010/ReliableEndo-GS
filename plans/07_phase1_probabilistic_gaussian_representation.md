@@ -92,7 +92,7 @@ This is the key Phase I representation hypothesis. It follows verified propagati
 
 ## Interfaces and contracts
 
-`surface_covariance(rotations, scales)` owns `cov_surface`. `marginalize(cov_surface, cov_center, opacity, policy)` returns `cov_effective`, effective opacity, masks, and diagnostics while preserving both inputs. A renderer request declares which covariance it consumes. The current implementation provides a CPU tensor contract and reference validation only; a production/native backend remains unvalidated, and only production results can support scientific performance claims.
+`surface_covariance(rotations, scales)` owns `cov_surface`. `marginalize(cov_surface, cov_center, opacity, policy)` returns `cov_effective`, effective opacity, masks, and diagnostics while preserving both inputs. A renderer request declares which covariance it consumes. The production adapter is implemented locally against the pinned Graphdeco call contract, with an injectable fake backend and explicit native-camera settings; native CUDA validation, upstream parity, real-data validation, and scientific acceptance remain pending. Only validated production results can support scientific performance claims.
 
 ## Scientific formulation
 
@@ -203,7 +203,7 @@ Record baseline/uncertainty/geometry artifact IDs, formula and renderer versions
 
 - [ ] Surface and center covariance remain semantically separate.
 - [ ] Full and rank-1 formulas are tested.
-- [x] Renderer request/reference contracts are explicit; production/native parity remains pending.
+- [x] Renderer request/reference contracts and a production adapter boundary are explicit; native CUDA parity remains pending.
 - [ ] Oracle headroom and required ablations are complete.
 - [ ] Numerical and overhead diagnostics are retained.
 - [ ] Claim boundary excludes exact full-image expectation.

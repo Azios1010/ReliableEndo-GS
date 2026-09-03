@@ -1,5 +1,5 @@
 schema_version: renderer_request.v1
-backend: unconfigured
+backend: graphdeco_diff_gaussian_rasterization.v59f5f77
 covariance_source: effective
 production_renderer_parity_validated: false
-local_mode: contract_only
+local_mode: adapter_contract_only

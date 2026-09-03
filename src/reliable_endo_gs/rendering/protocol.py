@@ -51,6 +51,8 @@ class RendererRequest:
     length_unit: str
     colors: torch.Tensor | None = None
     provenance: RepresentationProvenance | None = None
+    rotations: torch.Tensor | None = None
+    scales: torch.Tensor | None = None
 
     def __post_init__(self) -> None:
         means = require_tensor("means3d", self.means3d)
@@ -113,6 +115,19 @@ class RendererRequest:
             require_floating("colors", colors)
             if colors.dtype != means.dtype or colors.device != means.device:
                 raise ValueError("colors must share dtype/device with means3d")
+        if (self.rotations is None) != (self.scales is None):
+            raise ValueError("rotations and scales must be provided together")
+        if self.rotations is not None and self.scales is not None:
+            rotations = require_tensor("rotations", self.rotations)
+            scales = require_tensor("scales", self.scales)
+            require_shape("rotations", rotations, expected + (4,))
+            require_shape("scales", scales, expected + (3,))
+            require_floating("rotations", rotations)
+            require_floating("scales", scales)
+            if rotations.dtype != means.dtype or rotations.device != means.device:
+                raise ValueError("rotations must share dtype/device with means3d")
+            if scales.dtype != means.dtype or scales.device != means.device:
+                raise ValueError("scales must share dtype/device with means3d")
         if self.provenance is not None:
             if self.provenance.frame and self.provenance.frame != self.frame:
                 raise ValueError("provenance frame must match renderer frame")
@@ -154,6 +169,8 @@ class RendererRequest:
             length_unit=representation.length_unit,
             colors=representation.colors,
             provenance=representation.provenance,
+            rotations=representation.rotations,
+            scales=representation.scales,
         )
 
 

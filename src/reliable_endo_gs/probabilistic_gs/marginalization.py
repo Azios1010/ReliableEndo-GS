@@ -159,6 +159,11 @@ class ProbabilisticGaussianRepresentation:
     cov_effective: torch.Tensor | None = None
     colors: torch.Tensor | None = None
     provenance: RepresentationProvenance = field(default_factory=RepresentationProvenance)
+    # The native baseline path needs the original upstream parameterization.
+    # These are intentionally carried through unchanged; surface covariance
+    # construction remains owned by support_covariance.py.
+    rotations: torch.Tensor | None = None
+    scales: torch.Tensor | None = None
 
     def __post_init__(self) -> None:
         means = require_tensor("means3d", self.means3d)
@@ -214,6 +219,19 @@ class ProbabilisticGaussianRepresentation:
             require_floating("colors", colors)
             if colors.dtype != means.dtype or colors.device != means.device:
                 raise ValueError("colors must share dtype/device with means3d")
+        if (self.rotations is None) != (self.scales is None):
+            raise ValueError("rotations and scales must be provided together")
+        if self.rotations is not None and self.scales is not None:
+            rotations = require_tensor("rotations", self.rotations)
+            scales = require_tensor("scales", self.scales)
+            require_shape("rotations", rotations, (means.shape[0], means.shape[1], 4))
+            require_shape("scales", scales, (means.shape[0], means.shape[1], 3))
+            require_floating("rotations", rotations)
+            require_floating("scales", scales)
+            if rotations.dtype != means.dtype or rotations.device != means.device:
+                raise ValueError("rotations must share dtype/device with means3d")
+            if scales.dtype != means.dtype or scales.device != means.device:
+                raise ValueError("scales must share dtype/device with means3d")
         if self.provenance.frame and self.provenance.frame != self.frame:
             raise ValueError("provenance frame must match representation frame")
         if self.provenance.length_unit and self.provenance.length_unit != self.length_unit:
@@ -490,6 +508,8 @@ def build_probabilistic_representation(
             length_unit=length_unit,
             variant=selected,
             colors=colors,
+            rotations=rotations,
+            scales=scales,
             provenance=RepresentationProvenance(
                 frame=frame,
                 length_unit=length_unit,
@@ -527,6 +547,8 @@ def build_probabilistic_representation(
         cov_center=cov_center,
         cov_effective=result.cov_effective,
         colors=colors,
+        rotations=rotations,
+        scales=scales,
         provenance=RepresentationProvenance(
             rank1_optimization=use_rank1_optimization,
             frame=frame,
