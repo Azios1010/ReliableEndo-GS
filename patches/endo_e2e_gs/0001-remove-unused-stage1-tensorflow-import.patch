@@ -1,0 +1,25 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ReliableEndo-GS maintainers <reliable-endo-gs@localhost>
+Date: Fri, 4 Sep 2026 00:00:00 +0700
+Subject: [PATCH] Remove unused Stage-1 TensorFlow import
+
+Upstream repository: Intelligent-Imaging-Center/Endo-E2E-GS
+Pinned SHA: 186fa2b4a2159b28393492f6df1aa444b54391a8
+
+Reason: train_stage1.py contains an unused TensorFlow import that introduces
+an undeclared and unnecessary heavyweight runtime dependency.
+
+Behavioral impact: none; the imported symbol has no Stage-1 call site.
+
+Scope: Stage-1 import compatibility only.
+---
+ train_stage1.py | 1 -
+ 1 file changed, 1 deletion(-)
+
+diff --git a/train_stage1.py b/train_stage1.py
+--- a/train_stage1.py
++++ b/train_stage1.py
+@@ -9,3 +9,2 @@
+-from tensorflow.python.saved_model.model_utils.mode_keys import is_train
+ from tqdm import tqdm
+ from datetime import datetime
