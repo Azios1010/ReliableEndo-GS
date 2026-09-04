@@ -92,7 +92,7 @@ This is the key Phase I representation hypothesis. It follows verified propagati
 
 ## Interfaces and contracts
 
-`surface_covariance(rotations, scales)` owns `cov_surface`. `marginalize(cov_surface, cov_center, opacity, policy)` returns `cov_effective`, effective opacity, masks, and diagnostics while preserving both inputs. A renderer request declares which covariance it consumes. The production adapter is implemented locally against the pinned Graphdeco call contract, with an injectable fake backend and explicit native-camera settings; native CUDA validation, upstream parity, real-data validation, and scientific acceptance remain pending. Only validated production results can support scientific performance claims.
+`surface_covariance(rotations, scales)` owns `cov_surface`. `marginalize(cov_surface, cov_center, opacity, policy)` returns `cov_effective`, effective opacity, masks, and diagnostics while preserving both inputs. A renderer request declares which covariance it consumes. The production adapter is implemented locally against the pinned Graphdeco call contract, with an injectable fake backend and explicit native-camera settings; its full `[B,N,3,3]` scientific covariance is packed only at the native boundary as Graphdeco `[N,6]` in `xx,xy,xz,yy,yz,zz` order. Native CUDA validation, upstream parity, real-data validation, and scientific acceptance remain pending. Only validated production results can support scientific performance claims.
 
 ## Scientific formulation
 

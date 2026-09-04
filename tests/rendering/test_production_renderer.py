@@ -17,6 +17,7 @@ from reliable_endo_gs.probabilistic_gs import (
     surface_covariance,
 )
 from reliable_endo_gs.rendering import (
+    GRAPHDECO_COVARIANCE_ORDER,
     CameraRequest,
     CameraView,
     CovarianceRequest,
@@ -28,6 +29,7 @@ from reliable_endo_gs.rendering import (
     ProductionRenderer,
     RendererRequest,
     native_renderer_available,
+    pack_graphdeco_covariance,
 )
 from reliable_endo_gs.training.phase1 import PhaseIConfig, PhaseIForward
 
@@ -101,10 +103,61 @@ def _renderer_request(
     return RendererRequest.from_representation(representation, covariance_source=source)
 
 
+def test_graphdeco_covariance_packing_uses_exact_pinned_order_and_batch_rows() -> None:
+    covariance = torch.tensor(
+        [
+            [[1.0, 2.0, 3.0], [2.0, 4.0, 5.0], [3.0, 5.0, 6.0]],
+            [[10.0, 20.0, 30.0], [20.0, 40.0, 50.0], [30.0, 50.0, 60.0]],
+        ]
+    )
+    packed = pack_graphdeco_covariance(covariance)
+
+    assert GRAPHDECO_COVARIANCE_ORDER == ("xx", "xy", "xz", "yy", "yz", "zz")
+    assert packed.shape == (2, 6)
+    assert torch.equal(
+        packed,
+        torch.tensor([[1.0, 2.0, 3.0, 4.0, 5.0, 6.0], [10.0, 20.0, 30.0, 40.0, 50.0, 60.0]]),
+    )
+
+
+def test_graphdeco_covariance_packing_preserves_autograd() -> None:
+    covariance = torch.tensor(
+        [[[1.0, 2.0, 3.0], [2.0, 4.0, 5.0], [3.0, 5.0, 6.0]]], requires_grad=True
+    )
+    pack_graphdeco_covariance(covariance).sum().backward()
+
+    assert covariance.grad is not None
+    assert torch.equal(
+        covariance.grad,
+        torch.tensor([[[1.0, 1.0, 1.0], [0.0, 1.0, 1.0], [0.0, 0.0, 1.0]]]),
+    )
+
+
+def test_graphdeco_covariance_packing_rejects_ambiguous_shapes() -> None:
+    for invalid in (torch.zeros(3, 3), torch.zeros(1, 6), torch.zeros(1, 9)):
+        with pytest.raises(ValueError, match="shape"):
+            pack_graphdeco_covariance(invalid)
+
+
+def test_graphdeco_covariance_packing_rejects_invalid_values_and_symmetry() -> None:
+    nonsymmetric = torch.tensor([[[1.0, 2.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]])
+    with pytest.raises(ValueError, match="symmetric"):
+        pack_graphdeco_covariance(nonsymmetric)
+    nonfinite = torch.eye(3).unsqueeze(0)
+    nonfinite[0, 0, 0] = float("nan")
+    with pytest.raises(ValueError, match="finite"):
+        pack_graphdeco_covariance(nonfinite)
+
+
 def test_baseline_and_zero_uncertainty_corrected_preserve_native_boundary() -> None:
     zero = torch.zeros(1, 1, 3, 3, dtype=torch.float32)
     baseline = _renderer_request(RepresentationVariant.BASELINE)
-    corrected = _renderer_request(RepresentationVariant.STEREO_COVARIANCE_CORRECTED, zero)
+    corrected_representation = _representation(
+        RepresentationVariant.STEREO_COVARIANCE_CORRECTED, center=zero
+    )
+    corrected = RendererRequest.from_representation(
+        corrected_representation, covariance_source=CovarianceRequest.EFFECTIVE
+    )
     camera, settings = _camera_request()
     backend = CaptureBackend()
     renderer = ProductionRenderer({CameraView.LEFT: settings}, backend=backend)
@@ -113,10 +166,17 @@ def test_baseline_and_zero_uncertainty_corrected_preserve_native_boundary() -> N
     renderer.render(corrected, camera)
     first, second = backend.calls
     expected_surface = surface_covariance(baseline.rotations, baseline.scales)
+    assert corrected_representation.cov_effective is not None
+    assert corrected_representation.cov_surface is not None
+    assert torch.equal(corrected_representation.cov_effective, corrected_representation.cov_surface)
+    assert torch.equal(
+        corrected_representation.effective_opacity, corrected_representation.base_opacity
+    )
     assert first["cov3d_precomp"] is None
     assert torch.equal(first["scales"], baseline.scales[0])
     assert torch.equal(first["rotations"], baseline.rotations[0])
-    assert torch.allclose(second["cov3d_precomp"], expected_surface[0])
+    assert torch.allclose(second["cov3d_precomp"], pack_graphdeco_covariance(expected_surface[0]))
+    assert second["cov3d_precomp"].shape == (1, 6)
     assert torch.allclose(first["opacities"], second["opacities"])
     assert torch.equal(first["colors_precomp"], second["colors_precomp"])
 
@@ -141,8 +201,9 @@ def test_covariance_variant_preserves_full_off_diagonal_covariance() -> None:
     backend = CaptureBackend()
     ProductionRenderer({"left": settings}, backend=backend).render(request, camera)
     sent = backend.calls[0]["cov3d_precomp"]
-    assert torch.equal(sent, covariance[0])
-    assert sent[0, 0, 1] != 0
+    assert torch.equal(sent, pack_graphdeco_covariance(covariance[0]))
+    assert sent.shape == (1, 6)
+    assert sent[0, 1] != 0
 
 
 def test_corrected_variant_passes_canonical_effective_opacity() -> None:
@@ -294,12 +355,16 @@ def test_graphdeco_backend_maps_exact_pinned_call_shape() -> None:
         opacities=torch.ones(1, 1),
         scales=None,
         rotations=None,
-        cov3d_precomp=torch.eye(3).unsqueeze(0),
+        cov3d_precomp=torch.tensor([[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]]),
     )
     assert FakeRasterizer.last is not None
     assert FakeRasterizer.last.arguments is not None
     assert FakeRasterizer.last.arguments["shs"] is None
     assert FakeRasterizer.last.arguments["colors_precomp"].shape == (1, 3)
-    assert FakeRasterizer.last.arguments["cov3D_precomp"].shape == (1, 3, 3)
+    assert FakeRasterizer.last.arguments["cov3D_precomp"].shape == (1, 6)
+    assert torch.equal(
+        FakeRasterizer.last.arguments["cov3D_precomp"],
+        torch.tensor([[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]]),
+    )
     assert FakeRasterizer.last.arguments["scales"] is None
     assert FakeRasterizer.last.arguments["rotations"] is None

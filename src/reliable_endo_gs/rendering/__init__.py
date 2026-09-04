@@ -17,6 +17,7 @@ from reliable_endo_gs.rendering.cross_view import (
     make_camera_request,
 )
 from reliable_endo_gs.rendering.production import (
+    GRAPHDECO_COVARIANCE_ORDER,
     GRAPHDECO_RASTERIZER_REVISION,
     CameraSettingsProvider,
     CameraSettingsSource,
@@ -29,6 +30,7 @@ from reliable_endo_gs.rendering.production import (
     NativeRendererUnavailableError,
     ProductionRenderer,
     native_renderer_available,
+    pack_graphdeco_covariance,
 )
 from reliable_endo_gs.rendering.protocol import (
     CovarianceRequest,
@@ -47,6 +49,7 @@ __all__ = [
     "CrossViewCameraRequest",
     "CrossViewLossResult",
     "CrossViewMaskResult",
+    "GRAPHDECO_COVARIANCE_ORDER",
     "GRAPHDECO_RASTERIZER_REVISION",
     "CameraSettingsProvider",
     "CameraSettingsSource",
@@ -60,6 +63,7 @@ __all__ = [
     "NativeRendererInputError",
     "NativeRendererUnavailableError",
     "ProductionRenderer",
+    "pack_graphdeco_covariance",
     "ReferenceRenderer",
     "RendererContractResult",
     "RendererRequest",

@@ -23,6 +23,42 @@ from reliable_endo_gs.rendering.protocol import (
 )
 
 GRAPHDECO_RASTERIZER_REVISION = "59f5f77e3ddbac3ed9db93ec2cfe99ed6c5d121d"
+GRAPHDECO_COVARIANCE_ORDER = ("xx", "xy", "xz", "yy", "yz", "zz")
+
+
+def pack_graphdeco_covariance(covariance: torch.Tensor) -> torch.Tensor:
+    """Pack full symmetric covariance into Graphdeco's six-value ABI.
+
+    The scientific representation remains ``[..., 3, 3]``.  Graphdeco's
+    native kernels consume one contiguous row per primitive in the pinned
+    order ``xx, xy, xz, yy, yz, zz``.  This helper only indexes existing
+    entries; it never symmetrizes, detaches, moves, or stabilizes them.
+    """
+
+    if not isinstance(covariance, torch.Tensor):
+        raise TypeError("covariance must be a torch.Tensor")
+    if covariance.ndim < 3 or tuple(covariance.shape[-2:]) != (3, 3):
+        raise ValueError(
+            "covariance must have shape [..., N, 3, 3] with an explicit primitive dimension; "
+            f"got {tuple(covariance.shape)}"
+        )
+    if not torch.is_floating_point(covariance):
+        raise TypeError("covariance must be floating-point")
+    if not bool(torch.isfinite(covariance).all()):
+        raise ValueError("covariance must contain only finite values")
+    if not bool(torch.allclose(covariance, covariance.transpose(-1, -2))):
+        raise ValueError("covariance must be symmetric")
+    return torch.stack(
+        (
+            covariance[..., 0, 0],
+            covariance[..., 0, 1],
+            covariance[..., 0, 2],
+            covariance[..., 1, 1],
+            covariance[..., 1, 2],
+            covariance[..., 2, 2],
+        ),
+        dim=-1,
+    )
 
 
 class NativeRendererUnavailableError(RuntimeError):
@@ -442,7 +478,13 @@ class ProductionRenderer:
         covariance = request.covariance[batch_index, valid_indices].contiguous()
         if not bool(torch.isfinite(covariance).all()):
             raise NativeRendererInputError("valid covariance must be finite")
-        return None, None, covariance
+        try:
+            packed_covariance = pack_graphdeco_covariance(covariance)
+        except (TypeError, ValueError) as error:
+            raise NativeRendererInputError(
+                f"canonical covariance cannot be packed for Graphdeco: {error}"
+            ) from error
+        return None, None, packed_covariance
 
     @staticmethod
     def _validate_native_output(
@@ -473,6 +515,7 @@ class ProductionRenderer:
 
 __all__ = [
     "GRAPHDECO_RASTERIZER_REVISION",
+    "GRAPHDECO_COVARIANCE_ORDER",
     "CameraSettingsProvider",
     "CameraSettingsSource",
     "GraphdecoRasterizerBackend",
@@ -483,5 +526,6 @@ __all__ = [
     "NativeRendererUnavailableError",
     "NativeRasterizerBackend",
     "ProductionRenderer",
+    "pack_graphdeco_covariance",
     "native_renderer_available",
 ]
