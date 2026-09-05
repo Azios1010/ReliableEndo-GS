@@ -1,0 +1,6 @@
+name: scared
+root: scared
+version: four_keyframe_expansion_v2
+split_manifest: splits/scared/four_keyframe_v2.json
+options:
+  split_name: controlled_four_keyframe_v2

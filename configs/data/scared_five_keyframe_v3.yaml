@@ -1,0 +1,6 @@
+name: scared
+root: scared
+version: five_keyframe_expansion_v3
+split_manifest: splits/scared/five_keyframe_v3.json
+options:
+  split_name: controlled_five_keyframe_v3

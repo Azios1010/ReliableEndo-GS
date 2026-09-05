@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "dataset": "scared",
+  "dataset_version": "four_keyframe_expansion_v2",
+  "split_name": "controlled_four_keyframe_v2",
+  "train": [
+    "dataset_1/keyframe_1",
+    "dataset_2/keyframe_1",
+    "dataset_3/keyframe_1"
+  ],
+  "validation": [
+    "dataset_7/keyframe_2"
+  ],
+  "test": [],
+  "notes": "Controlled four-keyframe split v2: train on dataset_1/keyframe_1, dataset_2/keyframe_1, dataset_3/keyframe_1; validation on dataset_7/keyframe_2. dataset_9/keyframe_3 removed. Complete keyframe-level and case-level isolation."
+}

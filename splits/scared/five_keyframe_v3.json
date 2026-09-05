@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "dataset": "scared",
+  "dataset_version": "five_keyframe_expansion_v3",
+  "split_name": "controlled_five_keyframe_v3",
+  "train": [
+    "dataset_1/keyframe_1",
+    "dataset_2/keyframe_1",
+    "dataset_3/keyframe_1"
+  ],
+  "validation": [
+    "dataset_7/keyframe_2",
+    "dataset_4/keyframe_4"
+  ],
+  "test": [],
+  "notes": "Controlled five-keyframe split v3: train on dataset_1/keyframe_1, dataset_2/keyframe_1, dataset_3/keyframe_1; validation on held-out dataset_7/keyframe_2 and dataset_4/keyframe_4. Complete keyframe-level and case-level isolation. dataset_9/keyframe_3 excluded due zero-valid frames."
+}
