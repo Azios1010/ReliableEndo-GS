@@ -502,6 +502,14 @@ def run(protocol: Protocol) -> None:
                 validation_metrics = evaluate(model, validation, device, bg_color)
                 val_log = {f"val/{key}": value for key, value in validation_metrics["aggregate"].items()}
                 val_log.update({f"val_macro/{key}": value for key, value in validation_metrics["macro"].items()})
+                for sequence, sequence_metrics in validation_metrics["per_sequence"].items():
+                    val_log.update(
+                        {
+                            f"val_seq/{sequence}/{key}": value
+                            for key, value in sequence_metrics.items()
+                            if key != "samples"
+                        }
+                    )
                 run.log(val_log, step=step)
                 if validation_metrics["macro"]["total_loss"] < best:
                     best = validation_metrics["macro"]["total_loss"]
