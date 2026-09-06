@@ -1,0 +1,62 @@
+schema_version: 1
+
+name: stage1-multiseq-v3-best-step007000
+role: frozen_stage1_control_backbone
+artifact_filename: GPS-GS_stage1_multiseq_v3_best_step007000.pth
+checkpoint_step: 7000
+checkpoint_sha256: 202ECC041B61B720408E0548319A1F9385C07DB784B824751482C615A0F46964
+source_run: stage1-multiseq-v3-final-60k-20260906
+source_checkpoint: checkpoints/best_val_epe.pth
+
+selection:
+  metric: unweighted_sequence_macro_validation_epe
+  value: 52.976757
+  selected_at_step: 7000
+  rejected_final_checkpoint:
+    filename: GPS-GS_stage1_multiseq_v3_final_60k.pth
+    step: 60000
+    sha256: 48667A985265F482ABCAB4A3E57EAA5D6F0ADB7D135FC15E417CC88A85916651
+    reason: late_heldout_overfitting
+
+source:
+  reliable_endo_gs_sha: 6b61698d66dfa9efc0025e47ec5bafc3c84a4b9c
+  endo_e2e_gs_sha: 186fa2b4a2159b28393492f6df1aa444b54391a8
+
+data:
+  manifest_sha256: 67C4B16BDAEC11B653A5AD757897F4699D37F8C74F4B320E084E5A5492665786
+  split_sha256: A03495E8C345C3396463D6E7F9A85F625699A3504804B71075929E67B2605590
+  config_sha256: 933E9A2777B9E0080CC00ACAC3E476DA2B8EA2F1142CC036E671195E24940A28
+  train_sequences:
+    - dataset_1/keyframe_1
+    - dataset_2/keyframe_1
+    - dataset_3/keyframe_1
+  validation_sequences:
+    - dataset_7/keyframe_2
+    - dataset_4/keyframe_4
+
+protocol:
+  name: stage1-multiseq-v3-final-60k
+  steps: 60000
+  seed: 1314
+  batch_size: 1
+  resolution: [1024, 1280]
+  raft_train_iters: 3
+  raft_val_iters: 3
+  precision: FP32
+  optimizer: AdamW
+  learning_rate: 0.0002
+  weight_decay: 0.00001
+  gradient_clip: 1.0
+  scheduler: OneCycleLR
+  scheduler_total_steps: 60000
+  scheduler_pct_start: 0.01
+  scheduler_anneal_strategy: linear
+  fresh_initialization: true
+  resume_checkpoint: null
+
+audit:
+  conclusion: CLEAR_OVERFIT_AFTER_EARLY_VALIDATION_OPTIMUM
+  checkpoint_reload: PASS
+  source_data_identity: PASS
+  heldout_evaluation: PASS
+  final_checkpoint_selected: false
