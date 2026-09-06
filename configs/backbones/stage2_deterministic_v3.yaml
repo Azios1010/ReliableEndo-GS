@@ -1,0 +1,64 @@
+schema_version: 1
+
+name: stage2-deterministic-v3-best-step003000
+role: deterministic_endo_e2e_gs_control_baseline
+artifact_filename: GPS-GS_stage2_deterministic_v3_best_step003000.pth
+artifact_root: E:/artifacts/reliable-endo-gs/stage2-deterministic-v3
+checkpoint_step: 3000
+checkpoint_sha256: 32D42DE10A4C683C31FB4B3E0DE831F900E11197CDF1769B18CF3BBAFA5EE16
+
+selection:
+  metric: unweighted_sequence_macro_stage2_validation_total_loss
+  value: 92.6105182647705
+  selected_at_step: 3000
+  rejected_final_checkpoint:
+    filename: GPS-GS_stage2_multiseq_v3_final_10k.pth
+    step: 10000
+    reason: macro_total_validation_loss_worse
+
+stage1:
+  checkpoint_filename: GPS-GS_stage1_multiseq_v3_best_step007000.pth
+  checkpoint_step: 7000
+  checkpoint_sha256: 202ECC041B61B720408E0548319A1F9385C07DB784B824751482C615A0F46964
+
+source:
+  reliable_endo_gs_training_sha: 7633d4df2f6e83a91a371a3b62ca2bd14a803a28
+  endo_e2e_gs_sha: 186fa2b4a2159b28393492f6df1aa444b54391a8
+
+data:
+  manifest_sha256: 67C4B16BDAEC11B653A5AD757897F4699D37F8C74F4B320E084E5A5492665786
+  split_sha256: A03495E8C345C3396463D6E7F9A85F625699A3504804B71075929E67B2605590
+  config_sha256: 933E9A2777B9E0080CC00ACAC3E476DA2B8EA2F1142CC036E671195E24940A28
+
+protocol:
+  name: final_vanilla_multisequence_stage2_control
+  steps: 10000
+  scheduler_total_steps: 10100
+  seed: 1314
+  batch_size: 1
+  precision: FP32
+  optimizer: AdamW
+  learning_rate: 0.0002
+  weight_decay: 0.00001
+  eps: 0.00000001
+  gradient_clip_norm: 1.0
+  loss:
+    disparity: 1.0
+    render_l1: 0.8
+    ssim: 0.2
+
+data_sequences:
+  train:
+    - dataset_1/keyframe_1
+    - dataset_2/keyframe_1
+    - dataset_3/keyframe_1
+  validation:
+    - dataset_7/keyframe_2
+    - dataset_4/keyframe_4
+
+audit:
+  source_checkpoint_verified: true
+  artifact_byte_identical: true
+  stage1_selected_at_step: 7000
+  stage2_selected_at_step: 3000
+  stage2_final_10k_rejected: true
