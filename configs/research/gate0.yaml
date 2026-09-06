@@ -1,0 +1,76 @@
+schema_version: discovery_gate0_evidence.v1
+status: frozen
+
+baseline:
+  artifact_filename: GPS-GS_stage2_deterministic_v3_best_step003000.pth
+  step: 3000
+  sha256: 32D42DE10A4C683C31FB4B3E0DE831F900E11197CDF1769B18CF3BBAFA5EE16F
+  selection_metric: unweighted_sequence_macro_stage2_validation_total_loss
+
+provenance:
+  reliable_endo_gs_sha: a2cd8a71aa6f4e8f9962bbea64149a72a5de0281
+  stage2_training_source_sha: 7633d4df2f6e83a91a371a3b62ca2bd14a803a28
+  endo_e2e_gs_sha: 186fa2b4a2159b28393492f6df1aa444b54391a8
+  stage1_checkpoint_sha256: 202ECC041B61B720408E0548319A1F9385C07DB784B824751482C615A0F46964
+  manifest_sha256: 67C4B16BDAEC11B653A5AD757897F4699D37F8C74F4B320E084E5A5492665786
+  split_sha256: A03495E8C345C3396463D6E7F9A85F625699A3504804B71075929E67B2605590
+  config_sha256: 933E9A2777B9E0080CC00ACAC3E476DA2B8EA2F1142CC036E671195E24940A28
+  protocol_sha256: DAE773A0747F806D43D1C5B1BE147C69308B4D1CE4463FE4721F0C3EAA411315
+  selection_sha256: 030C867D74C98B2B63996CBADCAAEBEAB89BAE8B76EECE5892C8FF37B0845FB8
+  results_sha256: E0FFC302C35813C460070BA2E042B81FF9E0392CAD59DF85F7D26FB5417382DF
+  analysis_sha256: 8EE23ADCB99CFF0100E9F5A3ACFF8B1E029D416D3B271D05D6F26B8ED46A9568
+  baseline_provenance_sha256: EBDF69CE5172079BBFE51308111A59B2818E4A19F6C639CFCF29789E24BF9384
+
+protocol:
+  immutable: true
+  selected_sequences:
+    - dataset_1/keyframe_1
+    - dataset_2/keyframe_1
+    - dataset_3/keyframe_1
+    - dataset_7/keyframe_2
+    - dataset_4/keyframe_4
+  frames: 10
+  regions: 160
+  regionization: fixed_4x4_grid
+  perturbation_epsilon: [-0.25, -0.10, 0.10, 0.25]
+  h2_epsilon: 0.25
+  actions: [STOP, STEREO_REPAIR, GAUSSIAN_REPAIR]
+  h1_perturbation_cases: 40
+  h2_intervention_evaluations: 480
+  historical_file_not_modified: true
+
+findings:
+  uncertainty_repairability_mismatch:
+    status: supported_moderate
+    uncertainty_vs_error_spearman: 0.345409
+    uncertainty_vs_stereo_gain_spearman: -0.384885
+    uncertainty_vs_gaussian_gain_spearman: -0.067938
+  gaussian_compensation:
+    status: weak_partial
+    same_view_gain_mean_l1: 0.004400
+    same_view_gain_sequence_bootstrap_ci95: [0.003926, 0.004989]
+    cross_view_compensation_gain_mean_l1: 0.000001835
+    strong_cross_view_compensation_supported: false
+  action_specialization:
+    status: not_supported
+    stop_best_fraction: 0.06875
+    stereo_repair_best_fraction: 0.0
+    gaussian_repair_best_fraction: 0.93125
+    gaussian_dominance_count: 155
+    region_count: 160
+    delta_stereo_mean_l1: -0.101375
+    delta_stereo_sequence_bootstrap_ci95: [-0.158043, -0.053900]
+    delta_stereo_frame_bootstrap_ci95: [-0.149009, -0.061061]
+    delta_gaussian_mean_l1: 0.005078
+    delta_gaussian_sequence_bootstrap_ci95: [0.004329, 0.005955]
+    delta_gaussian_frame_bootstrap_ci95: [0.004381, 0.005738]
+    stereo_cost_seconds_mean: 0.002490
+    gaussian_cost_seconds_mean: 0.030553
+
+decisions:
+  gaussian_compensation_discovered: inconclusive
+  uncertainty_repairability_mismatch_discovered: yes
+  action_specialization_discovered: no
+  compute_aware_selective_repair_justified: inconclusive
+  roadmap: C
+  riskroute: parked
