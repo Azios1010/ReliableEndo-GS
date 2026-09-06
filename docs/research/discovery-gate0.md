@@ -31,6 +31,9 @@ hashes are recorded in `configs/research/gate0.yaml`:
 - H1: 40 perturbation cases;
 - H2: 160 fixed-grid regions and 480 action evaluations.
 
+The final synced W&B record is `discovery-gate0-compensation-repairability-final`
+(`j1xsrw98`) in group `discovery-gate0`; remote sync finished successfully.
+
 ## Frozen protocol
 
 The pre-registered protocol remains unchanged:

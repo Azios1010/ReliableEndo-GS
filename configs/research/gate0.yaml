@@ -21,6 +21,16 @@ provenance:
   analysis_sha256: 8EE23ADCB99CFF0100E9F5A3ACFF8B1E029D416D3B271D05D6F26B8ED46A9568
   baseline_provenance_sha256: EBDF69CE5172079BBFE51308111A59B2818E4A19F6C639CFCF29789E24BF9384
 
+tracking:
+  entity: azios1010-hanoi-university-of-science-and-technology
+  project: Reliable-GS
+  group: discovery-gate0
+  job_type: discovery-study
+  run: discovery-gate0-compensation-repairability-final
+  run_id: j1xsrw98
+  status: finished
+  remote_sync: pass
+
 protocol:
   immutable: true
   selected_sequences:
