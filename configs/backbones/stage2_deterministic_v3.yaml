@@ -5,7 +5,7 @@ role: deterministic_endo_e2e_gs_control_baseline
 artifact_filename: GPS-GS_stage2_deterministic_v3_best_step003000.pth
 artifact_root: E:/artifacts/reliable-endo-gs/stage2-deterministic-v3
 checkpoint_step: 3000
-checkpoint_sha256: 32D42DE10A4C683C31FB4B3E0DE831F900E11197CDF1769B18CF3BBAFA5EE16
+checkpoint_sha256: 32D42DE10A4C683C31FB4B3E0DE831F900E11197CDF1769B18CF3BBAFA5EE16F
 
 selection:
   metric: unweighted_sequence_macro_stage2_validation_total_loss
