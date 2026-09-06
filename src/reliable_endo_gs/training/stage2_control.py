@@ -84,6 +84,10 @@ def resolve_protocol(repo: Path, config_path: Path, run_dir: Path) -> Protocol:
     split_path = repo / data["split"]
     data_config_path = repo / data["config"]
     upstream = repo / "third_party" / "endo_e2e_gs"
+    source_sha_env = str(identity.get("source_sha_env", ""))
+    source_sha = os.environ.get(source_sha_env, "") if source_sha_env else str(identity.get("source_sha", ""))
+    if not source_sha:
+        raise RuntimeError("RELIABLE_ENDO_SOURCE_SHA must identify the exact pushed source commit")
     return Protocol(
         repo=repo,
         upstream=upstream,
@@ -93,7 +97,7 @@ def resolve_protocol(repo: Path, config_path: Path, run_dir: Path) -> Protocol:
         manifest_path=manifest_path,
         split_path=split_path,
         stage1_path=stage1_path,
-        source_sha=str(identity["source_sha"]),
+        source_sha=source_sha,
         upstream_sha=str(identity["upstream_sha"]),
         manifest_sha=str(identity["manifest_sha256"]),
         split_sha=str(identity["split_sha256"]),
