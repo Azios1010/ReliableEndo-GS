@@ -377,6 +377,12 @@ def run_p1(
 
     per_sequence: dict[str, dict[str, object]] = {}
     for sequence, sequence_records in sequence_rows.items():
+        available_proxy_names = tuple(
+            str(proxy["proxy"])
+            for proxy in availability_table(include_left_right=include_left_right)
+            if proxy["available"]
+            and any(str(proxy["proxy"]) in row["metrics"] for row in sequence_records)
+        )
         per_sequence[sequence] = {
             "samples": len(sequence_records),
             "proxies": {
@@ -385,8 +391,7 @@ def run_p1(
                     "auroc": mean_metric(sequence_records, proxy, "auroc"),
                     "auprc": mean_metric(sequence_records, proxy, "auprc"),
                 }
-                for proxy in availability_table(include_left_right=include_left_right)
-                if proxy["available"] and any(proxy["proxy"] in row["metrics"] for row in sequence_records)
+                for proxy in available_proxy_names
             },
         }
     macro: dict[str, object] = {"sequences": len(per_sequence), "proxies": {}}
