@@ -3,11 +3,18 @@
 import torch
 
 from reliable_endo_gs.evaluation.p1 import (
+    _average_ranks,
     aggregate_fixed_grid,
     cluster_bootstrap_mean,
     evaluate_p1_proxy,
     oracle_disparity_error,
 )
+
+
+def test_average_ranks_handles_ties_without_changing_rank_semantics() -> None:
+    values = torch.tensor([2.0, 1.0, 2.0, 1.0])
+
+    assert torch.equal(_average_ranks(values), torch.tensor([2.5, 0.5, 2.5, 0.5]))
 
 
 def test_oracle_error_is_gt_only_target() -> None:

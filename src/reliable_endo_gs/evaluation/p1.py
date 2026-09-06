@@ -62,15 +62,21 @@ def _average_ranks(values: torch.Tensor) -> torch.Tensor:
     if values.ndim != 1:
         raise ValueError("ranking input must be one-dimensional")
     sorted_values, order = torch.sort(values, stable=True)
-    ranks_sorted = torch.empty(values.shape, dtype=torch.float64, device=values.device)
-    start = 0
-    size = int(values.numel())
-    while start < size:
-        end = start + 1
-        while end < size and bool(sorted_values[end] == sorted_values[start]):
-            end += 1
-        ranks_sorted[start:end] = (start + end - 1) / 2.0
-        start = end
+    size = values.numel()
+    if size == 0:
+        return torch.empty_like(values, dtype=torch.float64)
+    group_start = torch.ones(size, dtype=torch.bool, device=values.device)
+    group_start[1:] = sorted_values[1:] != sorted_values[:-1]
+    group_ids = group_start.cumsum(dim=0) - 1
+    starts = torch.nonzero(group_start, as_tuple=False).flatten()
+    ends = torch.cat(
+        (
+            starts[1:],
+            torch.tensor([size], dtype=starts.dtype, device=values.device),
+        )
+    )
+    group_ranks = (starts + ends - 1).to(torch.float64).div(2.0)
+    ranks_sorted = group_ranks[group_ids]
     ranks = torch.empty_like(ranks_sorted)
     ranks[order] = ranks_sorted
     return ranks
