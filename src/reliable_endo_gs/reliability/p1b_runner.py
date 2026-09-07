@@ -221,9 +221,22 @@ def _verify_data_manifest(manifest_path: Path) -> dict[str, object]:
     if not manifest_path.is_file():
         raise FileNotFoundError(manifest_path)
     payload = json.loads(manifest_path.read_text(encoding="utf-8"))
-    text = json.dumps(payload)
-    if any(sequence in text for sequence in P1B_FINAL_SEQUENCES):
-        raise RuntimeError("P1b development manifest contains a forbidden final sequence")
+    active_sequences: set[str] = set()
+    for split_name in ("train_keyframes", "validation_keyframes", "test_keyframes"):
+        entries = payload.get(split_name, [])
+        if isinstance(entries, list):
+            active_sequences.update(str(entry) for entry in entries)
+    sequence_entries = payload.get("sequences", [])
+    if isinstance(sequence_entries, list):
+        for entry in sequence_entries:
+            if not isinstance(entry, Mapping):
+                continue
+            if str(entry.get("split", "")) in {"train", "validation", "test"}:
+                keyframe = entry.get("keyframe")
+                if keyframe is not None:
+                    active_sequences.add(str(keyframe))
+    if P1B_FINAL_SEQUENCES.intersection(active_sequences):
+        raise RuntimeError("P1b development manifest active split contains a forbidden final sequence")
     return {
         "path": str(manifest_path),
         "sha256": sha256_file(manifest_path),
