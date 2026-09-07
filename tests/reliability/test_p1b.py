@@ -9,6 +9,7 @@ from reliable_endo_gs.reliability.p1b import (
     P1B_DEVELOPMENT_SEQUENCES,
     P1B_FINAL_SEQUENCES,
     build_p1b_signals,
+    classify_candidate,
     compute_geometry_features,
     compute_photometric_features,
     compute_trajectory_features,
@@ -281,3 +282,21 @@ def test_p1b_sequence_guard_rejects_final_sequences() -> None:
     for forbidden in P1B_FINAL_SEQUENCES:
         with pytest.raises(ValueError, match="final"):
             validate_p1b_sequences(P1B_DEVELOPMENT_SEQUENCES[:-1] + (forbidden,))
+
+
+def test_candidate_classification_uses_nearest_discrete_region_coverage() -> None:
+    summary = {
+        "region": {
+            "spearman": 0.1,
+            "risk_coverage": [
+                {"coverage": 1.0, "risk": 10.0},
+                {"coverage": 0.903448, "risk": 9.0},
+                {"coverage": 0.8, "risk": 8.0},
+                {"coverage": 0.703448, "risk": 7.0},
+                {"coverage": 0.503448, "risk": 5.0},
+            ],
+        }
+    }
+    assert classify_candidate(
+        {"dataset_7/keyframe_2": summary, "dataset_4/keyframe_4": summary}
+    ) == "PASS"

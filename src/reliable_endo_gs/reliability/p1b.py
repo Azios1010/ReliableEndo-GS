@@ -1040,11 +1040,11 @@ def bootstrap_mean(
 
 
 def _coverage_lookup(curve: Sequence[Mapping[str, object]], coverage: float) -> float | None:
-    for item in curve:
-        if abs(float(item["coverage"]) - coverage) < 1.0e-9:
-            risk = item.get("risk")
-            return None if risk is None else float(risk)
-    return None
+    if not curve:
+        return None
+    item = min(curve, key=lambda value: abs(float(value["coverage"]) - coverage))
+    risk = item.get("risk")
+    return None if risk is None else float(risk)
 
 
 def summarize_candidate_rows(
