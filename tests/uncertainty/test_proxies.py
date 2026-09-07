@@ -40,15 +40,48 @@ def test_iteration_proxy_requires_real_iteration_evidence() -> None:
         FinalUpdateMagnitudeProxy().predict(prediction)
 
 
-def test_left_right_consistency_uses_x_minus_left_disparity_and_masks_out_of_view() -> None:
+def test_left_right_consistency_uses_positive_swapped_magnitude_and_masks_out_of_view() -> None:
     left = torch.tensor([[[[1.0, 1.0, 1.0]]]])
-    right = torch.tensor([[[[-1.0, -1.0, -1.0]]]])
+    right = torch.tensor([[[[1.0, 1.0, 1.0]]]])
     valid = torch.ones_like(left, dtype=torch.bool)
 
     result = left_right_consistency_score(left, right, valid, valid)
 
     assert torch.equal(result.valid_mask, torch.tensor([[[[False, True, True]]]]))
     assert torch.equal(result.score, torch.zeros_like(left))
+
+
+def test_left_right_consistency_handles_varying_disparity_with_pixel_grid_warp() -> None:
+    height, width = 3, 16
+    x = torch.arange(width, dtype=torch.float32).view(1, 1, 1, width).expand(1, 1, height, width)
+    left = 2.0 + 0.25 * x
+    # At x_right = x_left - d_left, this right magnitude equals d_left.
+    right = 8.0 / 3.0 + x / 3.0
+    valid = torch.ones_like(left, dtype=torch.bool)
+
+    result = left_right_consistency_score(left, right, valid, valid)
+
+    assert result.valid_mask[:, :, :, 3:].all()
+    assert torch.allclose(result.score[result.valid_mask], torch.zeros_like(result.score[result.valid_mask]), atol=2e-5)
+
+
+def test_left_right_consistency_rejects_invalid_correspondence_and_zero_disparity_is_valid() -> None:
+    height, width = 2, 12
+    zero = torch.zeros(1, 1, height, width)
+    valid = torch.ones_like(zero, dtype=torch.bool)
+    zero_result = left_right_consistency_score(zero, zero, valid, valid)
+
+    assert zero_result.valid_mask.all()
+    assert zero_result.score.max() == 0.0
+
+    left = torch.full_like(zero, 4.0)
+    right = torch.full_like(zero, 4.0)
+    right_valid = valid.clone()
+    right_valid[:, :, :, 3] = False
+    masked_result = left_right_consistency_score(left, right, valid, right_valid)
+
+    assert not masked_result.valid_mask[:, :, :, 7].any()
+    assert not masked_result.valid_mask[:, :, :, :4].any()
 
 
 def test_proxy_rejects_nonfinite_score_on_a_valid_pixel() -> None:

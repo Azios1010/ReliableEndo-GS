@@ -18,7 +18,6 @@ from reliable_endo_gs.uncertainty.proxies import (
 )
 from reliable_endo_gs.uncertainty.records import RawUncertaintyScore
 
-
 P1_PROXY_IDS = (
     "final_update_magnitude",
     "iteration_disagreement",
@@ -100,8 +99,9 @@ def extract_proxy_outputs(
     """Compute preregistered P1 proxies without accepting any GT tensor.
 
     ``right_disparity_iterations`` must come from a separate swapped-image
-    forward and uses the native right-reference sign.  If omitted, LR
-    consistency is explicitly unavailable rather than approximated.
+    forward. The pinned upstream returns a positive disparity magnitude for
+    that swapped order. If omitted, LR consistency is explicitly unavailable
+    rather than approximated.
     """
 
     left_iterations = _stack_iterations(disparity_iterations)

@@ -34,9 +34,12 @@ resolved setting and does not invoke the Gaussian renderer.
 - U1 is `abs(d_K - d_(K-1))`, in disparity pixels.
 - U2 is population standard deviation over the retained iteration stack,
   `unbiased=False`, in disparity pixels.
-- U3, when explicitly enabled, runs the same model on `(right, left)`. Its
-  output is right-reference disparity, so consistency is
-  `abs(d_L(x) + d_R(x - d_L(x)))` with out-of-view masking.
+- U3, when explicitly enabled, runs the same model on `(right, left)`. The
+  pinned RAFT-Stereo coordinate construction returns the positive horizontal
+  magnitude for this swapped order, so consistency is
+  `abs(d_L(x) - d_R_mag(x - d_L(x)))` with out-of-view masking. This is
+  distinct from a signed right-reference disparity, for which the equation
+  would use a plus sign.
 - U4 samples the rectified right image at `x - d_L` and reports mean-channel
   absolute residual in normalized image units. It is not optimized.
 - U5 is unavailable because the pinned correlation implementation exposes

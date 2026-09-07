@@ -72,12 +72,16 @@ def left_right_consistency_score(
     left_valid_mask: torch.Tensor,
     right_valid_mask: torch.Tensor,
 ) -> RawUncertaintyScore:
-    """Return ``|d_lr(x) + d_rl(x - d_lr(x))|`` with out-of-view masking.
+    """Return magnitude-disparity LR disagreement with out-of-view masking.
 
-    Both disparities must use their native pixel coordinate's signed direction:
-    left-to-right is sampled at ``x - d_lr`` in the right image and right-to-
-    left is therefore added.  ``grid_sample`` bilinear interpolation is the
-    declared numerical approximation; right validity uses nearest sampling.
+    The pinned RAFT-Stereo forward path returns a positive horizontal
+    coordinate difference for both input orders.  With the canonical
+    ``d_left = x_left - x_right`` convention, the swapped prediction is the
+    positive magnitude ``d_right_mag = x_left - x_right`` sampled at
+    ``x_right = x_left - d_left``.  The consistency residual is therefore
+    ``|d_left(x_left) - d_right_mag(x_right)|``.  ``grid_sample`` bilinear
+    interpolation is the declared numerical approximation; right validity
+    uses nearest sampling.
     """
 
     require_tensor("disparity_left_to_right", disparity_left_to_right)
@@ -151,7 +155,7 @@ def left_right_consistency_score(
     in_view = (sample_x >= 0) & (sample_x <= width - 1)
     valid = left_valid_mask & sampled_valid & in_view.unsqueeze(1)
     score = torch.where(
-        valid, (disparity_left_to_right + sampled_right).abs(), torch.zeros_like(sampled_right)
+        valid, (disparity_left_to_right - sampled_right).abs(), torch.zeros_like(sampled_right)
     )
     return RawUncertaintyScore(score, valid, "left_right_consistency", "1")
 

@@ -1,0 +1,117 @@
+schema_version: phase1_p1b_reliability_rescue.v1
+protocol_status: development_only_measurement
+training_authorized: false
+calibration_authorized: false
+final_evaluation_authorized: false
+signal_fusion_authorized: false
+gaussian_mutation_authorized: false
+renderer_mutation_authorized: false
+
+identity:
+  upstream_sha: 186fa2b4a2159b28393492f6df1aa444b54391a8
+  baseline_checkpoint_filename: GPS-GS_stage2_deterministic_v3_best_step003000.pth
+  baseline_checkpoint_sha256: 32D42DE10A4C683C31FB4B3E0DE831F900E11197CDF1769B18CF3BBAFA5EE16F
+  source_sha_env: RELIABLE_ENDO_SOURCE_SHA
+  checkpoint_env: RELIABLE_ENDO_STAGE2_BASELINE
+  data_root_env: RELIABLE_ENDO_DATA_ROOT
+  manifest_env: RELIABLE_ENDO_MANIFEST
+
+data:
+  split: splits/scared/five_keyframe_v3.json
+  config: configs/data/scared_five_keyframe_v3.yaml
+  fit_sequences:
+    - dataset_1/keyframe_1
+    - dataset_2/keyframe_1
+    - dataset_3/keyframe_1
+  holdout_sequences:
+    - dataset_7/keyframe_2
+    - dataset_4/keyframe_4
+  development_sequences:
+    - dataset_1/keyframe_1
+    - dataset_2/keyframe_1
+    - dataset_3/keyframe_1
+    - dataset_7/keyframe_2
+    - dataset_4/keyframe_4
+  forbidden_sequences:
+    - dataset_5/keyframe_1
+    - dataset_8/keyframe_2
+  train_phase: train
+  validation_phase: val
+  test_every: 8
+  shuffle: false
+  augmentation: false
+
+baseline:
+  validation_iterations: 3
+  precision: FP32
+  output_iteration: d3
+  disparity_convention: positive_left_reference_pixels
+  require_max_abs_diff: 0.0
+  require_torch_equal_when_possible: true
+
+candidates:
+  use_historical_controls: true
+  dynamics:
+    ordered_iterations: [d1, d2, d3]
+    eps: 0.000001
+    normalized_dispersion: true
+    path_efficiency: true
+    oscillation: sign_disagreement
+    directional_disagreement: normalized_update_difference
+    decay_deviation: absolute_log_ratio_from_one
+  geometry:
+    right_disparity_semantics: positive_magnitude_from_swapped_forward
+    strict_bilinear_support: true
+    relative_epsilon: 0.000001
+    visibility_rule: unique_rounded_target_and_local_monotonic_order
+  observation:
+    image_space: normalized_minus_one_to_one
+    bidirectional_support: intersection_only
+    bidirectional_disagreement: absolute_left_right_residual_difference
+    local_normalization_window: 5
+    local_normalization_epsilon: 0.0001
+    gradient: central_finite_difference_replicated_border
+    ssim_like_window: 5
+    ssim_like_data_range: 2.0
+    specularity_heuristic:
+      intensity_threshold: 0.95
+      saturation_threshold: 0.20
+
+evaluation:
+  primary_level: fixed_4x4_region
+  levels: [pixel, frame, fixed_4x4_region]
+  high_error_threshold_disparity_px: 1.0
+  coverage_levels: [1.0, 0.9, 0.8, 0.7, 0.5]
+  region_grid: [4, 4]
+  bootstrap_repeats: 1000
+  bootstrap_seed: 1314
+  frame_cluster: sample_frames
+  sequence_cluster: development_sequences
+  holdout_success:
+    require_positive_region_spearman_on_both_holdouts: true
+    require_risk_at_50_below_risk_at_100_on_both_holdouts: true
+
+shadow_iteration_study:
+  enabled: false
+  max_iterations: 6
+  baseline_iteration_index: 2
+  extra_compute_signal_only: true
+  substitute_into_reconstruction: false
+
+study_boundaries:
+  use_ground_truth_for_inference_masks: false
+  use_ground_truth_for_candidate_selection_on_holdouts: false
+  fit_sigma_d: false
+  compute_sigma_D: false
+  compute_center_covariance: false
+  modify_gaussian_covariance: false
+  modify_opacity: false
+  modify_renderer: false
+  train_fusion_model: false
+  weighted_signal_sum: false
+  stereo_consensus_generator: design_only
+
+output:
+  save_sample_maps: true
+  scientific_wandb_run: false
+  refuse_overwrite: true
