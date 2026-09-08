@@ -174,13 +174,14 @@ def import_upstream_module(
     *,
     require_rasterizer: bool = False,
     require_corr_sampler: bool = False,
+    check_python_dependencies: bool = True,
     enforce_clean: bool = True,
 ) -> ModuleType:
     """Import one verified upstream module only when baseline execution asks."""
 
     require_pinned_upstream(upstream_root, enforce_clean=enforce_clean)
     capabilities = inspect_capabilities(upstream_root)
-    if not capabilities.python_dependencies:
+    if check_python_dependencies and not capabilities.python_dependencies:
         raise UpstreamUnavailableError(
             "upstream Python dependencies are unavailable: "
             + ", ".join(capabilities.missing_python_dependencies)

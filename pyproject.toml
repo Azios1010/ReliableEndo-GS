@@ -14,6 +14,8 @@ dependencies = [
     "Pillow>=10.0",
     "tifffile>=2023.7",
     "torch>=2.2,<3",
+    "torchvision>=0.17,<1",
+    "opencv-python-headless>=4.8",
 ]
 
 [project.optional-dependencies]

@@ -1,5 +1,6 @@
 """Dataset-specific layout handling for the SCARED-C development protocol."""
 
+import hashlib
 import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -9,6 +10,13 @@ from reliable_endo_gs.data.index import (
     SCARED_C_PROTOCOL,
     SampleIndex,
     build_scared_c_index,
+)
+from reliable_endo_gs.data.scared_c import (
+    STATIC_MODE,
+    parse_frame_log,
+)
+from reliable_endo_gs.data.scared_c import (
+    build_scared_c_index as build_lazy_scared_c_index,
 )
 from reliable_endo_gs.data.validation import DatasetValidationReport
 
@@ -22,7 +30,7 @@ class ScaredCAdapter:
     layout_validation_status: str = "implemented"
 
     def validate_root(self, root: Path) -> DatasetValidationReport:
-        """Validate layout and decode each complete record when explicitly requested."""
+        """Validate SCARED-C metadata without materializing image or XYZ content."""
 
         if not root.exists():
             return DatasetValidationReport(
@@ -56,7 +64,7 @@ class ScaredCAdapter:
             )
 
         try:
-            index = build_scared_c_index(root, strict=False, protocol=self.protocol)
+            lazy_index = build_lazy_scared_c_index(root, mode=STATIC_MODE, strict=False)
         except (OSError, TypeError, ValueError) as error:
             return DatasetValidationReport(
                 dataset_name=self.name,
@@ -76,13 +84,27 @@ class ScaredCAdapter:
                 contract_valid=False,
             )
 
-        if index.issues:
+        issues = list(lazy_index.issues)
+        for frame_log in sorted(root.glob("dataset_*/keyframe_*/frame_log.json")):
+            try:
+                parse_frame_log(frame_log)
+            except ValueError as error:
+                issues.append(str(error))
+
+        index = build_scared_c_index(root, strict=False, protocol=self.protocol)
+        index_hash = (
+            index.index_hash
+            if index.records
+            else hashlib.sha256("\n".join(lazy_index.sample_ids).encode("utf-8")).hexdigest()
+        )
+
+        if issues:
             incomplete_markers = ("missing", "no dataset_", "no keyframe_")
             status = (
                 "INCOMPLETE"
                 if any(
                     any(marker in issue.casefold() for marker in incomplete_markers)
-                    for issue in index.issues
+                    for issue in issues
                 )
                 else "INVALID"
             )
@@ -93,18 +115,18 @@ class ScaredCAdapter:
                 is_directory=True,
                 layout_checked=True,
                 valid=False,
-                messages=(f"STATUS: {status}", *index.issues),
+                messages=(f"STATUS: {status}", *issues),
                 status=status,
                 protocol=self.protocol,
-                sequence_count=len(index.sequence_ids),
-                sample_count=len(index.records),
+                sequence_count=len(lazy_index.sequence_ids),
+                sample_count=len(lazy_index.records),
                 stereo_available=False,
                 calibration_status="INCOMPLETE" if status == "INCOMPLETE" else "INVALID",
                 depth_status="INCOMPLETE" if status == "INCOMPLETE" else "INVALID",
                 contract_valid=False,
-                index_hash=index.index_hash if index.records else None,
+                index_hash=index_hash,
             )
-        if not index.records:
+        if not lazy_index.records:
             return DatasetValidationReport(
                 dataset_name=self.name,
                 root=root,
@@ -123,34 +145,6 @@ class ScaredCAdapter:
                 contract_valid=False,
             )
 
-        try:
-            from reliable_endo_gs.data.loaders import load_scared_c_sample
-
-            for record in index.records:
-                load_scared_c_sample(record)
-        except (ImportError, OSError, TypeError, ValueError, RuntimeError) as error:
-            return DatasetValidationReport(
-                dataset_name=self.name,
-                root=root,
-                exists=True,
-                is_directory=True,
-                layout_checked=True,
-                valid=False,
-                messages=(
-                    "STATUS: INVALID",
-                    f"Contract validation failed ({type(error).__name__}).",
-                ),
-                status="INVALID",
-                protocol=self.protocol,
-                sequence_count=len(index.sequence_ids),
-                sample_count=len(index.records),
-                stereo_available=False,
-                calibration_status="INVALID",
-                depth_status="INVALID",
-                contract_valid=False,
-                index_hash=index.index_hash,
-            )
-
         return DatasetValidationReport(
             dataset_name=self.name,
             root=root,
@@ -160,17 +154,18 @@ class ScaredCAdapter:
             valid=True,
             messages=(
                 "STATUS: USABLE",
-                f"Validated {len(index.records)} complete static keyframe record(s).",
+                f"Indexed {len(lazy_index.records)} complete static keyframe record(s) "
+                "without materializing content.",
             ),
             status="USABLE",
             protocol=self.protocol,
-            sequence_count=len(index.sequence_ids),
-            sample_count=len(index.records),
+            sequence_count=len(lazy_index.sequence_ids),
+            sample_count=len(lazy_index.records),
             stereo_available=True,
             calibration_status="USABLE",
             depth_status="USABLE",
             contract_valid=True,
-            index_hash=index.index_hash,
+            index_hash=index_hash,
         )
 
     def enumerate_sequences(self, root: Path) -> Sequence[str]:

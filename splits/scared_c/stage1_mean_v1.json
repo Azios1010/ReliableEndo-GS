@@ -1,0 +1,78 @@
+{
+  "schema_version": 1,
+  "manifest_kind": "stage1_mean_role_partition",
+  "dataset": "scared_c",
+  "dataset_version": "upstream_44baac1187c8729c96db0d1def569bd94c9d9417",
+  "split_name": "stage1_mean_v1",
+  "active": false,
+  "sequence_id_format": "{dataset_id}_{keyframe_id}",
+  "role_overlap_policy": "All roles are sequence-disjoint; dataset_6 remains final and guarded.",
+  "roles": {
+    "MEAN_TRAIN": [
+      "1_1",
+      "2_2",
+      "3_2"
+    ],
+    "MEAN_VALIDATION": [
+      "1_2",
+      "3_1"
+    ],
+    "STRUCTURAL_DIAGNOSTIC": [
+      "2_1"
+    ],
+    "UNCERTAINTY_TRAIN": [
+      "2_3",
+      "3_3"
+    ],
+    "CALIBRATION": [
+      "1_3",
+      "2_4",
+      "3_4"
+    ],
+    "DEVELOPMENT_TRANSFER": [
+      "7_1",
+      "7_2",
+      "7_3",
+      "7_4"
+    ],
+    "FINAL_UNTOUCHED": [
+      "6_1",
+      "6_2",
+      "6_3",
+      "6_4"
+    ],
+    "FINAL_STATIC_UNTOUCHED": [
+      "6_1",
+      "6_2",
+      "6_3",
+      "6_4",
+      "6_5"
+    ]
+  },
+  "corrected_video_frame_counts": {
+    "1_1": 197,
+    "2_2": 1033,
+    "3_2": 1597,
+    "1_2": 280,
+    "3_1": 329,
+    "2_1": 11,
+    "2_3": 1102,
+    "3_3": 448,
+    "1_3": 471,
+    "2_4": 2114,
+    "3_4": 834
+  },
+  "provenance": {
+    "upstream_repository": "juseonghan/SCARED-C",
+    "upstream_revision": "44baac1187c8729c96db0d1def569bd94c9d9417",
+    "root_resolution": "RELIABLE_ENDO_DATA_ROOT/scared_c",
+    "activation_rule": "Keep inactive for readiness remediation; activate only in the separate full-training task."
+  },
+  "notes": [
+    "Mean checkpoint selection is sequence-disjoint: 1_2 and 3_1 are validation, not training.",
+    "No frame-level random split is permitted.",
+    "Dataset 7 is development-transfer only and is not used for mean checkpoint selection.",
+    "Dataset 6 is final evaluation only and must remain guarded by the loader.",
+    "This file is an inactive protocol artifact; it does not activate training defaults."
+  ]
+}

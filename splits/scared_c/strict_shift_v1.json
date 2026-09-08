@@ -1,0 +1,62 @@
+{
+  "schema_version": 1,
+  "manifest_kind": "role_partition",
+  "dataset": "scared_c",
+  "dataset_version": "upstream_44baac1187c8729c96db0d1def569bd94c9d9417",
+  "split_name": "strict_shift_v1",
+  "active": false,
+  "sequence_id_format": "{dataset_id}_{keyframe_id}",
+  "role_overlap_policy": "FINAL_STATIC_UNTOUCHED is a nested static-keyframe annotation of FINAL_UNTOUCHED; all other roles are disjoint.",
+  "roles": {
+    "MEAN_MODEL_TRAIN": [
+      "1_1",
+      "2_2",
+      "3_2"
+    ],
+    "UNCERTAINTY_TRAIN": [
+      "1_2",
+      "2_3",
+      "3_1",
+      "3_3"
+    ],
+    "CALIBRATION": [
+      "1_3",
+      "2_4",
+      "3_4"
+    ],
+    "STRUCTURAL_DIAGNOSTIC": [
+      "2_1"
+    ],
+    "DEVELOPMENT_TRANSFER": [
+      "7_1",
+      "7_2",
+      "7_3",
+      "7_4"
+    ],
+    "FINAL_UNTOUCHED": [
+      "6_1",
+      "6_2",
+      "6_3",
+      "6_4"
+    ],
+    "FINAL_STATIC_UNTOUCHED": [
+      "6_1",
+      "6_2",
+      "6_3",
+      "6_4",
+      "6_5"
+    ]
+  },
+  "provenance": {
+    "upstream_repository": "juseonghan/SCARED-C",
+    "upstream_revision": "44baac1187c8729c96db0d1def569bd94c9d9417",
+    "root_resolution": "RELIABLE_ENDO_DATA_ROOT/scared_c",
+    "activation_rule": "This manifest remains inactive until the audited stereo/camera loader is implemented and validated."
+  },
+  "notes": [
+    "Sequence identifiers are case/keyframe groups; no frame-level randomization is permitted.",
+    "Dataset 6 is reserved for final evaluation and must remain guarded by the loader.",
+    "FINAL_STATIC_UNTOUCHED includes all five dataset 6 static keyframes.",
+    "This file is a protocol artifact only; it must not activate training or evaluation defaults."
+  ]
+}
