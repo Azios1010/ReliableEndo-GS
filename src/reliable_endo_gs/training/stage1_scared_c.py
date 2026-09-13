@@ -15,6 +15,7 @@ import math
 import os
 import random
 import re
+import shutil
 import subprocess
 import time
 from collections.abc import Mapping, Sequence
@@ -1141,7 +1142,7 @@ def benchmark_stage1_cache_data(
 
 @dataclass(frozen=True, slots=True)
 class Stage1TrainingResult:
-    """Immutable completion record for the official full-data Stage1 run."""
+    """Immutable completion record for an official full-data Stage1 run."""
 
     steps_completed: int
     best_step: int
@@ -1409,13 +1410,256 @@ def _checkpoint_payload(
     }
 
 
+@dataclass(frozen=True, slots=True)
+class _Stage1ResumeState:
+    """Validated state needed to continue one interrupted full-data run."""
+
+    checkpoint_path: Path
+    checkpoint_sha256: str
+    checkpoint_source_sha: str | None
+    start_step: int
+    best_step: int
+    best_validation_epe: float
+    best_abs_bias: float
+    selection_row: dict[str, object]
+
+
+def _tensor_is_finite(value: torch.Tensor) -> bool:
+    """Return whether a tensor contains only finite values when applicable."""
+
+    if not (value.is_floating_point() or value.is_complex()):
+        return True
+    return bool(torch.isfinite(value).all().item())
+
+
+def _load_stage1_resume_checkpoint(
+    path: str | Path,
+    *,
+    config: Stage1ScaredCConfig,
+    split: Stage1FrameSplit,
+    quality: Stage1GTQualityManifest | None,
+) -> tuple[_Stage1ResumeState, Mapping[str, object]]:
+    """Load and validate an explicit full-data checkpoint before training."""
+
+    checkpoint_path = Path(path).expanduser().resolve()
+    if not checkpoint_path.is_file():
+        raise Stage1ScaredCConfigError(f"resume checkpoint is missing: {checkpoint_path}")
+    try:
+        payload = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+    except (OSError, RuntimeError, ValueError) as error:
+        raise Stage1ScaredCConfigError(
+            f"unable to load resume checkpoint {checkpoint_path}: {error}"
+        ) from error
+    if not isinstance(payload, Mapping):
+        raise Stage1ScaredCConfigError("resume checkpoint must contain a mapping")
+
+    raw_step = payload.get("total_steps")
+    if isinstance(raw_step, bool) or not isinstance(raw_step, int):
+        raise Stage1ScaredCConfigError("resume checkpoint total_steps must be an integer")
+    if raw_step < 1 or raw_step >= config.num_steps:
+        raise Stage1ScaredCConfigError(
+            "resume checkpoint must be an interior step below the configured 60000 steps"
+        )
+    if raw_step not in config.validation_steps:
+        raise Stage1ScaredCConfigError(
+            "resume checkpoint must be selected at a configured validation step"
+        )
+
+    metadata = payload.get("stage1_scared_c")
+    if not isinstance(metadata, Mapping):
+        raise Stage1ScaredCConfigError("resume checkpoint metadata is missing")
+    checkpoint_config = metadata.get("config")
+    if not isinstance(checkpoint_config, Mapping):
+        raise Stage1ScaredCConfigError("resume checkpoint config metadata is missing")
+    for field in (
+        "name",
+        "dataset",
+        "mode",
+        "training_mode",
+        "num_steps",
+        "seed",
+        "batch_size",
+        "train_iters",
+        "val_iters",
+    ):
+        expected = getattr(config, field)
+        actual = checkpoint_config.get(field)
+        if actual is not None and actual != expected:
+            raise Stage1ScaredCConfigError(
+                f"resume checkpoint config mismatch for {field}: {actual!r} != {expected!r}"
+            )
+    if metadata.get("frame_split_manifest_sha256") != split.manifest_sha256:
+        raise Stage1ScaredCConfigError(
+            "resume checkpoint frame split manifest does not match the current split"
+        )
+    expected_quality_sha = quality.manifest_sha256 if quality is not None else None
+    if metadata.get("gt_quality_manifest_sha256") != expected_quality_sha:
+        raise Stage1ScaredCConfigError(
+            "resume checkpoint GT-quality manifest does not match the current audit"
+        )
+    for field, expected in (
+        ("train_sample_count", len(quality.train_sample_ids) if quality else split.train_count),
+        (
+            "validation_sample_count",
+            len(quality.validation_sample_ids) if quality else split.validation_count,
+        ),
+    ):
+        if metadata.get(field) != expected:
+            raise Stage1ScaredCConfigError(
+                f"resume checkpoint {field} does not match the current split"
+            )
+
+    raw_selection = metadata.get("selection_row")
+    if not isinstance(raw_selection, Mapping):
+        raise Stage1ScaredCConfigError("resume checkpoint selection row is missing")
+    if raw_selection.get("step") != raw_step or raw_selection.get("sequence") != "MACRO":
+        raise Stage1ScaredCConfigError(
+            "resume checkpoint selection row does not identify its saved validation step"
+        )
+    try:
+        selection_row = {
+            "step": int(raw_selection["step"]),
+            "sequence": "MACRO",
+            "epe": float(raw_selection["epe"]),
+            "median_ae": float(raw_selection["median_ae"]),
+            "bias": float(raw_selection["bias"]),
+            "bad3": float(raw_selection["bad3"]),
+            "bad5": float(raw_selection["bad5"]),
+            "frames": int(raw_selection["frames"]),
+            "valid_pixels": int(raw_selection["valid_pixels"]),
+        }
+    except (KeyError, TypeError, ValueError) as error:
+        raise Stage1ScaredCConfigError(
+            "resume checkpoint selection row has invalid metrics"
+        ) from error
+    if not all(
+        math.isfinite(float(selection_row[field]))
+        for field in ("epe", "median_ae", "bias", "bad3", "bad5")
+    ):
+        raise Stage1ScaredCConfigError("resume checkpoint selection metrics must be finite")
+
+    network = payload.get("network")
+    optimizer_state = payload.get("optimizer")
+    scheduler_state = payload.get("scheduler")
+    if not isinstance(network, Mapping):
+        raise Stage1ScaredCConfigError("resume checkpoint network state is missing")
+    if not isinstance(optimizer_state, Mapping):
+        raise Stage1ScaredCConfigError("resume checkpoint optimizer state is missing")
+    if not isinstance(scheduler_state, Mapping):
+        raise Stage1ScaredCConfigError("resume checkpoint scheduler state is missing")
+    for name, state in (("network", network), ("optimizer", optimizer_state)):
+        for key, value in state.items():
+            if isinstance(value, torch.Tensor) and not _tensor_is_finite(value):
+                raise Stage1ScaredCConfigError(
+                    f"resume checkpoint {name} contains non-finite tensor {key!r}"
+                )
+            if name == "optimizer" and isinstance(value, Mapping):
+                for nested_key, nested_value in value.items():
+                    if isinstance(nested_value, torch.Tensor) and not _tensor_is_finite(
+                        nested_value
+                    ):
+                        raise Stage1ScaredCConfigError(
+                            "resume checkpoint optimizer contains non-finite state "
+                            f"{key!r}.{nested_key!r}"
+                        )
+    if scheduler_state.get("total_steps") != config.num_steps:
+        raise Stage1ScaredCConfigError(
+            "resume checkpoint scheduler total_steps does not match the 60000-step recipe"
+        )
+    if scheduler_state.get("last_epoch") != raw_step:
+        raise Stage1ScaredCConfigError(
+            "resume checkpoint scheduler state does not match total_steps"
+        )
+
+    checkpoint_source_sha = metadata.get("source_sha")
+    if checkpoint_source_sha is not None and not isinstance(checkpoint_source_sha, str):
+        raise Stage1ScaredCConfigError("resume checkpoint source_sha must be a string")
+    return (
+        _Stage1ResumeState(
+            checkpoint_path=checkpoint_path,
+            checkpoint_sha256=_sha256_file(checkpoint_path),
+            checkpoint_source_sha=checkpoint_source_sha,
+            start_step=raw_step,
+            best_step=raw_step,
+            best_validation_epe=float(selection_row["epe"]),
+            best_abs_bias=abs(float(selection_row["bias"])),
+            selection_row=selection_row,
+        ),
+        payload,
+    )
+
+
+def _restore_stage1_resume_state(
+    payload: Mapping[str, object],
+    *,
+    model: torch.nn.Module,
+    optimizer: torch.optim.Optimizer,
+    scheduler: torch.optim.lr_scheduler.LRScheduler,
+    expected_step: int,
+    device: torch.device,
+) -> None:
+    """Restore model, optimizer, and scheduler state for an explicit resume."""
+
+    try:
+        model.load_state_dict(payload["network"], strict=True)  # type: ignore[arg-type]
+        optimizer.load_state_dict(payload["optimizer"])  # type: ignore[arg-type]
+        scheduler.load_state_dict(payload["scheduler"])  # type: ignore[arg-type]
+    except (KeyError, RuntimeError, TypeError, ValueError) as error:
+        raise Stage1ScaredCConfigError(
+            f"resume checkpoint state is incompatible with the current model: {error}"
+        ) from error
+    if scheduler.last_epoch != expected_step:
+        raise Stage1ScaredCConfigError("restored scheduler step does not match the checkpoint step")
+    for state in optimizer.state.values():
+        for key, value in state.items():
+            if isinstance(value, torch.Tensor):
+                state[key] = value.to(device=device)
+
+
+def _read_csv_prefix(
+    path: Path,
+    *,
+    max_step: int,
+    required_fields: Sequence[str],
+) -> list[dict[str, str]]:
+    """Read a prior run's trace up to the checkpoint step, if available."""
+
+    if not path.is_file():
+        return []
+    try:
+        with path.open("r", newline="", encoding="utf-8") as file:
+            reader = csv.DictReader(file)
+            fieldnames = tuple(reader.fieldnames or ())
+            missing = set(required_fields) - set(fieldnames)
+            if missing:
+                raise Stage1ScaredCConfigError(
+                    f"resume trace {path} is missing fields: {sorted(missing)}"
+                )
+            rows: list[dict[str, str]] = []
+            for raw in reader:
+                if not raw:
+                    continue
+                try:
+                    step = int(raw.get("step", ""))
+                except (TypeError, ValueError) as error:
+                    raise Stage1ScaredCConfigError(
+                        f"resume trace {path} contains an invalid step"
+                    ) from error
+                if step <= max_step:
+                    rows.append({field: raw.get(field, "") for field in required_fields})
+            return rows
+    except OSError as error:
+        raise Stage1ScaredCConfigError(f"unable to read resume trace {path}: {error}") from error
+
+
 def run_stage1_scratch_training(
     config: Stage1ScaredCConfig,
     *,
     device: torch.device,
     artifact_root: str | Path,
+    resume_ckpt: str | Path | None = None,
 ) -> Stage1TrainingResult:
-    """Run the fixed full-data 60k-step Stage1 protocol from scratch."""
+    """Run the fixed full-data 60k-step Stage1 protocol from scratch or a checkpoint."""
 
     if not config.is_full_data:
         raise Stage1ScaredCConfigError(
@@ -1429,6 +1673,12 @@ def run_stage1_scratch_training(
     config.require_safe_mode(steps=steps)
     if device.type != "cuda" or not torch.cuda.is_available():
         raise Stage1ScaredCConfigError("the official Stage1 run requires a visible CUDA device")
+    if resume_ckpt is None:
+        resume_path: Path | None = None
+    else:
+        resume_path = Path(resume_ckpt).expanduser()
+        if not resume_path.is_absolute():
+            resume_path = (REPOSITORY_ROOT / resume_path).resolve()
 
     source_sha = _git_head_sha()
     upstream_sha = _upstream_head_sha()
@@ -1531,9 +1781,12 @@ def run_stage1_scratch_training(
             "rounding": split.rounding,
             "min_frames_per_keyframe": split.min_validation_frames_per_keyframe,
         },
-        "initialization": "scratch",
-        "from_scratch": True,
-        "restore_ckpt": None,
+        "initialization": "resume" if resume_path is not None else "scratch",
+        "from_scratch": resume_path is None,
+        "restore_ckpt": None if resume_path is None else str(resume_path),
+        "resume_checkpoint_sha256": None,
+        "resume_checkpoint_source_sha": None,
+        "resume_from_step": 0,
         "correlation_runtime": "PYTORCH_EQUIVALENT",
         "validation_steps": list(config.validation_steps),
         "validation_metric_aggregation": "mean frame metrics over the internal validation partition",
@@ -1592,6 +1845,9 @@ def run_stage1_scratch_training(
         anneal_strategy=config.scheduler_anneal_strategy,
     )
     torch.cuda.reset_peak_memory_stats(device)
+    resume_state: _Stage1ResumeState | None = None
+    resume_payload: Mapping[str, object] | None = None
+    start_step = 0
     best_epe: float | None = None
     best_abs_bias: float | None = None
     best_step: int | None = None
@@ -1624,6 +1880,73 @@ def run_stage1_scratch_training(
     ]
 
     try:
+        resume_training_rows: list[dict[str, str]] = []
+        resume_validation_rows: list[dict[str, str]] = []
+        if resume_path is not None:
+            resume_state, resume_payload = _load_stage1_resume_checkpoint(
+                resume_path,
+                config=config,
+                split=split,
+                quality=quality,
+            )
+            assert resume_payload is not None
+            _restore_stage1_resume_state(
+                resume_payload,
+                model=model,
+                optimizer=optimizer,
+                scheduler=scheduler,
+                expected_step=resume_state.start_step,
+                device=device,
+            )
+            torch.cuda.reset_peak_memory_stats(device)
+            start_step = resume_state.start_step
+            best_epe = resume_state.best_validation_epe
+            best_abs_bias = resume_state.best_abs_bias
+            best_step = resume_state.best_step
+            last_step = start_step
+            validation_rows.append(dict(resume_state.selection_row))
+            source_run_root = resume_state.checkpoint_path.parent.parent
+            resume_training_rows = _read_csv_prefix(
+                source_run_root / "training_log.csv",
+                max_step=start_step,
+                required_fields=training_header,
+            )
+            resume_validation_rows = _read_csv_prefix(
+                source_run_root / "validation_metrics.csv",
+                max_step=start_step,
+                required_fields=validation_header,
+            )
+            if not any(
+                int(row["step"]) == start_step and row["sequence"] == "MACRO"
+                for row in resume_validation_rows
+            ):
+                resume_validation_rows.append(
+                    {field: str(resume_state.selection_row[field]) for field in validation_header}
+                )
+            data_times.extend(
+                float(row["data_seconds"]) for row in resume_training_rows if row["data_seconds"]
+            )
+            compute_times.extend(
+                float(row["compute_seconds"])
+                for row in resume_training_rows
+                if row["compute_seconds"]
+            )
+            total_times.extend(
+                float(row["total_seconds"]) for row in resume_training_rows if row["total_seconds"]
+            )
+            shutil.copy2(resume_state.checkpoint_path, best_checkpoint_tmp)
+            run_manifest.update(
+                {
+                    "resume_checkpoint_sha256": resume_state.checkpoint_sha256,
+                    "resume_checkpoint_source_sha": resume_state.checkpoint_source_sha,
+                    "resume_from_step": start_step,
+                    "resume_trace_training_rows": len(resume_training_rows),
+                    "resume_trace_validation_rows": len(resume_validation_rows),
+                    "resume_data_order": "seeded_loader_restart",
+                    "resume_bitwise_reproducible": False,
+                }
+            )
+            _write_json(root / "run_manifest.json", run_manifest)
         with (
             (root / "training_log.csv").open("w", newline="", encoding="utf-8") as train_file,
             (root / "validation_metrics.csv").open(
@@ -1634,7 +1957,13 @@ def run_stage1_scratch_training(
             validation_writer = csv.DictWriter(validation_file, fieldnames=validation_header)
             train_writer.writeheader()
             validation_writer.writeheader()
-            for step in range(1, steps + 1):
+            for row in resume_training_rows:
+                train_writer.writerow(row)
+            for row in resume_validation_rows:
+                validation_writer.writerow(row)
+            train_file.flush()
+            validation_file.flush()
+            for step in range(start_step + 1, steps + 1):
                 total_start = time.perf_counter()
                 data_start = total_start
                 try:

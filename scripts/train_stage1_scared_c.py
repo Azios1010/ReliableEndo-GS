@@ -35,6 +35,11 @@ def main() -> int:
         "--artifact-root",
         default=r"E:\artifacts\reliable-endo-gs\stage1-scared-c-full-v1",
     )
+    parser.add_argument(
+        "--resume-ckpt",
+        default=None,
+        help="resume the full-data run from a validated Stage1 checkpoint",
+    )
     parser.add_argument("--device", default="cuda:0")
     args = parser.parse_args()
 
@@ -43,6 +48,8 @@ def main() -> int:
         raise SystemExit("--prepare-only cannot be combined with --full or --smoke-steps")
     if args.build_cache and not args.prepare_only:
         raise SystemExit("--build-cache requires --prepare-only")
+    if args.resume_ckpt is not None and not args.full:
+        raise SystemExit("--resume-ckpt requires --full")
     if args.prepare_only:
         split = prepare_stage1_full_data(config, build_cache=args.build_cache)
         print(f"split_manifest={config.frame_split_path}")
@@ -63,6 +70,7 @@ def main() -> int:
             config,
             device=device,
             artifact_root=args.artifact_root,
+            resume_ckpt=args.resume_ckpt,
         )
         print(f"steps_completed={result.steps_completed}")
         print(f"best_step={result.best_step}")
