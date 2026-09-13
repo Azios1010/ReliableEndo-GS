@@ -22,10 +22,18 @@ import numpy as np
 from reliable_endo_gs.data.scared_c import (
     CORRECTED_VIDEO_MODE,
     SCARED_C_UPSTREAM_REVISION,
-    ScaredCError,
     ScaredCSampleRecord,
     build_scared_c_index,
     load_scared_c_role_manifest,
+)
+from reliable_endo_gs.data.scared_c_stage1_split import (
+    STAGE1_TRAIN_DATASET_IDS,
+    Stage1FrameSplitError,
+    load_stage1_frame_split,
+    normalize_dataset_ids,
+    normalize_keyframe_entries,
+    normalize_sample_ids,
+    select_stage1_records,
 )
 from reliable_endo_gs.data.scared_c_stereo import (
     RectificationCache,
@@ -35,7 +43,8 @@ from reliable_endo_gs.data.scared_c_stereo import (
     read_xyz_tar_member,
 )
 
-STAGE1_CACHE_SCHEMA = 1
+STAGE1_CACHE_SCHEMA = 2
+STAGE1_LEGACY_CACHE_SCHEMA = 1
 STAGE1_CACHE_SPLIT_NAME = "stage1_mean_v1"
 STAGE1_MEAN_TRAIN = ("1_1", "2_2", "3_2")
 STAGE1_MEAN_VALIDATION = ("1_2", "3_1")
@@ -72,6 +81,45 @@ class Stage1CacheEntry:
 
 def _normalised_member_name(name: str) -> str:
     return name.replace("\\", "/")
+
+
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    try:
+        with path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+    except OSError as error:
+        raise Stage1CacheError(f"unable to hash provenance file {path}: {error}") from error
+    return digest.hexdigest()
+
+
+def _split_manifest_sha256(path: Path) -> str:
+    """Return the canonical hash stored by a persisted Stage1 frame split."""
+
+    try:
+        return load_stage1_frame_split(path).manifest_sha256
+    except (OSError, Stage1FrameSplitError) as error:
+        raise Stage1CacheError(
+            f"unable to load Stage1 frame split provenance {path}: {error}"
+        ) from error
+
+
+def _matches_split_manifest(
+    recorded_hash: object,
+    expected_hash: str,
+    *,
+    manifest_path: Path | None,
+) -> bool:
+    """Accept the old file-byte hash only for this exact persisted split file."""
+
+    if recorded_hash == expected_hash:
+        return True
+    return (
+        manifest_path is not None
+        and recorded_hash == _file_sha256(manifest_path)
+        and _split_manifest_sha256(manifest_path) == expected_hash
+    )
 
 
 def _array_digest(digest: hashlib._Hash, name: str, array: np.ndarray) -> None:
@@ -164,21 +212,48 @@ def _write_json_atomic(path: Path, payload: Mapping[str, object]) -> None:
             temporary.unlink()
 
 
-def _validate_target_records(records: Sequence[ScaredCSampleRecord]) -> None:
+def _validate_target_records(
+    records: Sequence[ScaredCSampleRecord],
+    *,
+    expected_sample_ids: Sequence[str] | None = None,
+    expected_frame_counts: Mapping[str, int] | None = None,
+    legacy_fixed_counts: bool = False,
+) -> None:
     observed: dict[str, int] = defaultdict(int)
+    seen_sample_ids: set[str] = set()
     for record in records:
         if record.mode != CORRECTED_VIDEO_MODE:
             raise Stage1CacheError("Stage1 cache accepts corrected-video records only")
-        if record.sequence_key not in STAGE1_CACHE_SEQUENCES:
+        if record.sequence_id not in STAGE1_TRAIN_DATASET_IDS:
             raise Stage1CacheError(
-                f"cache target {record.sequence_key!r} is outside the Stage1 train/validation roles"
+                f"cache target {record.sample_id!r} is outside the Stage1 dataset allowlist"
             )
-        if record.final_role or record.sequence_key.startswith("6_"):
-            raise Stage1CacheError("dataset_6/final-role content is forbidden in the Stage1 cache")
+        if record.final_role or record.sequence_id in {"dataset_6", "dataset_7"}:
+            raise Stage1CacheError(
+                "dataset_6/dataset_7/final-role content is forbidden in the Stage1 cache"
+            )
         if record.scene_points_archive_path is None or record.scene_points_member is None:
             raise Stage1CacheError(f"record {record.sample_id} has no scene-points pointer")
+        if record.sample_id in seen_sample_ids:
+            raise Stage1CacheError(f"duplicate target sample ID: {record.sample_id}")
+        seen_sample_ids.add(record.sample_id)
         observed[record.sequence_key] += 1
-    for sequence_key, expected in EXPECTED_STAGE1_FRAME_COUNTS.items():
+    if expected_sample_ids is not None:
+        expected = set(expected_sample_ids)
+        if seen_sample_ids != expected:
+            missing = sorted(expected - seen_sample_ids)
+            extra = sorted(seen_sample_ids - expected)
+            raise Stage1CacheError(
+                f"cache target IDs differ from the split; missing={missing[:3]} extra={extra[:3]}"
+            )
+    expected_counts = (
+        EXPECTED_STAGE1_FRAME_COUNTS if legacy_fixed_counts else (expected_frame_counts or {})
+    )
+    if expected_frame_counts is not None:
+        unknown = set(observed) - set(expected_frame_counts)
+        if unknown:
+            raise Stage1CacheError(f"cache contains unexpected keyframes: {sorted(unknown)}")
+    for sequence_key, expected in expected_counts.items():
         if observed[sequence_key] != expected:
             raise Stage1CacheError(
                 f"unexpected frame count for {sequence_key}: {observed[sequence_key]} != {expected}"
@@ -191,12 +266,18 @@ def build_stage1_gt_cache(
     *,
     split_path: Path,
     source_code_sha: str,
+    sample_ids: Sequence[str] | None = None,
+    dataset_ids: Sequence[str] | None = None,
+    keyframe_entries: Sequence[str] | None = None,
+    split_manifest_path: Path | None = None,
+    expected_frame_counts: Mapping[str, int] | None = None,
 ) -> Path:
-    """Build the complete inactive Stage1 mean train/validation GT cache.
+    """Build a derived corrected-video GT cache for one explicit selection.
 
-    Only the five explicitly named data-1/2/3 sequences are materialized.  The
-    index may inspect metadata for the rest of SCARED-C, but this function never
-    opens an archive or decodes a payload outside those five sequences.
+    The legacy call with no selector retains the original five-sequence cache
+    contract.  New callers pass exact sample IDs (or an explicit dataset or
+    keyframe selector); those paths are indexed without scanning any other
+    dataset directory.
     """
 
     root = Path(dataset_root)
@@ -204,17 +285,128 @@ def build_stage1_gt_cache(
     role_manifest = load_scared_c_role_manifest(split_path)
     if role_manifest.active:
         raise Stage1CacheError("Stage1 remediation cache requires an inactive split manifest")
+    legacy_selection = sample_ids is None and dataset_ids is None and keyframe_entries is None
+    if (
+        not legacy_selection
+        and sum(
+            value is not None and len(value) > 0
+            for value in (sample_ids, dataset_ids, keyframe_entries)
+        )
+        != 1
+    ):
+        raise Stage1CacheError(
+            "exactly one non-empty cache selector is required: sample_ids, dataset_ids, or keyframe_entries"
+        )
+    indexed_dataset_ids: tuple[str, ...] | None = None
+    indexed_keyframe_entries: Sequence[str] | None = keyframe_entries
+    if legacy_selection:
+        indexed_keyframe_entries = tuple(
+            f"dataset_{sequence.split('_', maxsplit=1)[0]}/"
+            f"keyframe_{sequence.split('_', maxsplit=1)[1]}"
+            for sequence in STAGE1_CACHE_SEQUENCES
+        )
+    if sample_ids is not None:
+        try:
+            sample_ids = normalize_sample_ids(tuple(sample_ids))
+        except Stage1FrameSplitError as error:
+            raise Stage1CacheError(str(error)) from error
+        sample_dataset_names = {
+            sample_id.split("/", maxsplit=3)[1]
+            for sample_id in sample_ids
+            if sample_id.count("/") >= 3
+        }
+        if not sample_dataset_names:
+            raise Stage1CacheError("sample_ids contains no valid dataset component")
+        if not sample_dataset_names <= set(STAGE1_TRAIN_DATASET_IDS):
+            raise Stage1CacheError("sample_ids contains dataset7/final or non-Stage1 content")
+        indexed_dataset_ids = tuple(sorted(sample_dataset_names))
+    elif dataset_ids is not None:
+        try:
+            dataset_ids = normalize_dataset_ids(tuple(dataset_ids))
+        except Stage1FrameSplitError as error:
+            raise Stage1CacheError(str(error)) from error
+        if not set(dataset_ids) <= set(STAGE1_TRAIN_DATASET_IDS):
+            raise Stage1CacheError("dataset_ids contains dataset7/final or non-Stage1 content")
+        indexed_dataset_ids = dataset_ids
+    elif keyframe_entries is not None:
+        try:
+            keyframe_entries = normalize_keyframe_entries(tuple(keyframe_entries))
+        except Stage1FrameSplitError as error:
+            raise Stage1CacheError(str(error)) from error
+        if not all(
+            entry.split("/", maxsplit=1)[0] in STAGE1_TRAIN_DATASET_IDS
+            for entry in keyframe_entries
+        ):
+            raise Stage1CacheError("keyframe_entries contains dataset7/final or non-Stage1 content")
+        indexed_keyframe_entries = keyframe_entries
     index = build_scared_c_index(
         root,
         mode=CORRECTED_VIDEO_MODE,
         manifest_path=split_path,
         strict=True,
         archive_validation="lazy",
+        dataset_ids=indexed_dataset_ids,
+        keyframe_entries=indexed_keyframe_entries,
     )
-    target_records = tuple(
-        record for record in index.records if record.sequence_key in STAGE1_CACHE_SEQUENCES
+    if legacy_selection:
+        target_records = tuple(
+            record for record in index.records if record.sequence_key in STAGE1_CACHE_SEQUENCES
+        )
+        _validate_target_records(target_records, legacy_fixed_counts=True)
+    else:
+        target_records = select_stage1_records(
+            index.records,
+            dataset_ids=dataset_ids,
+            keyframe_entries=keyframe_entries,
+            sample_ids=sample_ids,
+        )
+        _validate_target_records(
+            target_records,
+            expected_sample_ids=sample_ids,
+            expected_frame_counts=expected_frame_counts,
+        )
+
+    provenance_manifest = split_path if split_manifest_path is None else Path(split_manifest_path)
+    split_manifest_sha256 = (
+        _split_manifest_sha256(provenance_manifest)
+        if split_manifest_path is not None
+        else _file_sha256(provenance_manifest)
     )
-    _validate_target_records(target_records)
+    target_sample_ids = tuple(sorted(record.sample_id for record in target_records))
+    cache_manifest_path = output_root / "manifest.json"
+    if cache_manifest_path.exists():
+        try:
+            existing_payload = json.loads(cache_manifest_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as error:
+            raise Stage1CacheError(
+                f"refusing to overwrite unreadable cache manifest {cache_manifest_path}: {error}"
+            ) from error
+        existing_manifest = existing_payload if isinstance(existing_payload, dict) else {}
+        existing_entries = existing_manifest.get("entries")
+        existing_ids = (
+            tuple(
+                sorted(
+                    str(entry.get("sample_id"))
+                    for entry in existing_entries
+                    if isinstance(entry, dict)
+                )
+            )
+            if isinstance(existing_entries, list)
+            else ()
+        )
+        if (
+            existing_manifest.get("dataset_revision") == SCARED_C_UPSTREAM_REVISION
+            and _matches_split_manifest(
+                existing_manifest.get("split_manifest_sha256"),
+                split_manifest_sha256,
+                manifest_path=provenance_manifest if split_manifest_path is not None else None,
+            )
+            and existing_ids == target_sample_ids
+        ):
+            return cache_manifest_path
+        raise Stage1CacheError(
+            f"refusing to overwrite a different Stage1 GT cache: {cache_manifest_path}"
+        )
 
     grouped: dict[Path, list[ScaredCSampleRecord]] = defaultdict(list)
     for record in target_records:
@@ -268,9 +460,11 @@ def build_stage1_gt_cache(
                         f"unexpected disparity shape for {record.sample_id}: "
                         f"{geometry.disparity_left_rect.shape}"
                     )
-                relative_path = _cache_path(output_root, record.sequence_key, int(record.frame_id)).relative_to(
-                    output_root
-                ).as_posix()
+                relative_path = (
+                    _cache_path(output_root, record.sequence_key, int(record.frame_id))
+                    .relative_to(output_root)
+                    .as_posix()
+                )
                 _write_npz_atomic(
                     output_root / relative_path,
                     disparity=geometry.disparity_left_rect,
@@ -301,8 +495,31 @@ def build_stage1_gt_cache(
             )
 
     if len(entries) != len(target_records):
-        raise Stage1CacheError(f"cache entry count {len(entries)} != target count {len(target_records)}")
+        raise Stage1CacheError(
+            f"cache entry count {len(entries)} != target count {len(target_records)}"
+        )
     entries.sort(key=lambda entry: entry.sample_id)
+    observed_frame_counts: dict[str, int] = defaultdict(int)
+    for entry in entries:
+        observed_frame_counts[entry.sequence_key] += 1
+    if legacy_selection:
+        selection_payload: dict[str, object] = {
+            "kind": "keyframe_entries",
+            "keyframe_entries": [
+                f"dataset_{sequence.split('_', maxsplit=1)[0]}/"
+                f"keyframe_{sequence.split('_', maxsplit=1)[1]}"
+                for sequence in STAGE1_CACHE_SEQUENCES
+            ],
+        }
+    elif sample_ids is not None:
+        selection_payload = {"kind": "sample_ids", "sample_ids": list(sample_ids)}
+    elif dataset_ids is not None:
+        selection_payload = {"kind": "dataset_ids", "dataset_ids": list(dataset_ids)}
+    else:
+        selection_payload = {
+            "kind": "keyframe_entries",
+            "keyframe_entries": list(keyframe_entries or ()),
+        }
     manifest: dict[str, object] = {
         "schema_version": STAGE1_CACHE_SCHEMA,
         "dataset": "scared_c",
@@ -310,12 +527,20 @@ def build_stage1_gt_cache(
         "source_code_sha": source_code_sha,
         "split_name": STAGE1_CACHE_SPLIT_NAME,
         "split_manifest": str(split_path),
+        "split_manifest_sha256": split_manifest_sha256,
         "mode": CORRECTED_VIDEO_MODE,
-        "sequences": {
-            "MEAN_TRAIN": list(STAGE1_MEAN_TRAIN),
-            "MEAN_VALIDATION": list(STAGE1_MEAN_VALIDATION),
+        "selection": selection_payload,
+        "dataset_allowlist": list(STAGE1_TRAIN_DATASET_IDS),
+        "frame_counts": dict(sorted(observed_frame_counts.items())),
+        "entry_count": len(entries),
+        "dataset6_content_accessed": False,
+        "dataset7_content_accessed": False,
+        "provenance": {
+            "role_manifest": str(split_path),
+            "selection_manifest": str(provenance_manifest),
+            "selection_manifest_sha256": split_manifest_sha256,
+            "source_code_sha": source_code_sha,
         },
-        "frame_counts": dict(EXPECTED_STAGE1_FRAME_COUNTS),
         "gt_contract": {
             "disparity_convention": "x_left - x_right",
             "sign": "positive",
@@ -356,7 +581,14 @@ def _parse_entry(raw: Mapping[str, object]) -> Stage1CacheEntry:
 class Stage1GTCache:
     """Read-only access to a validated derived Stage1 disparity cache."""
 
-    def __init__(self, cache_root: str | Path) -> None:
+    def __init__(
+        self,
+        cache_root: str | Path,
+        *,
+        expected_sample_ids: Sequence[str] | None = None,
+        expected_split_manifest_sha256: str | None = None,
+        expected_split_manifest_path: str | Path | None = None,
+    ) -> None:
         self.root = Path(cache_root)
         try:
             payload = json.loads((self.root / "manifest.json").read_text(encoding="utf-8"))
@@ -364,23 +596,76 @@ class Stage1GTCache:
             raise Stage1CacheError(f"unable to read Stage1 GT cache manifest: {error}") from error
         if not isinstance(payload, dict):
             raise Stage1CacheError("Stage1 GT cache manifest must be an object")
-        if payload.get("schema_version") != STAGE1_CACHE_SCHEMA:
+        if payload.get("schema_version") not in {STAGE1_LEGACY_CACHE_SCHEMA, STAGE1_CACHE_SCHEMA}:
             raise Stage1CacheError("unsupported Stage1 GT cache schema")
         if payload.get("dataset_revision") != SCARED_C_UPSTREAM_REVISION:
             raise Stage1CacheError("Stage1 GT cache has the wrong SCARED-C revision")
         if payload.get("mode") != CORRECTED_VIDEO_MODE:
             raise Stage1CacheError("Stage1 GT cache is not corrected-video data")
+        raw_allowlist = payload.get("dataset_allowlist")
+        if raw_allowlist is not None:
+            if (
+                not isinstance(raw_allowlist, list)
+                or not all(isinstance(value, str) for value in raw_allowlist)
+                or set(raw_allowlist) != set(STAGE1_TRAIN_DATASET_IDS)
+            ):
+                raise Stage1CacheError("Stage1 GT cache dataset allowlist is not dataset_1..3")
+        raw_split_hash = payload.get("split_manifest_sha256")
+        expected_manifest_path = (
+            None if expected_split_manifest_path is None else Path(expected_split_manifest_path)
+        )
+        if expected_split_manifest_sha256 is not None and not _matches_split_manifest(
+            raw_split_hash,
+            expected_split_manifest_sha256,
+            manifest_path=expected_manifest_path,
+        ):
+            raise Stage1CacheError(
+                "Stage1 GT cache was built from a different frame split manifest"
+            )
         raw_entries = payload.get("entries")
         if not isinstance(raw_entries, list):
             raise Stage1CacheError("Stage1 GT cache manifest entries must be a list")
         entries = tuple(_parse_entry(item) for item in raw_entries if isinstance(item, dict))
         if len(entries) != len(raw_entries):
             raise Stage1CacheError("Stage1 GT cache contains a non-object entry")
+        try:
+            normalized_entry_ids = normalize_sample_ids(
+                tuple(entry.sample_id for entry in entries), name="cache sample_ids"
+            )
+        except Stage1FrameSplitError as error:
+            raise Stage1CacheError(str(error)) from error
+        if any(
+            sample_id.split("/", maxsplit=3)[1] not in STAGE1_TRAIN_DATASET_IDS
+            for sample_id in normalized_entry_ids
+        ):
+            raise Stage1CacheError("Stage1 GT cache contains a sample outside dataset_1..3")
         self.source_code_sha = str(payload.get("source_code_sha", ""))
         self.dataset_revision = str(payload["dataset_revision"])
         self._entries = {entry.sample_id: entry for entry in entries}
         if len(self._entries) != len(entries):
             raise Stage1CacheError("Stage1 GT cache contains duplicate sample IDs")
+        if any(
+            entry.dataset_id in {"dataset_6", "dataset_7"}
+            or "dataset_6" in entry.sample_id
+            or "dataset_7" in entry.sample_id
+            for entry in entries
+        ):
+            raise Stage1CacheError("Stage1 GT cache contains forbidden dataset6/dataset7 content")
+        if expected_sample_ids is not None:
+            expected = set(expected_sample_ids)
+            if set(self._entries) != expected:
+                missing = sorted(expected - set(self._entries))
+                extra = sorted(set(self._entries) - expected)
+                raise Stage1CacheError(
+                    f"Stage1 GT cache sample IDs differ from the split; "
+                    f"missing={missing[:3]} extra={extra[:3]}"
+                )
+        self.split_manifest_sha256 = str(
+            expected_split_manifest_sha256
+            if expected_split_manifest_sha256 is not None
+            else raw_split_hash or ""
+        )
+        self.selection = payload.get("selection", {})
 
     def __len__(self) -> int:
         return len(self._entries)
@@ -421,18 +706,80 @@ def stage1_cache_records(
     dataset_root: str | Path,
     *,
     split_path: Path,
+    sample_ids: Sequence[str] | None = None,
+    dataset_ids: Sequence[str] | None = None,
+    keyframe_entries: Sequence[str] | None = None,
 ) -> tuple[ScaredCSampleRecord, ...]:
-    """Return only the five explicitly allowed Stage1 cache records."""
+    """Return records for one explicit Stage1 cache selector."""
 
+    legacy_selection = sample_ids is None and dataset_ids is None and keyframe_entries is None
+    if (
+        not legacy_selection
+        and sum(
+            value is not None and len(value) > 0
+            for value in (sample_ids, dataset_ids, keyframe_entries)
+        )
+        != 1
+    ):
+        raise Stage1CacheError(
+            "exactly one non-empty cache selector is required: sample_ids, dataset_ids, or keyframe_entries"
+        )
+    if legacy_selection:
+        keyframe_entries = tuple(
+            f"dataset_{sequence.split('_', maxsplit=1)[0]}/"
+            f"keyframe_{sequence.split('_', maxsplit=1)[1]}"
+            for sequence in STAGE1_CACHE_SEQUENCES
+        )
+    indexed_dataset_ids: tuple[str, ...] | None = None
+    if sample_ids is not None:
+        try:
+            sample_ids = normalize_sample_ids(tuple(sample_ids))
+        except Stage1FrameSplitError as error:
+            raise Stage1CacheError(str(error)) from error
+        sample_dataset_ids = {sample_id.split("/", maxsplit=3)[1] for sample_id in sample_ids}
+        if not sample_dataset_ids <= set(STAGE1_TRAIN_DATASET_IDS):
+            raise Stage1CacheError("sample_ids contains dataset7/final or non-Stage1 content")
+        indexed_dataset_ids = tuple(sorted(sample_dataset_ids))
+    elif dataset_ids is not None:
+        try:
+            dataset_ids = normalize_dataset_ids(tuple(dataset_ids))
+        except Stage1FrameSplitError as error:
+            raise Stage1CacheError(str(error)) from error
+        if not set(dataset_ids) <= set(STAGE1_TRAIN_DATASET_IDS):
+            raise Stage1CacheError("dataset_ids contains dataset7/final or non-Stage1 content")
+        indexed_dataset_ids = dataset_ids
+    elif keyframe_entries is not None:
+        try:
+            keyframe_entries = normalize_keyframe_entries(tuple(keyframe_entries))
+        except Stage1FrameSplitError as error:
+            raise Stage1CacheError(str(error)) from error
+        if not all(
+            entry.split("/", maxsplit=1)[0] in STAGE1_TRAIN_DATASET_IDS
+            for entry in keyframe_entries
+        ):
+            raise Stage1CacheError("keyframe_entries contains dataset7/final or non-Stage1 content")
     index = build_scared_c_index(
         Path(dataset_root),
         mode=CORRECTED_VIDEO_MODE,
         manifest_path=split_path,
         strict=True,
         archive_validation="lazy",
+        dataset_ids=indexed_dataset_ids,
+        keyframe_entries=keyframe_entries,
     )
-    records = tuple(record for record in index.records if record.sequence_key in STAGE1_CACHE_SEQUENCES)
-    _validate_target_records(records)
+    if legacy_selection:
+        records = tuple(
+            record for record in index.records if record.sequence_key in STAGE1_CACHE_SEQUENCES
+        )
+        _validate_target_records(records, legacy_fixed_counts=True)
+    else:
+        records = select_stage1_records(
+            index.records,
+            dataset_ids=dataset_ids,
+            keyframe_entries=keyframe_entries,
+            sample_ids=sample_ids,
+        )
+        _validate_target_records(records, expected_sample_ids=sample_ids)
     return records
 
 

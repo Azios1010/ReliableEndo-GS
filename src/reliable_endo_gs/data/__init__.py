@@ -18,11 +18,6 @@ from reliable_endo_gs.data.index import (
 from reliable_endo_gs.data.loaders import DataDecodeError, load_scared_c_sample
 from reliable_endo_gs.data.paths import DATA_ROOT_ENV_VAR, resolve_data_root
 from reliable_endo_gs.data.registry import get_dataset_adapter, list_dataset_names
-from reliable_endo_gs.data.schema import DatasetConfig, hash_dataset_config, load_dataset_config
-from reliable_endo_gs.data.scared_contract import (
-    KeyframeValidationReport,
-    validate_keyframe_processed_root,
-)
 from reliable_endo_gs.data.scared_c import (
     CORRECTED_VIDEO_FRAME,
     CORRECTED_VIDEO_MODE,
@@ -30,17 +25,39 @@ from reliable_endo_gs.data.scared_c import (
     STATIC_MODE,
     FinalDatasetGuardError,
     LazyScaredCDataset,
-    ScaredCIndex as LazyScaredCIndex,
     ScaredCLazyDataset,
     ScaredCRoleManifest,
     ScaredCSample,
     ScaredCSampleRecord,
-    build_scared_c_index as build_scared_c_lazy_index,
     load_scared_c_role_manifest,
-    materialize_scared_c_sample,
     materialize_scared_c_rectified_rgb,
+    materialize_scared_c_sample,
     require_active_scared_c_role,
     resolve_scared_c_root,
+)
+from reliable_endo_gs.data.scared_c import (
+    ScaredCIndex as LazyScaredCIndex,
+)
+from reliable_endo_gs.data.scared_c import (
+    build_scared_c_index as build_scared_c_lazy_index,
+)
+from reliable_endo_gs.data.scared_c_stage1_split import (
+    STAGE1_FORBIDDEN_DATASET_IDS,
+    STAGE1_FULL_SPLIT_NAME,
+    STAGE1_TRAIN_DATASET_IDS,
+    Stage1FrameSplit,
+    Stage1FrameSplitError,
+    load_stage1_frame_split,
+    make_stage1_frame_split,
+    normalize_dataset_ids,
+    normalize_keyframe_entries,
+    normalize_sample_ids,
+    select_stage1_records,
+    write_stage1_frame_split,
+)
+from reliable_endo_gs.data.scared_contract import (
+    KeyframeValidationReport,
+    validate_keyframe_processed_root,
 )
 from reliable_endo_gs.data.scared_manifest import (
     SCARED_FOUR_KEYFRAME_SPLIT,
@@ -60,6 +77,14 @@ from reliable_endo_gs.data.scared_multi import (
     ScaredUpstreamWrapper,
     validate_stage1_sample,
 )
+from reliable_endo_gs.data.schema import DatasetConfig, hash_dataset_config, load_dataset_config
+from reliable_endo_gs.data.splits import (
+    SplitManifest,
+    hash_split_manifest,
+    load_split_manifest,
+    validate_grouped_membership,
+    validate_sequence_groups,
+)
 from reliable_endo_gs.data.stage2 import (
     DEFAULT_ZFAR,
     DEFAULT_ZNEAR,
@@ -76,13 +101,6 @@ from reliable_endo_gs.data.stage2 import (
     stage2_collate_fn,
     validate_stage2_sample,
 )
-from reliable_endo_gs.data.splits import (
-    SplitManifest,
-    hash_split_manifest,
-    load_split_manifest,
-    validate_grouped_membership,
-    validate_sequence_groups,
-)
 from reliable_endo_gs.data.validation import DatasetValidationReport
 
 __all__ = [
@@ -98,6 +116,8 @@ __all__ = [
     "LazyScaredCDataset",
     "LazyScaredCIndex",
     "ScaredCRecord",
+    "Stage1FrameSplit",
+    "Stage1FrameSplitError",
     "ScaredCLazyDataset",
     "ScaredCRoleManifest",
     "ScaredCSample",
@@ -107,6 +127,9 @@ __all__ = [
     "ScaredStage1Sample",
     "ScaredStage2Dataset",
     "ScaredStage2Sample",
+    "STAGE1_FORBIDDEN_DATASET_IDS",
+    "STAGE1_FULL_SPLIT_NAME",
+    "STAGE1_TRAIN_DATASET_IDS",
     "ScaredUpstreamWrapper",
     "SampleIndex",
     "StereoCalibration",
@@ -138,6 +161,7 @@ __all__ = [
     "list_dataset_names",
     "load_dataset_config",
     "load_scared_c_sample",
+    "load_stage1_frame_split",
     "load_scared_c_role_manifest",
     "load_scared_split_manifest",
     "load_split_manifest",
@@ -152,11 +176,17 @@ __all__ = [
     "resolve_scared_c_root",
     "materialize_scared_c_sample",
     "materialize_scared_c_rectified_rgb",
+    "make_stage1_frame_split",
+    "normalize_dataset_ids",
+    "normalize_keyframe_entries",
+    "normalize_sample_ids",
     "require_active_scared_c_role",
+    "select_stage1_records",
     "validate_grouped_membership",
     "validate_keyframe_processed_root",
     "validate_scared_split_manifest",
     "validate_sequence_groups",
     "validate_stage1_sample",
     "write_scared_split_manifest",
+    "write_stage1_frame_split",
 ]

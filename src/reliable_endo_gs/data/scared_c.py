@@ -180,6 +180,8 @@ class ScaredCIndex:
     issues: tuple[str, ...] = ()
     manifest: ScaredCRoleManifest | None = None
     archive_validation: Literal["eager", "lazy"] = "eager"
+    dataset_selection: tuple[str, ...] | None = None
+    keyframe_selection: tuple[str, ...] | None = None
 
     def __len__(self) -> int:
         return len(self.records)
@@ -395,6 +397,117 @@ def _sorted_keyframe_dirs(sequence_root: Path) -> tuple[Path, ...]:
     )
 
 
+def _normalise_dataset_selection(
+    dataset_ids: Sequence[str] | None,
+) -> tuple[str, ...] | None:
+    """Validate an optional dataset allowlist before touching the data root."""
+
+    if dataset_ids is None:
+        return None
+    if (
+        isinstance(dataset_ids, (str, bytes))
+        or not dataset_ids
+        or not all(isinstance(value, str) for value in dataset_ids)
+    ):
+        raise ScaredCIndexError("dataset_ids must be a non-empty sequence of strings")
+    normalized = tuple(value.strip() for value in dataset_ids)
+    if any(re.fullmatch(r"dataset_[1-9][0-9]*", value) is None for value in normalized):
+        raise ScaredCIndexError("dataset_ids contains an invalid dataset identifier")
+    if len(set(normalized)) != len(normalized):
+        raise ScaredCIndexError("dataset_ids contains duplicate dataset identifiers")
+    if FINAL_DATASET_ID in normalized:
+        raise FinalDatasetGuardError(
+            "dataset_6 is final-only and cannot be selected by an indexed training path"
+        )
+    return tuple(sorted(normalized, key=lambda value: (int(value.removeprefix("dataset_")), value)))
+
+
+def _normalise_keyframe_selection(
+    keyframe_entries: Sequence[str] | None,
+) -> tuple[str, ...] | None:
+    """Validate explicit ``dataset_N/keyframe_M`` paths without scanning roots."""
+
+    if keyframe_entries is None:
+        return None
+    if (
+        isinstance(keyframe_entries, (str, bytes))
+        or not keyframe_entries
+        or not all(isinstance(value, str) for value in keyframe_entries)
+    ):
+        raise ScaredCIndexError("keyframe_entries must be a non-empty sequence of strings")
+    normalized = tuple(value.strip().replace("\\", "/") for value in keyframe_entries)
+    pattern = r"^(dataset_[1-9][0-9]*)/(keyframe_[1-9][0-9]*)$"
+    if any(re.fullmatch(pattern, value) is None for value in normalized):
+        raise ScaredCIndexError("keyframe_entries must contain dataset_N/keyframe_M selectors")
+    if len(set(normalized)) != len(normalized):
+        raise ScaredCIndexError("keyframe_entries contains duplicate selectors")
+    if any(value.startswith(f"{FINAL_DATASET_ID}/") for value in normalized):
+        raise FinalDatasetGuardError(
+            "dataset_6 is final-only and cannot be selected by an indexed training path"
+        )
+    return tuple(
+        sorted(
+            normalized,
+            key=lambda value: tuple(int(part) for part in re.findall(r"[1-9][0-9]*", value)),
+        )
+    )
+
+
+def _selected_keyframes(
+    root: Path,
+    *,
+    dataset_ids: tuple[str, ...] | None,
+    keyframe_entries: tuple[str, ...] | None,
+) -> tuple[tuple[Path, Path], tuple[str, ...], tuple[str, ...]]:
+    """Return selected keyframe roots and missing-selection issues.
+
+    When either explicit selector is supplied, only the named dataset
+    directories are touched.  In particular, this function never calls
+    ``root.iterdir()`` for an allowlisted Stage1 selection.
+    """
+
+    if dataset_ids is not None and keyframe_entries is not None:
+        raise ScaredCIndexError("dataset_ids and keyframe_entries are mutually exclusive")
+    selected: list[tuple[Path, Path]] = []
+    issues: list[str] = []
+    scanned_dataset_ids: list[str] = []
+    if keyframe_entries is not None:
+        for entry in keyframe_entries:
+            dataset_name, keyframe_name = entry.split("/", maxsplit=1)
+            dataset_root = root / dataset_name
+            keyframe_root = dataset_root / keyframe_name
+            scanned_dataset_ids.append(dataset_name)
+            if not dataset_root.is_dir():
+                issues.append(f"{entry}: missing dataset directory")
+            elif not keyframe_root.is_dir():
+                issues.append(f"{entry}: missing keyframe directory")
+            else:
+                selected.append((dataset_root, keyframe_root))
+    elif dataset_ids is not None:
+        for dataset_name in dataset_ids:
+            dataset_root = root / dataset_name
+            scanned_dataset_ids.append(dataset_name)
+            if not dataset_root.is_dir():
+                issues.append(f"{dataset_name}: missing dataset directory")
+                continue
+            selected.extend(
+                (dataset_root, keyframe_root)
+                for keyframe_root in _sorted_keyframe_dirs(dataset_root)
+            )
+    else:
+        for dataset_root in _sorted_dataset_dirs(root):
+            scanned_dataset_ids.append(dataset_root.name)
+            selected.extend(
+                (dataset_root, keyframe_root)
+                for keyframe_root in _sorted_keyframe_dirs(dataset_root)
+            )
+    return (
+        tuple(selected),
+        tuple(sorted(set(scanned_dataset_ids))),
+        tuple(sorted(issues)),
+    )
+
+
 def _png_dimensions(path: Path) -> tuple[int, int]:
     """Read only the PNG signature/IHDR needed for lazy static indexing."""
 
@@ -442,76 +555,79 @@ def _record_role(
 def _static_records(
     root: Path,
     manifest: ScaredCRoleManifest | None,
+    *,
+    dataset_ids: tuple[str, ...] | None,
+    keyframe_entries: tuple[str, ...] | None,
 ) -> tuple[tuple[ScaredCSampleRecord, ...], tuple[str, ...]]:
     records: list[ScaredCSampleRecord] = []
-    issues: list[str] = []
-    for sequence_root in _sorted_dataset_dirs(root):
-        for keyframe_root in _sorted_keyframe_dirs(sequence_root):
-            files = {
-                "left": keyframe_root / "Left_Image.png",
-                "right": keyframe_root / "Right_Image.png",
-                "left_xyz": keyframe_root / "left_depth_map.tiff",
-                "right_xyz": keyframe_root / "right_depth_map.tiff",
-                "calibration": keyframe_root / "endoscope_calibration.yaml",
-            }
-            display_names = {
-                "left": "Left_Image.png",
-                "right": "Right_Image.png",
-                "left_xyz": "left_depth_map.tiff",
-                "right_xyz": "right_depth_map.tiff",
-                "calibration": "endoscope_calibration.yaml",
-            }
-            missing = tuple(
-                display_names[name] for name, path in files.items() if not path.is_file()
+    keyframes, _scanned_dataset_ids, selection_issues = _selected_keyframes(
+        root, dataset_ids=dataset_ids, keyframe_entries=keyframe_entries
+    )
+    issues: list[str] = list(selection_issues)
+    for sequence_root, keyframe_root in keyframes:
+        files = {
+            "left": keyframe_root / "Left_Image.png",
+            "right": keyframe_root / "Right_Image.png",
+            "left_xyz": keyframe_root / "left_depth_map.tiff",
+            "right_xyz": keyframe_root / "right_depth_map.tiff",
+            "calibration": keyframe_root / "endoscope_calibration.yaml",
+        }
+        display_names = {
+            "left": "Left_Image.png",
+            "right": "Right_Image.png",
+            "left_xyz": "left_depth_map.tiff",
+            "right_xyz": "right_depth_map.tiff",
+            "calibration": "endoscope_calibration.yaml",
+        }
+        missing = tuple(display_names[name] for name, path in files.items() if not path.is_file())
+        if missing:
+            issues.append(
+                f"{sequence_root.name}/{keyframe_root.name}: missing static asset(s): "
+                + ", ".join(missing)
             )
-            if missing:
-                issues.append(
-                    f"{sequence_root.name}/{keyframe_root.name}: missing static asset(s): "
-                    + ", ".join(missing)
-                )
-                continue
-            try:
-                left_size = _png_dimensions(files["left"])
-                right_size = _png_dimensions(files["right"])
-            except ScaredCIndexError as error:
-                issues.append(str(error))
-                continue
-            if left_size != right_size:
-                issues.append(
-                    f"{sequence_root.name}/{keyframe_root.name}: static left/right dimensions differ"
-                )
-                continue
-            role, final_role = _record_role(
-                manifest,
+            continue
+        try:
+            left_size = _png_dimensions(files["left"])
+            right_size = _png_dimensions(files["right"])
+        except ScaredCIndexError as error:
+            issues.append(str(error))
+            continue
+        if left_size != right_size:
+            issues.append(
+                f"{sequence_root.name}/{keyframe_root.name}: static left/right dimensions differ"
+            )
+            continue
+        role, final_role = _record_role(
+            manifest,
+            sequence_id=sequence_root.name,
+            keyframe_id=keyframe_root.name,
+            source_type=STATIC_KEYFRAME,
+        )
+        sample_id = f"{SCARED_C_DATASET_ID}/{sequence_root.name}/{keyframe_root.name}/reference"
+        records.append(
+            ScaredCSampleRecord(
+                dataset_id=SCARED_C_DATASET_ID,
                 sequence_id=sequence_root.name,
                 keyframe_id=keyframe_root.name,
+                frame_id="reference",
+                sample_id=sample_id,
                 source_type=STATIC_KEYFRAME,
+                mode=STATIC_MODE,
+                keyframe_root=keyframe_root,
+                role=role,
+                final_role=final_role,
+                endoscope_calibration_path=files["calibration"],
+                colmap_intrinsics_path=(
+                    keyframe_root / "intrinsics_colmap.yaml"
+                    if (keyframe_root / "intrinsics_colmap.yaml").is_file()
+                    else None
+                ),
+                left_static_path=files["left"],
+                right_static_path=files["right"],
+                left_static_xyz_path=files["left_xyz"],
+                right_static_xyz_path=files["right_xyz"],
             )
-            sample_id = f"{SCARED_C_DATASET_ID}/{sequence_root.name}/{keyframe_root.name}/reference"
-            records.append(
-                ScaredCSampleRecord(
-                    dataset_id=SCARED_C_DATASET_ID,
-                    sequence_id=sequence_root.name,
-                    keyframe_id=keyframe_root.name,
-                    frame_id="reference",
-                    sample_id=sample_id,
-                    source_type=STATIC_KEYFRAME,
-                    mode=STATIC_MODE,
-                    keyframe_root=keyframe_root,
-                    role=role,
-                    final_role=final_role,
-                    endoscope_calibration_path=files["calibration"],
-                    colmap_intrinsics_path=(
-                        keyframe_root / "intrinsics_colmap.yaml"
-                        if (keyframe_root / "intrinsics_colmap.yaml").is_file()
-                        else None
-                    ),
-                    left_static_path=files["left"],
-                    right_static_path=files["right"],
-                    left_static_xyz_path=files["left_xyz"],
-                    right_static_xyz_path=files["right_xyz"],
-                )
-            )
+        )
     return tuple(records), tuple(sorted(issues))
 
 
@@ -607,82 +723,86 @@ def _corrected_records(
     manifest: ScaredCRoleManifest | None,
     *,
     archive_validation: Literal["eager", "lazy"],
+    dataset_ids: tuple[str, ...] | None,
+    keyframe_entries: tuple[str, ...] | None,
 ) -> tuple[tuple[ScaredCSampleRecord, ...], tuple[str, ...]]:
     records: list[ScaredCSampleRecord] = []
-    issues: list[str] = []
-    for sequence_root in _sorted_dataset_dirs(root):
-        for keyframe_root in _sorted_keyframe_dirs(sequence_root):
-            assets, asset_issues = _corrected_assets(
-                sequence_root.name,
-                keyframe_root,
-                archive_validation=archive_validation,
-            )
-            if assets is None:
-                issues.extend(asset_issues)
+    keyframes, _scanned_dataset_ids, selection_issues = _selected_keyframes(
+        root, dataset_ids=dataset_ids, keyframe_entries=keyframe_entries
+    )
+    issues: list[str] = list(selection_issues)
+    for sequence_root, keyframe_root in keyframes:
+        assets, asset_issues = _corrected_assets(
+            sequence_root.name,
+            keyframe_root,
+            archive_validation=archive_validation,
+        )
+        if assets is None:
+            issues.extend(asset_issues)
+            continue
+        frame_log_ids = set(assets.frame_log.included_frames)
+        archive_members = {
+            "frame_data": assets.frame_data_members,
+            "rgb_frames": assets.rgb_frame_members,
+            "scene_points": assets.scene_point_members,
+        }
+        if assets.archive_members_verified:
+            try:
+                common_ids, identity_issues = validate_archive_frame_identity(
+                    frame_log_ids, archive_members
+                )
+            except StereoContractError as error:
+                issues.append(f"{sequence_root.name}/{keyframe_root.name}: {error}")
                 continue
-            frame_log_ids = set(assets.frame_log.included_frames)
-            archive_members = {
-                "frame_data": assets.frame_data_members,
-                "rgb_frames": assets.rgb_frame_members,
-                "scene_points": assets.scene_point_members,
-            }
-            if assets.archive_members_verified:
-                try:
-                    common_ids, identity_issues = validate_archive_frame_identity(
-                        frame_log_ids, archive_members
-                    )
-                except StereoContractError as error:
-                    issues.append(f"{sequence_root.name}/{keyframe_root.name}: {error}")
-                    continue
-            else:
-                common_ids, identity_issues = tuple(sorted(frame_log_ids)), ()
-            issues.extend(
-                f"{sequence_root.name}/{keyframe_root.name}: {issue}" for issue in identity_issues
+        else:
+            common_ids, identity_issues = tuple(sorted(frame_log_ids)), ()
+        issues.extend(
+            f"{sequence_root.name}/{keyframe_root.name}: {issue}" for issue in identity_issues
+        )
+        frame_data_map = archive_member_map(assets.frame_data_members)
+        rgb_map = archive_member_map(assets.rgb_frame_members)
+        scene_map = archive_member_map(assets.scene_point_members)
+        for frame_id in common_ids:
+            if frame_id > assets.video_frame_count:
+                issues.append(
+                    f"{sequence_root.name}/{keyframe_root.name}: frame {frame_id} "
+                    "exceeds video frame count"
+                )
+                continue
+            role, final_role = _record_role(
+                manifest,
+                sequence_id=sequence_root.name,
+                keyframe_id=keyframe_root.name,
+                source_type=CORRECTED_VIDEO_FRAME,
             )
-            frame_data_map = archive_member_map(assets.frame_data_members)
-            rgb_map = archive_member_map(assets.rgb_frame_members)
-            scene_map = archive_member_map(assets.scene_point_members)
-            for frame_id in common_ids:
-                if frame_id > assets.video_frame_count:
-                    issues.append(
-                        f"{sequence_root.name}/{keyframe_root.name}: frame {frame_id} "
-                        "exceeds video frame count"
-                    )
-                    continue
-                role, final_role = _record_role(
-                    manifest,
+            sample_id = (
+                f"{SCARED_C_DATASET_ID}/{sequence_root.name}/{keyframe_root.name}/{frame_id}"
+            )
+            records.append(
+                ScaredCSampleRecord(
+                    dataset_id=SCARED_C_DATASET_ID,
                     sequence_id=sequence_root.name,
                     keyframe_id=keyframe_root.name,
+                    frame_id=frame_id,
+                    sample_id=sample_id,
                     source_type=CORRECTED_VIDEO_FRAME,
+                    mode=CORRECTED_VIDEO_MODE,
+                    keyframe_root=keyframe_root,
+                    role=role,
+                    final_role=final_role,
+                    endoscope_calibration_path=assets.endoscope_calibration_path,
+                    colmap_intrinsics_path=assets.colmap_intrinsics_path,
+                    video_path=assets.video_path,
+                    frame_data_archive_path=assets.frame_data_archive_path,
+                    rgb_frames_archive_path=assets.rgb_frames_archive_path,
+                    scene_points_archive_path=assets.scene_points_archive_path,
+                    frame_data_member=frame_data_map[frame_id],
+                    rgb_frames_member=rgb_map[frame_id],
+                    scene_points_member=scene_map[frame_id],
+                    video_frame_count=assets.video_frame_count,
+                    archive_members_verified=assets.archive_members_verified,
                 )
-                sample_id = (
-                    f"{SCARED_C_DATASET_ID}/{sequence_root.name}/{keyframe_root.name}/{frame_id}"
-                )
-                records.append(
-                    ScaredCSampleRecord(
-                        dataset_id=SCARED_C_DATASET_ID,
-                        sequence_id=sequence_root.name,
-                        keyframe_id=keyframe_root.name,
-                        frame_id=frame_id,
-                        sample_id=sample_id,
-                        source_type=CORRECTED_VIDEO_FRAME,
-                        mode=CORRECTED_VIDEO_MODE,
-                        keyframe_root=keyframe_root,
-                        role=role,
-                        final_role=final_role,
-                        endoscope_calibration_path=assets.endoscope_calibration_path,
-                        colmap_intrinsics_path=assets.colmap_intrinsics_path,
-                        video_path=assets.video_path,
-                        frame_data_archive_path=assets.frame_data_archive_path,
-                        rgb_frames_archive_path=assets.rgb_frames_archive_path,
-                        scene_points_archive_path=assets.scene_points_archive_path,
-                        frame_data_member=frame_data_map[frame_id],
-                        rgb_frames_member=rgb_map[frame_id],
-                        scene_points_member=scene_map[frame_id],
-                        video_frame_count=assets.video_frame_count,
-                        archive_members_verified=assets.archive_members_verified,
-                    )
-                )
+            )
     records.sort(
         key=lambda record: (
             record.sequence_id.casefold(),
@@ -700,6 +820,8 @@ def build_scared_c_index(
     manifest_path: Path | None = None,
     strict: bool = True,
     archive_validation: Literal["eager", "lazy"] = "eager",
+    dataset_ids: Sequence[str] | None = None,
+    keyframe_entries: Sequence[str] | None = None,
 ) -> ScaredCIndex:
     """Build a deterministic static or corrected-video index.
 
@@ -708,6 +830,10 @@ def build_scared_c_index(
     does not decode an image, XYZ TIFF, or archive payload.
     """
 
+    normalized_dataset_ids = _normalise_dataset_selection(dataset_ids)
+    normalized_keyframe_entries = _normalise_keyframe_selection(keyframe_entries)
+    if normalized_dataset_ids is not None and normalized_keyframe_entries is not None:
+        raise ScaredCIndexError("dataset_ids and keyframe_entries are mutually exclusive")
     dataset_root = Path(root)
     if not dataset_root.is_dir():
         raise ScaredCIndexError(f"SCARED-C root is not a directory: {dataset_root}")
@@ -717,14 +843,30 @@ def build_scared_c_index(
         raise ValueError(f"unsupported archive_validation: {archive_validation!r}")
     manifest = load_scared_c_role_manifest(manifest_path)
     if mode == STATIC_MODE:
-        records, issues = _static_records(dataset_root, manifest)
+        records, issues = _static_records(
+            dataset_root,
+            manifest,
+            dataset_ids=normalized_dataset_ids,
+            keyframe_entries=normalized_keyframe_entries,
+        )
     else:
         records, issues = _corrected_records(
             dataset_root,
             manifest,
             archive_validation=archive_validation,
+            dataset_ids=normalized_dataset_ids,
+            keyframe_entries=normalized_keyframe_entries,
         )
-    index = ScaredCIndex(dataset_root, mode, records, issues, manifest, archive_validation)
+    index = ScaredCIndex(
+        dataset_root,
+        mode,
+        records,
+        issues,
+        manifest,
+        archive_validation,
+        normalized_dataset_ids,
+        normalized_keyframe_entries,
+    )
     if strict and issues:
         raise ScaredCIndexError("; ".join(issues))
     if strict and not records:
@@ -815,11 +957,7 @@ def materialize_scared_c_rectified_rgb(
         )
     if record.mode != CORRECTED_VIDEO_MODE:
         raise ScaredCError("rectified RGB-only materialization requires corrected-video records")
-    if (
-        record.video_path is None
-        or not isinstance(record.frame_id, int)
-        or record.frame_id < 1
-    ):
+    if record.video_path is None or not isinstance(record.frame_id, int) or record.frame_id < 1:
         raise ScaredCError("corrected-video record has incomplete RGB pointers")
 
     cache = RectificationCache() if rectification_cache is None else rectification_cache
@@ -843,7 +981,9 @@ def materialize_scared_c_rectified_rgb(
         raise ScaredCError("rectification Q[3, 2] is zero; cannot construct disp_const")
     disp_const = float(rectification.Q[2, 3] / q32)
     if not np.isfinite(disp_const) or disp_const <= 0:
-        raise ScaredCError(f"rectification disp_const must be positive and finite; got {disp_const}")
+        raise ScaredCError(
+            f"rectification disp_const must be positive and finite; got {disp_const}"
+        )
     return ScaredCSample(
         {
             "dataset_id": record.dataset_id,
@@ -984,6 +1124,8 @@ class ScaredCLazyDataset(Sequence[ScaredCSample]):
         allow_final_content: bool = False,
         strict: bool = True,
         archive_validation: Literal["eager", "lazy"] = "eager",
+        dataset_ids: Sequence[str] | None = None,
+        keyframe_entries: Sequence[str] | None = None,
     ) -> None:
         self.root = resolve_scared_c_root(root, global_root=global_root, config_root=config_root)
         self.mode = mode
@@ -994,6 +1136,8 @@ class ScaredCLazyDataset(Sequence[ScaredCSample]):
             manifest_path=manifest_path,
             strict=strict,
             archive_validation=archive_validation,
+            dataset_ids=dataset_ids,
+            keyframe_entries=keyframe_entries,
         )
         self._rectification_cache = RectificationCache()
         self._video_readers: dict[Path, StackedStereoVideo] = {}

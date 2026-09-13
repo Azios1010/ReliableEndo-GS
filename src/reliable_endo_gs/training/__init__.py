@@ -17,6 +17,21 @@ from reliable_endo_gs.training.phase1 import (
     load_phase1_checkpoint,
     save_phase1_checkpoint,
 )
+from reliable_endo_gs.training.stage1_scared_c import (
+    Stage1ScaredCCachedDataset,
+    Stage1ScaredCConfig,
+    Stage1ScaredCConfigError,
+    Stage1SmokeResult,
+    Stage1TrainingResult,
+    benchmark_stage1_cache_data,
+    build_stage1_scratch_model,
+    load_stage1_scared_c_config,
+    prepare_stage1_full_data,
+    prepare_stage1_full_split,
+    run_stage1_scratch_smoke,
+    run_stage1_scratch_training,
+    stage1_collate,
+)
 from reliable_endo_gs.training.uncertainty import (
     CheckpointMetadata,
     TrainingStepResult,
@@ -24,17 +39,6 @@ from reliable_endo_gs.training.uncertainty import (
     load_uncertainty_checkpoint,
     save_uncertainty_checkpoint,
     train_uncertainty_step,
-)
-from reliable_endo_gs.training.stage1_scared_c import (
-    Stage1ScaredCConfig,
-    Stage1ScaredCConfigError,
-    Stage1ScaredCCachedDataset,
-    Stage1SmokeResult,
-    benchmark_stage1_cache_data,
-    build_stage1_scratch_model,
-    load_stage1_scared_c_config,
-    run_stage1_scratch_smoke,
-    stage1_collate,
 )
 
 __all__ = [
@@ -61,9 +65,13 @@ __all__ = [
     "Stage1ScaredCConfigError",
     "Stage1ScaredCCachedDataset",
     "Stage1SmokeResult",
+    "Stage1TrainingResult",
     "benchmark_stage1_cache_data",
     "build_stage1_scratch_model",
     "load_stage1_scared_c_config",
+    "prepare_stage1_full_data",
+    "prepare_stage1_full_split",
     "run_stage1_scratch_smoke",
+    "run_stage1_scratch_training",
     "stage1_collate",
 ]
