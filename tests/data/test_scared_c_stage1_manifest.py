@@ -1,8 +1,8 @@
 """Focused inactive Stage1 split-role and cache-guard checks."""
 
 import json
+import os
 from pathlib import Path
-
 
 MANIFEST = Path("splits/scared_c/stage1_mean_v1.json")
 
@@ -24,9 +24,10 @@ def test_stage1_mean_roles_are_sequence_disjoint_and_inactive() -> None:
 
 
 def test_stage1_cache_manifest_is_final_and_dataset6_free_when_present() -> None:
-    cache_manifest = Path(
-        r"E:\runtime-tmp\reliable-endo-gs\scared-c-stage1-cache\manifest.json"
-    )
+    data_root = os.environ.get("RELIABLE_ENDO_DATA_ROOT")
+    if not data_root:
+        return
+    cache_manifest = Path(data_root) / "scared_c/.cache/stage1_scared_c_mean_v1/manifest.json"
     if not cache_manifest.is_file():
         return
     payload = json.loads(cache_manifest.read_text(encoding="utf-8"))

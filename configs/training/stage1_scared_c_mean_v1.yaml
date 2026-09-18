@@ -2,9 +2,9 @@ schema_version: 1
 name: stage1-scared-c-mean-v1
 dataset: scared_c
 mode: corrected_video
-data_root: ${RELIABLE_ENDO_STAGE1_DATA_ROOT:-data}
+data_root: ${RELIABLE_ENDO_DATA_ROOT}
 split_manifest: splits/scared_c/stage1_mean_v1.json
-cache_root: ${RELIABLE_ENDO_STAGE1_CACHE_ROOT:-E:/runtime-tmp/reliable-endo-gs/scared-c-stage1-cache}
+cache_root: ${RELIABLE_ENDO_DATA_ROOT}/scared_c/.cache/stage1_scared_c_mean_v1
 output_dir: outputs/stage1_scared_c
 
 # This protocol file remains inactive until the separate full-training task.

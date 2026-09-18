@@ -33,7 +33,7 @@ def main() -> int:
     )
     parser.add_argument(
         "--artifact-root",
-        default=r"E:\artifacts\reliable-endo-gs\stage1-scared-c-full-v1",
+        default="outputs/stage1_scared_c_full_v1",
     )
     parser.add_argument(
         "--resume-ckpt",

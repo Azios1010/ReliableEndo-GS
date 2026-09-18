@@ -65,9 +65,9 @@ from reliable_endo_gs.data.scared_c_stereo import RectificationCache, StackedSte
 REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 UPSTREAM_ROOT = REPOSITORY_ROOT / "third_party" / "endo_e2e_gs"
 DEFAULT_CONFIG_PATH = REPOSITORY_ROOT / "configs" / "training" / "stage1_scared_c_mean_v1.yaml"
-DEFAULT_CACHE_ROOT = Path(r"E:\runtime-tmp\reliable-endo-gs\scared-c-stage1-cache")
-DEFAULT_FULL_FRAME_SPLIT_PATH = Path(
-    r"E:\runtime-tmp\reliable-endo-gs\stage1-scared-c-full-v1\split_manifest.json"
+DEFAULT_CACHE_ROOT = REPOSITORY_ROOT / "outputs" / "stage1_scared_c_cache"
+DEFAULT_FULL_FRAME_SPLIT_PATH = (
+    REPOSITORY_ROOT / "outputs" / "stage1_scared_c_full_v1" / "preparation" / "split_manifest.json"
 )
 STAGE1_VALIDATION_STEPS = (
     1000,
@@ -705,6 +705,13 @@ class Stage1ScaredCCachedDataset(Dataset[dict[str, object]]):
             "disparity": torch.from_numpy(np.ascontiguousarray(clean_disparity[None])),
             "mask": torch.from_numpy(np.ascontiguousarray(valid_mask[None])),
             "disp_const": torch.tensor(disp_const, dtype=torch.float32),
+            # Retain rectified camera terms for the Stage-2 adapter. Stage-1
+            # collation intentionally continues to consume only stereo terms.
+            "intr": torch.from_numpy(np.ascontiguousarray(rgb["P1"][:, :3], dtype=np.float32)),
+            "right_intr": torch.from_numpy(
+                np.ascontiguousarray(rgb["P2"][:, :3], dtype=np.float32)
+            ),
+            "Q": torch.from_numpy(np.ascontiguousarray(rgb["Q"], dtype=np.float32)),
             "sample_id": record.sample_id,
         }
 

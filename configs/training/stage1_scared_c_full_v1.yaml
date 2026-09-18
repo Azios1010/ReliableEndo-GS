@@ -6,13 +6,13 @@ training_mode: full_data
 gt_quality_policy: exclude_unusable
 dataset: scared_c
 mode: corrected_video
-data_root: ${RELIABLE_ENDO_STAGE1_DATA_ROOT:-data}
+data_root: ${RELIABLE_ENDO_DATA_ROOT}
 
 # This inactive role manifest remains the dataset-6 guard.  The actual
 # train/validation boundary is the generated frame manifest below.
 split_manifest: splits/scared_c/stage1_mean_v1.json
-frame_split_manifest: ${RELIABLE_ENDO_STAGE1_FRAME_SPLIT_ROOT:-E:/runtime-tmp/reliable-endo-gs/stage1-scared-c-full-v1}/split_manifest.json
-cache_root: ${RELIABLE_ENDO_STAGE1_FULL_CACHE_ROOT:-E:/runtime-tmp/reliable-endo-gs/scared-c-stage1-full-v1}
+frame_split_manifest: ${RELIABLE_ENDO_STAGE1_FRAME_SPLIT_ROOT}/split_manifest.json
+cache_root: ${RELIABLE_ENDO_DATA_ROOT}/scared_c/.cache/stage1_scared_c_full_v1_20260915
 output_dir: outputs/stage1_scared_c_full
 
 # Explicitly all corrected-video records discoverable under datasets 1--3.

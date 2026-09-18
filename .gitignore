@@ -30,6 +30,9 @@ data/*
 *.pth
 *.ckpt
 
+# Local transfer report; it can enumerate private dataset-copy activity.
+migration_full.log
+
 # Pinned upstream source stays clean; generated baseline material is external.
 third_party/endo_e2e_gs/experiments/
 third_party/endo_e2e_gs/test_*_out/
