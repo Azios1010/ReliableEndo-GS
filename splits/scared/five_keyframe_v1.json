@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "dataset": "scared",
+  "dataset_version": "five_keyframe_expansion_v1",
+  "split_name": "controlled_five_keyframe_v1",
+  "train": [
+    "dataset_1/keyframe_1",
+    "dataset_2/keyframe_1",
+    "dataset_3/keyframe_1"
+  ],
+  "validation": [
+    "dataset_7/keyframe_2",
+    "dataset_9/keyframe_3"
+  ],
+  "test": [],
+  "notes": "Luna controlled five-keyframe split: train on dataset_1/keyframe_1, dataset_2/keyframe_1, dataset_3/keyframe_1; validation on dataset_7/keyframe_2, dataset_9/keyframe_3. Complete keyframe-level and case-level isolation."
+}

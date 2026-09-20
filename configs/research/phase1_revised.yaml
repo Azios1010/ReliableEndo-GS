@@ -1,0 +1,219 @@
+schema_version: phase1_uncertainty_geometry_preregistration.v1
+status: preregistered_definition_only
+implementation_authorized: false
+training_authorized: false
+
+research_question: >-
+  Can a stereo-to-Gaussian reconstruction system represent where its geometry
+  is unreliable in a way that remains meaningful after Gaussian rendering and
+  across views?
+
+core_hypothesis: >-
+  Stereo uncertainty, geometry uncertainty, and reconstruction reliability are
+  distinct quantities; analytic propagation from disparity uncertainty into 3D
+  center uncertainty may be more predictive of reconstruction failure than raw
+  disparity uncertainty alone.
+
+scope:
+  baseline: deterministic_endoscopic_stage2_control
+  phase_name: ProbStereo-EndoGS
+  riskroute: parked
+  excluded:
+    - repair_actions
+    - oracle_routing_labels
+    - router_training
+    - budget_allocator
+    - Sigma_eff_as_final_claim
+
+provenance:
+  baseline_checkpoint_sha256: 32D42DE10A4C683C31FB4B3E0DE831F900E11197CDF1769B18CF3BBAFA5EE16F
+  baseline_step: 3000
+  stage1_checkpoint_sha256: 202ECC041B61B720408E0548319A1F9385C07DB784B824751482C615A0F46964
+  reliable_endo_gs_sha: a2cd8a71aa6f4e8f9962bbea64149a72a5de0281
+  endo_e2e_gs_sha: 186fa2b4a2159b28393492f6df1aa444b54391a8
+  development_manifest_sha256: 67C4B16BDAEC11B653A5AD757897F4699D37F8C74F4B320E084E5A5492665786
+  development_split_sha256: A03495E8C345C3396463D6E7F9A85F625699A3504804B71075929E67B2605590
+  gate0_protocol_sha256: DAE773A0747F806D43D1C5B1BE147C69308B4D1CE4463FE4721F0C3EAA411315
+
+seeds:
+  deterministic_primary: 1314
+  learned_component_replication: [1314, 2026, 2718]
+  selection_rule: report_all_seeds; never_select_a_favorable_seed
+
+data_policy:
+  development_train:
+    - dataset_1/keyframe_1
+    - dataset_2/keyframe_1
+    - dataset_3/keyframe_1
+  development_calibration_and_selection:
+    - dataset_7/keyframe_2
+    - dataset_4/keyframe_4
+  final_untouched:
+    - dataset_5/keyframe_1
+    - dataset_8/keyframe_2
+  excluded:
+    dataset_9/keyframe_3: zero_valid_disparity_frames_in_existing_integrity_audit
+  split_rule: complete_sequence_and_keyframe_groups; no_frame_random_split
+  final_manifest_requirement: >-
+    Create and hash a new immutable manifest containing the two final sequences
+    before any Phase-I implementation or calibration. The current v3 validation
+    cases are development holdouts, not pristine final tests.
+  test_tuning_forbidden: true
+
+uncertainty_sources:
+  - name: iteration_update_magnitude
+    formula: abs(d_K - d_(K-1))
+    units: disparity_pixels
+    inference_available: true
+    gt_required: false
+    cost: one_additional_disparity_iteration_comparison
+  - name: iteration_disagreement
+    formula: std_over_valid_iterations(d_k)
+    units: disparity_pixels
+    inference_available: true
+    gt_required: false
+    cost: retain_and_reduce_K_disparity_predictions
+  - name: left_right_consistency
+    formula: abs(d_left - warp(d_right, d_left))
+    units: disparity_pixels
+    inference_available: conditional_on_right_prediction
+    gt_required: false
+    cost: second_view_inference_and_warp
+  - name: photometric_residual
+    formula: mean_channel_abs(I_left - warp(I_right, d_left))
+    units: normalized_rgb
+    inference_available: true
+    gt_required: false
+    cost: image_warp_and_residual
+  - name: correlation_entropy
+    formula: entropy(normalized_correlation_distribution)
+    units: nats
+    inference_available: only_if_exact_upstream_tensor_is_exposed
+    gt_required: false
+    cost: retain_correlation_distribution
+    inclusion_rule: do_not_add_if_tensor_contract_is_unverified
+
+calibration:
+  evaluation_unit: sequence_then_frame_then_region
+  primary: risk_coverage_curve
+  secondary:
+    - spearman_rank_correlation
+    - high_error_auroc
+    - high_error_auprc
+    - quantile_reliability_curve
+  high_error_event: >-
+    absolute error above the 90th percentile of the development calibration
+    split, frozen before final evaluation
+  ece: only_if_a_probability_or_predictive_distribution_is_declared
+  nll: only_if_a_predictive_distribution_is_explicitly_defined
+  test_calibration_tuning: false
+
+geometry_uncertainty:
+  depth: D = fx * B / d
+  ray: r = K_inverse * [u, v, 1]^T
+  center: mu = D * r
+  depth_std: sigma_D = abs(fx * B / d^2) * sigma_d
+  jacobian: J_d = -(fx * B / d^2) * r
+  center_covariance: Sigma_geo = J_d * sigma_d^2 * J_d_transpose
+  valid_domain: positive_finite_disparity_only
+  evaluation_targets:
+    - disparity_error
+    - depth_error
+    - 3d_center_error
+    - same_view_render_error
+    - cross_view_render_error
+  comparison_quantities:
+    - sigma_d
+    - sigma_D
+    - trace_Sigma_geo
+    - largest_eigenvalue_Sigma_geo
+
+probabilistic_gaussian:
+  surface_covariance: Sigma_surf = R(q) * diag(s^2) * R(q)_transpose
+  center_covariance: Sigma_geo
+  exploratory_combination: Sigma_eff = Sigma_surf + Sigma_geo
+  combination_gate: test_before_any_renderer_claim
+  opacity_candidates:
+    - covariance_enlargement_only
+    - covariance_enlargement_plus_determinant_ratio_correction
+    - alternative_mass_preserving_rule_if_derived_and_justified
+  determinant_ratio_candidate: sqrt(det(Sigma_surf) / det(Sigma_eff))
+  selection_rule: do_not_select_candidate_before_gate_I_C
+  blur_test_required: true
+
+cross_view:
+  role: independent_reliability_evidence_initially
+  training_supervision: disabled_until_gate_I_D
+  compare_against:
+    - same_view_residual
+    - sigma_d
+    - sigma_D
+    - trace_Sigma_geo
+  gate_rule: >-
+    pass only when cross-view evidence adds reproducible reliability information
+    beyond same-view evidence, with sequence-cluster bootstrap support and no
+    final-sequence reversal
+
+ablation_ladder:
+  P0: deterministic_frozen_baseline
+  P1: uncertainty_proxy_measurement_no_render_change
+  P2: uncertainty_calibration
+  P3: analytic_Sigma_geo_propagation_no_renderer_change
+  P4: uncertainty_aware_gaussian_representation
+  P5: opacity_or_mass_preservation_candidate_comparison
+  P6: cross_view_supervision_only_if_gate_I_D_passes
+
+gates:
+  I-A_uncertainty_signal:
+    pass_if: >-
+      an inference-available signal consistently ranks held-out geometry error
+      better than chance and better than trivial baseline signals on development
+      sequences, with sequence-aware uncertainty intervals
+  I-B_geometry_propagation:
+    pass_if: >-
+      Sigma_geo quantities provide geometry-space reliability information beyond
+      raw sigma_d on development evaluation without a final-sequence lookup
+  I-C_probabilistic_gaussian:
+    pass_if: >-
+      uncertainty-aware representation improves at least one reliability or
+      reconstruction criterion without unacceptable blur or geometry degradation
+  I-D_cross_view:
+    pass_if: >-
+      cross-view evidence adds reproducible information beyond same-view metrics;
+      otherwise cross-view remains evaluation-only
+  failure_policy: stop_failed_branch_and_record_negative_result
+
+metrics:
+  stereo: [epe, bad_pixel_1px, bad_pixel_3px]
+  geometry: [depth_mae, depth_rmse, center_3d_error]
+  reconstruction: [rgb_l1, ssim, psnr_audit_only]
+  reliability: [spearman, risk_coverage, high_error_auroc, high_error_auprc]
+  conditional: [proper_nll_only_for_explicit_distribution]
+  compute: [latency, peak_vram, additional_parameters]
+  aggregation: sequence_macro_then_frame_summary_then_region_summary
+
+checkpoint_selection:
+  proxy_and_analytic_stages: no_trainable_checkpoint
+  learned_stages: >-
+    select only on development calibration/selection sequences using the
+    preregistered proper scoring or calibration criterion for that representation;
+    never select on final untouched sequences
+  ties: choose_earlier_step_then_lower_compute
+
+compute_budget:
+  proxy_and_analytic_gate: max_2_gpu_hours_total
+  learned_variant: max_3_seeds_and_10000_updates_per_variant
+  renderer_variant: only_after_gate_I_B
+  routing_budget: none
+
+research_claim_boundary:
+  intended_claim: >-
+    Stereo uncertainty, geometry uncertainty, and reconstruction reliability are
+    distinct quantities; this phase tests how disparity uncertainty propagates
+    into 3D Gaussian geometry and whether that propagated uncertainty predicts
+    reconstruction failure.
+  prohibited_claims:
+    - universal_scared_generalization
+    - clinical_reliability
+    - guaranteed_cross_view_compensation_exposure
+    - justified_RiskRoute_router

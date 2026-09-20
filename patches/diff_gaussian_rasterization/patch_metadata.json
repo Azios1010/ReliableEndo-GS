@@ -1,0 +1,14 @@
+{
+  "patch_id": "0001-add-standard-integer-headers",
+  "classification": "BUILD_API_COMPATIBILITY_ONLY",
+  "target_repository": "https://github.com/graphdeco-inria/diff-gaussian-rasterization",
+  "target_commit": "59f5f77e3ddbac3ed9db93ec2cfe99ed6c5d121d",
+  "target_files": [
+    "cuda_rasterizer/rasterizer_impl.h"
+  ],
+  "preserved_signatures": [
+    "GaussianRasterizer.forward(...) -> (rendered_image, radii)"
+  ],
+  "scientific_status": "unchanged_science",
+  "runtime_equivalence_requirement": "gpu_smoke_required"
+}

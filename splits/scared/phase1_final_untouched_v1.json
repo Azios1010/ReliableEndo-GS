@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "dataset": "scared",
+  "dataset_version": "phase1_final_untouched_v1",
+  "split_name": "phase1_final_untouched_v1",
+  "train": [],
+  "validation": [],
+  "test": [
+    "dataset_5/keyframe_1",
+    "dataset_8/keyframe_2"
+  ],
+  "notes": "Untouched Phase-I final evaluation sequence split. The canonical loader uses phase=all, skip_every=2, deterministic sequence/frame order, no shuffle, and no augmentation. Exact selected sample identities are frozen in the external manifest scared_phase1_final_untouched_v1.json."
+}

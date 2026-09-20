@@ -1,0 +1,31 @@
+schema_version: stage2_scared_c_camera_local.v1
+protocol_status: camera_local_same_view_control
+
+steps: 10000
+batch_size: 1
+seed: 1314
+learning_rate: 0.0002
+weight_decay: 0.00001
+gradient_clip: 1.0
+validation_interval: 1000
+
+stage1:
+  config: configs/training/stage1_scared_c_full_v1.yaml
+  artifact_env: RELIABLE_ENDO_STAGE1_ARTIFACT
+  freeze_file: stage1_freeze.json
+  checkpoint: checkpoints/ReliableEndoGS_stage1_scared_c_v1_best_step060000.pth
+  quality_file: gt_quality_manifest.json
+  required_step: 60000
+
+data:
+  root_env: RELIABLE_ENDO_DATA_ROOT
+  frame_split_root_env: RELIABLE_ENDO_STAGE1_FRAME_SPLIT_ROOT
+
+camera:
+  extrinsics: identity_camera_local
+  pose_status: unresolved_not_consumed
+  evaluation_scope: same_view_only
+
+checkpointing:
+  interval: 1000
+  selection_metric: validation_total_loss

@@ -1,0 +1,67 @@
+schema_version: phase1_p1_proxy.v1
+protocol_status: development_only_measurement
+training_authorized: false
+calibration_authorized: false
+final_evaluation_authorized: false
+
+identity:
+  source_sha_env: RELIABLE_ENDO_SOURCE_SHA
+  upstream_sha: 186fa2b4a2159b28393492f6df1aa444b54391a8
+  phase1_protocol_sha256: E4FCAF8A15F0DBA00294DE02AAA74ED12BEC095AA797D97022079C216D663032
+  development_manifest_sha256: 67C4B16BDAEC11B653A5AD757897F4699D37F8C74F4B320E084E5A5492665786
+  development_split_sha256: A03495E8C345C3396463D6E7F9A85F625699A3504804B71075929E67B2605590
+  development_config_sha256: 933E9A2777B9E0080CC00ACAC3E476DA2B8EA2F1142CC036E671195E24940A28
+  final_manifest_sha256: D9EA9A82439BAA3B52EEB922AC4A30F5BC3305C3A84C09CA080FF33CADCC3D28
+
+baseline:
+  checkpoint_env: RELIABLE_ENDO_STAGE2_BASELINE
+  step: 3000
+  sha256: 32D42DE10A4C683C31FB4B3E0DE831F900E11197CDF1769B18CF3BBAFA5EE16F
+
+data:
+  root_env: RELIABLE_ENDO_DATA_ROOT
+  manifest_env: RELIABLE_ENDO_MANIFEST
+  split: splits/scared/five_keyframe_v3.json
+  config: configs/data/scared_five_keyframe_v3.yaml
+  train_sequences:
+    - dataset_1/keyframe_1
+    - dataset_2/keyframe_1
+    - dataset_3/keyframe_1
+  development_holdouts:
+    - dataset_7/keyframe_2
+    - dataset_4/keyframe_4
+  forbidden_sequences:
+    - dataset_5/keyframe_1
+    - dataset_8/keyframe_2
+  train_phase: train
+  validation_phase: val
+  test_every: 8
+  shuffle: false
+  augmentation: false
+
+stereo:
+  validation_iterations: 3
+  precision: FP32
+  disparity_convention: positive_left_reference_pixels
+
+proxies:
+  update_magnitude: true
+  iteration_disagreement: true
+  iteration_disagreement_unbiased: false
+  left_right_consistency: true
+  photometric_residual: true
+  correlation_entropy: false
+  image_space: normalized_minus_one_to_one
+
+evaluation:
+  oracle_target: absolute_disparity_error
+  coverage_levels: [0.1, 0.25, 0.5, 0.75, 1.0]
+  high_error_threshold: null
+  region_grid: [4, 4]
+  sequence_macro: true
+  cluster_bootstrap_supported: true
+
+output:
+  root_env: RELIABLE_ENDO_P1_OUTPUT
+  save_sample_maps: true
+  scientific_wandb_run: false

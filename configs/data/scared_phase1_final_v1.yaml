@@ -1,0 +1,18 @@
+name: scared
+root: scared
+version: phase1_final_untouched_v1
+split_manifest: splits/scared/phase1_final_untouched_v1.json
+options:
+  split_name: phase1_final_untouched_v1
+  protocol_role: FINAL_UNTOUCHED_PHASE1_EVALUATION
+  external_manifest: scared_phase1_final_untouched_v1.json
+  external_manifest_sha256: D9EA9A82439BAA3B52EEB922AC4A30F5BC3305C3A84C09CA080FF33CADCC3D28
+  phase: all
+  shuffle: false
+  augmentation: false
+  random_subsampling: false
+  skip_every_dataset_5: 2
+  skip_every_dataset_8: 2
+  sample_order: sequence_then_frame_index
+  sample_count: 446
+  preprocessing_source_sha256: ABE34F324870CE8DDEB8729FFD796285106B4B810576D80FFC3BB3D526D45AB6

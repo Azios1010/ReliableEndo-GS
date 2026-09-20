@@ -61,6 +61,29 @@ reg data validate --config configs/data/scared_c.yaml
 
 The normal JSON report redacts the resolved root.
 
+## SCARED-C training runtime inputs
+
+The full SCARED-C Stage-1 and camera-local Stage-2 control use the same
+external parent root. Keep the dataset cache under that mount; do not copy it
+back into the repository. The frame split and frozen artifact remain separate
+runtime inputs because they are experiment artifacts, not dataset content.
+
+```bash
+export RELIABLE_ENDO_DATA_ROOT=/absolute/path/to/mounted-datasets
+export RELIABLE_ENDO_STAGE1_FRAME_SPLIT_ROOT=/absolute/path/to/stage1-preparation
+export RELIABLE_ENDO_STAGE1_ARTIFACT=/absolute/path/to/frozen-stage1-artifact
+```
+
+With the committed full-data configuration, SCARED-C cache resolution is
+`${RELIABLE_ENDO_DATA_ROOT}/scared_c/.cache/stage1_scared_c_full_v1_20260915`.
+The same parent root resolves original SCARED as
+`${RELIABLE_ENDO_DATA_ROOT}/SCARED`. Validate both identities before training:
+
+```bash
+reg data validate --config configs/data/scared.yaml
+reg data validate --config configs/data/scared_c.yaml
+```
+
 ## Switching servers safely
 
 Keep `configs/data/*.yaml` portable and change only the environment variable or

@@ -1,0 +1,50 @@
+schema_version: 1
+name: stage1-scared-c-mean-v1
+dataset: scared_c
+mode: corrected_video
+data_root: ${RELIABLE_ENDO_DATA_ROOT}
+split_manifest: splits/scared_c/stage1_mean_v1.json
+cache_root: ${RELIABLE_ENDO_DATA_ROOT}/scared_c/.cache/stage1_scared_c_mean_v1
+output_dir: outputs/stage1_scared_c
+
+# This protocol file remains inactive until the separate full-training task.
+train_sequences:
+  - "1_1"
+  - "2_2"
+  - "3_2"
+validation_sequences:
+  - "1_2"
+  - "3_1"
+
+initialization:
+  mode: scratch
+  from_scratch: true
+  restore_ckpt: null
+
+batch_size: 1
+num_steps: 60000
+learning_rate: 0.0002
+weight_decay: 0.00001
+gradient_clip: 1.0
+scheduler_pct_start: 0.01
+scheduler_anneal_strategy: linear
+seed: 1314
+
+# Preserve the historical Stage1 stereo model and loss contract.
+raft:
+  mixed_precision: false
+  train_iters: 3
+  val_iters: 3
+  correlation_implementation: reg
+  correlation_levels: 4
+  correlation_radius: 4
+  n_downsample: 3
+  n_gru_layers: 1
+  encoder_dims:
+    - 32
+    - 48
+    - 96
+  hidden_dims:
+    - 96
+    - 96
+    - 96

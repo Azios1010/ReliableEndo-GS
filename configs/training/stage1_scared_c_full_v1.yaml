@@ -1,0 +1,94 @@
+schema_version: 1
+name: stage1-scared-c-mean-v1
+training_mode: full_data
+# Exclude unusable supervised GT using a hashed audit of both frozen partitions.
+# Original split/cache records remain available for provenance; no repartitioning.
+gt_quality_policy: exclude_unusable
+dataset: scared_c
+mode: corrected_video
+data_root: ${RELIABLE_ENDO_DATA_ROOT}
+
+# This inactive role manifest remains the dataset-6 guard.  The actual
+# train/validation boundary is the generated frame manifest below.
+split_manifest: splits/scared_c/stage1_mean_v1.json
+frame_split_manifest: ${RELIABLE_ENDO_STAGE1_FRAME_SPLIT_ROOT}/split_manifest.json
+cache_root: ${RELIABLE_ENDO_DATA_ROOT}/scared_c/.cache/stage1_scared_c_full_v1_20260915
+output_dir: outputs/stage1_scared_c_full
+
+# Explicitly all corrected-video records discoverable under datasets 1--3.
+# Empty keyframe/sample selectors are intentional; the dataset selector is
+# the single active selector kind for this full-data run.
+training_selection:
+  dataset_ids:
+    - dataset_1
+    - dataset_2
+    - dataset_3
+  keyframe_entries: []
+  sample_ids: []
+
+internal_validation:
+  fraction: 0.05
+  block_policy: tail
+  rounding: nearest_half_up
+  min_frames_per_keyframe: 1
+
+# Dataset 7 is transfer-only.  Its content is not touched by Stage1 prep.
+transfer_keyframe_entries:
+  - dataset_7/keyframe_2
+excluded_dataset_ids:
+  - dataset_6
+  - dataset_7
+
+# Expected current SCARED-C corrected-video inventory.  Preparation fails if
+# the resolved data does not match this audited inventory.
+expected_counts:
+  corrected_keyframes: 11
+  total_samples: 8416
+  train_samples: 7994
+  validation_samples: 422
+
+initialization:
+  mode: scratch
+  from_scratch: true
+  restore_ckpt: null
+
+# Preserve the existing Stage1 model/training recipe.
+batch_size: 1
+num_steps: 60000
+learning_rate: 0.0002
+weight_decay: 0.00001
+gradient_clip: 1.0
+scheduler_pct_start: 0.01
+scheduler_anneal_strategy: linear
+seed: 1314
+validation_steps:
+  - 1000
+  - 2000
+  - 3000
+  - 5000
+  - 7000
+  - 10000
+  - 15000
+  - 20000
+  - 30000
+  - 40000
+  - 50000
+  - 60000
+
+raft:
+  mixed_precision: false
+  train_iters: 3
+  val_iters: 3
+  correlation_implementation: reg
+  correlation_levels: 4
+  correlation_radius: 4
+  n_downsample: 3
+  n_gru_layers: 1
+  encoder_dims:
+    - 32
+    - 48
+    - 96
+  hidden_dims:
+    - 96
+    - 96
+    - 96
