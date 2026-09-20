@@ -1,9 +1,33 @@
 """Synthetic, non-scientific upstream-shaped fixtures for adapter tests."""
 
+import importlib.util
+import sys
 from collections.abc import Mapping
+from pathlib import Path
+from types import ModuleType, SimpleNamespace
 
 import pytest
 import torch
+
+
+@pytest.fixture
+def stage2_modules(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
+    """Load real CPU/stdlib-only helpers without importing the native trainer."""
+    root = Path(__file__).resolve().parents[2] / "third_party" / "endo_e2e_gs" / "lib"
+    package = ModuleType("_stage2_test_lib")
+    package.__path__ = [str(root)]
+    monkeypatch.setitem(sys.modules, package.__name__, package)
+    modules = {}
+    for name in ("scale_parameterization", "stage2_diagnostics", "stage2_run"):
+        spec = importlib.util.spec_from_file_location(
+            f"{package.__name__}.{name}", root / f"{name}.py"
+        )
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        monkeypatch.setitem(sys.modules, spec.name, module)
+        spec.loader.exec_module(module)
+        modules[name] = module
+    return SimpleNamespace(**modules)
 
 
 @pytest.fixture

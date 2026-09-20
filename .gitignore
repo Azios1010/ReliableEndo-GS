@@ -3,6 +3,9 @@ __pycache__/
 
 .pytest_cache/
 .pytest-tmp-*/
+# Local pytest scratch directories; keep committed fixtures under tests/ visible.
+/tests/tmp/
+/_pytest_tmp/
 .mypy_cache/
 .ruff_cache/
 .coverage

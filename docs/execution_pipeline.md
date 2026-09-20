@@ -8,6 +8,12 @@ baseline preflight, contract-level evaluation, and synchronized profiling; it
 does not authorize official reproduction, training, or later scientific
 packages.
 
+The current project execution order is recorded in
+[the master roadmap](../PLAN.md#current-execution-checkpoint-2026-09-20).
+It requires matched patched Stage2 fixed-10k validation before the current Phase I
+audit and full SCARED-C development rerun. The runtime boundaries below do not
+authorize skipping that decision or entering fallback methods early.
+
 ## End-to-end runtime
 
 The intended runtime sequence is:
@@ -48,9 +54,36 @@ or pinned runtime is unavailable. Its content-addressed artifact is marked
 `scientific_status: development_only` and cannot be used as an accepted
 baseline dependency.
 
+### Current deterministic foundation validation
+
+Stage1 60k is provisionally frozen and supplies the fixed Stage2 input. The old
+Stage2 10k is diagnostic only because its Gaussian render branch plateaued:
+`Softplus(beta=100) -> clamp_max(0.01)` caused near-dead scale gradients. The
+patched variant uses `scale = 0.01 * sigmoid(raw_scale)`. Its completed 3k run
+showed partial recovery but used a 3k OneCycle schedule, so it is not accepted
+or directly comparable to the old 10k control and must not be resumed.
+
+Audit behavioral parity except scale parameterization and diagnostics. Start
+a fresh patched Stage2 fixed-10k from the same Stage1 60k checkpoint, retaining
+the same split, seed, loss, optimizer, and fixed-10k scheduler/training protocol.
+Evaluate matched 422-frame validation with separate render/disparity metrics.
+Freeze the deterministic foundation only if Stage2 is acceptable; retain the
+prior artifacts and label the patched variant separately from the upstream
+reference. See [Plan 03](../plans/03_baseline_reproduction.md).
+
 ### Phase I uncertainty
 
-This flow consumes an accepted baseline artifact. It first evaluates proxy/oracle uncertainty and establishes calibration targets. Learned uncertainty is introduced only with an explicit target, calibration protocol, and comparison to simple proxies. The flow cannot import actions, oracle intervention labels, router features, or budgets.
+After patched Stage2 fixed-10k acceptance, audit/fix and harden the existing
+Phase I reliability/uncertainty implementation, then run the current Phase I
+once more on the full SCARED-C development protocol. Do not move directly to
+probabilistic fallback methods. Keep `dataset_6` completely untouched for final
+evaluation; it cannot select architecture, loss, calibration, or checkpoints.
+
+This flow consumes the accepted deterministic artifact and retains explicit
+uncertainty targets, calibration protocols, and proxy comparisons. Evaluate
+mean disparity quality separately from uncertainty quality, and calibration
+separately from correlation/ranking. The flow cannot import actions, oracle
+intervention labels, router features, or budgets.
 
 ### Phase I probabilistic Gaussian representation
 
@@ -131,6 +164,7 @@ A downstream flow names every upstream artifact explicitly. A stage does not dis
 Gate checks occur at artifact promotion boundaries:
 
 - baseline reproduction blocks Phase I promotion when reference behavior or conventions are unresolved;
+- the current full-SCARED-C development Phase I decision selects continuation or explicit predictive-uncertainty fallback; it does not itself pass Gate I or freeze a Phase I artifact;
 - Gate I blocks freezing a Phase I artifact when uncertainty/probabilistic reconstruction criteria are unmet;
 - a frozen Phase I identity is required for action and oracle work;
 - Gate II blocks router training when measured interventions have insufficient cost-aware oracle headroom;
@@ -140,9 +174,16 @@ Failing a gate produces a reportable artifact and triggers the approved rollback
 
 ## Failure and pivot paths
 
-- Learned uncertainty failure falls back to the strongest calibrated proxy/oracle representation while retaining the same Phase I contract.
+- If the current full-SCARED-C development Phase I passes, continue that direction and evaluate downstream reliability utility. An existing validated proxy may remain the provider within this passing path.
+- If it fails, stop further heuristic uncertainty-proxy search and freeze the strongest deterministic Stage1 mean predictor. Evaluate Gaussian heteroscedastic disparity uncertainty, then Laplace, against that same mean; compare calibration, NLL, coverage/width, sequence transfer, and selective prediction.
+- Only if parametric uncertainty is insufficient, implement conditional residual diffusion and test its added value against the same parametric baselines. Only after uncertainty is validated, propagate disparity uncertainty -> depth -> 3D positional uncertainty -> Stage2 integration. Details are in [Phase I Fallback Directions](ReliableEndoGS_PhaseI_Fallback_Directions.md).
 - Lack of covariance headroom can remove center-covariance use from the promoted representation while preserving the baseline Gaussian path and reporting the negative ablation.
 - Weak Gaussian-repair utility can reduce Phase II to STOP and stereo repair because actions are independently registered.
 - Weak router performance can stop at the oracle artifact; the intervention upper bound and action analysis remain valid outputs.
 
 Every pivot produces a new configuration/artifact identity and is reported as a design decision. Pivots do not rewrite earlier results.
+
+Throughout this sequence, positional uncertainty covariance is distinct from
+Gaussian surface/support covariance, and diffusion sample variance must not be
+claimed as total uncertainty. Preserve upstream geometry semantics, including
+`disp2depth` and `depth2pc`, rather than changing them to improve metrics.

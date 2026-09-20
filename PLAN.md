@@ -13,7 +13,80 @@ ProbStereo-EndoGS
 
 Phase I must establish a reliable representation independently. Phase II may consume the frozen Phase I evidence, but must not redefine its uncertainty semantics to make routing easier. The program succeeds only if the final system improves the reconstruction quality-cost frontier at matched measured compute; adding capacity alone is insufficient.
 
+## Current execution checkpoint (2026-09-20)
+
+### Deterministic foundation
+
+The following records the reported run status; matched fixed-10k acceptance is still pending.
+
+| Component / run | Current status |
+| --- | --- |
+| Stage1 60k | Provisionally frozen; the fixed input checkpoint for Stage2. |
+| Old Stage2 10k | Diagnostic only: the Gaussian rendering branch plateaued. |
+| Patched Stage2 3k | Partial recovery, not accepted: its 3k OneCycle schedule is not directly comparable to the old 10k control. Do not resume this completed run. |
+| Patched Stage2 fixed-10k | Required next deterministic run: start fresh from the same Stage1 60k checkpoint. |
+
+The identified root cause is the old Gaussian scale path
+`Softplus(beta=100) -> clamp_max(0.01)`, which caused near-dead scale gradients.
+The patched variant uses `scale = 0.01 * sigmoid(raw_scale)` and added diagnostics.
+Audit behavioral parity everywhere else before the fresh 10,000-step GPU run.
+Keep the same split, seed, loss, optimizer, and fixed-10k scheduler/training
+protocol as the old 10k control; a resumed 3k schedule cannot establish this
+comparison. Preserve the old 3k/10k artifacts and identify the patched variant
+separately from the unmodified upstream reference.
+
+Evaluate the matched 422-frame validation set, reporting render and disparity
+metrics separately. Freeze the deterministic foundation only if Stage2 is
+acceptable. Otherwise remain at deterministic diagnosis and retain the negative
+evidence. Details are in [Plan 03](plans/03_baseline_reproduction.md).
+
+### Phase I order and decision
+
+After patched Stage2 fixed-10k is validated and the deterministic foundation is
+accepted, audit, repair, and harden the existing Phase I reliability/uncertainty
+implementation. Then run the current Phase I once more on the full SCARED-C
+development protocol. Do not move directly to probabilistic fallback methods
+before this run. `dataset_6` remains completely untouched as the final holdout.
+
+- **PASS:** continue the current Phase I direction and evaluate downstream reliability utility.
+- **FAIL:** stop further heuristic uncertainty-proxy search, freeze the strongest deterministic Stage1 mean predictor, and move to explicit predictive uncertainty in this order:
+
+1. Gaussian heteroscedastic disparity uncertainty.
+2. Laplace heteroscedastic disparity uncertainty, using the same frozen mean.
+3. Compare calibration, NLL, coverage and interval width, sequence transfer, and selective prediction.
+4. Only if parametric uncertainty is insufficient, implement conditional residual diffusion and compare it against the same frozen mean and parametric baselines.
+5. Only after uncertainty is validated, propagate disparity uncertainty -> depth -> 3D positional uncertainty -> Stage2 integration, then evaluate downstream utility.
+
+The fallback formulation and success gates are in
+[Phase I Fallback Directions](docs/ReliableEndoGS_PhaseI_Fallback_Directions.md).
+This development PASS/FAIL decision precedes the final Gate I artifact review;
+a PASS here does not itself authorize Phase II or establish downstream utility.
+
+### Scientific constraints
+
+- Keep mean disparity quality separate from uncertainty quality; compare fallback uncertainty models using the same frozen deterministic mean.
+- Correlation with error is not calibrated uncertainty; evaluate distribution fit, calibration, and transfer separately from ranking.
+- Do not equate positional uncertainty covariance with Gaussian surface/support covariance.
+- Do not claim that diffusion sample variance is total uncertainty.
+- Do not use `dataset_6` for architecture, loss, calibration, threshold, or checkpoint selection; access it only for final evaluation after choices are frozen.
+- Do not change upstream disparity/depth/point-cloud geometry semantics, including `disp2depth` and `depth2pc`, merely to improve metrics.
+
+### Immediate execution checklist
+
+- [ ] audit patched Stage2 code for behavioral parity except scale parameterization + diagnostics
+- [ ] run patched Stage2 fixed-10k on GPU server
+- [ ] evaluate matched 422-frame validation
+- [ ] freeze deterministic foundation only if Stage2 is acceptable
+- [ ] audit/fix current Phase I
+- [ ] run current Phase I on full SCARED-C development set
+- [ ] decide PASS → continue / FAIL → Gaussian-Laplace fallback
+
 ## Dependency graph
+
+The graph describes milestone dependencies. Execution follows the current
+checkpoint above: its failed full-development Phase I branch supersedes the
+older proxy fallback options. An existing calibrated-proxy path remains eligible
+only if the current full-development Phase I decision passes.
 
 ```mermaid
 flowchart TD
@@ -91,7 +164,7 @@ Each transition records immutable upstream identities. No milestone discovers sc
   acceptance. This exception does not waive prerequisites for Plan 03B or
   authorize an accepted baseline artifact.
 - Code existence is not completion. Every plan requires its tests, validation, experiment evidence, acceptance criteria, and artifact/provenance checklist.
-- The baseline remains scientifically unmodified. Research behavior enters only after the baseline artifact is accepted.
+- Preserve the scientifically unmodified upstream reference. The explicitly authorized scale-parameterization fix and diagnostics form a separately identified deterministic Stage2 variant whose acceptance requires the matched fixed-10k comparison above.
 - Phase I never imports Phase II concepts. Phase II consumes one frozen Phase I identity.
 - Oracle collection and deployment invoke the same action implementations from identical pre-action state semantics.
 - Calibration, thresholds, and model selection use validation sequences only. Test sequences remain untouched until the frozen evaluation protocol runs.

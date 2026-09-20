@@ -2,10 +2,16 @@
 
 ## Status
 
-IMPLEMENTATION: COMPLETE
-LOCAL CONTRACT/SYNTHETIC VALIDATION: PASS
-REAL-DATA EVIDENCE: PENDING
+IMPLEMENTATION: EXISTING; AUDIT/HARDENING PENDING
+LOCAL CONTRACT/SYNTHETIC VALIDATION: PREVIOUS PASS; REVALIDATE ANY FIXES
+REAL-DATA EVIDENCE: FULL SCARED-C DEVELOPMENT RERUN PENDING
 SCIENTIFIC ACCEPTANCE: PENDING
+
+The next Phase I execution follows acceptance of patched Stage2 fixed-10k:
+audit, repair, and harden the existing reliability/uncertainty implementation,
+then run the current Phase I once more on the full SCARED-C development
+protocol. `dataset_6` remains completely untouched. Do not start the
+Gaussian/Laplace fallback or residual diffusion before this run's decision.
 
 ## Research stage
 
@@ -48,7 +54,7 @@ Learned uncertainty and probabilistic Gaussians are unjustified if even oracle/p
 - Versioned raw proxy records and oracle uncertainty targets.
 - Comparative calibration/detection report by sequence and depth bin.
 - A frozen protocol describing the oracle covariance-headroom experiment for Plans 06-07, without implementing covariance here.
-- Decision: approve Plan 05, select a calibrated proxy fallback, or stop uncertainty-dependent Phase I.
+- Current full-development decision: PASS -> continue the current Phase I direction and evaluate downstream reliability utility; FAIL -> stop heuristic proxy search and follow the explicit predictive-uncertainty fallback in `PLAN.md`.
 
 ## Scope
 
@@ -171,7 +177,21 @@ git diff --check
 
 ## Pivot / rollback path
 
-If learned investment is unsupported but a proxy works, skip Plan 05 and calibrate/freeze the best proxy for Plan 06. If only oracle works, use it solely to test representation headroom and limit deployable claims. If oracle covariance later lacks headroom, stop covariance work at Gate I rather than forcing a head.
+If the current full-SCARED-C development Phase I passes, continue the current
+direction with its validated provider and evaluate downstream reliability
+utility. Existing learned/proxy comparisons remain evidence within that path.
+
+If it fails, stop further heuristic uncertainty-proxy search and freeze the
+strongest deterministic Stage1 mean predictor. Follow
+[Phase I Fallback Directions](../docs/ReliableEndoGS_PhaseI_Fallback_Directions.md):
+Gaussian heteroscedastic disparity uncertainty, then Laplace; compare NLL,
+calibration, coverage/width, sequence transfer, and selective prediction before
+considering residual diffusion. Diffusion is conditional on parametric
+insufficiency. Propagation to depth/3D and Stage2 integration require validated
+uncertainty. Correlation with error alone does not establish calibration.
+
+Oracle evidence remains diagnostic and non-deployable. If oracle covariance
+later lacks headroom, stop the covariance claim at Gate I rather than forcing it.
 
 ## Artifact/provenance requirements
 
@@ -183,9 +203,14 @@ Record baseline artifact ID, dataset/split hashes, sample IDs, proxy versions/co
 - [ ] Oracle targets and leakage controls are explicit.
 - [ ] Calibration/detection metrics and depth bins are validated.
 - [ ] Covariance-headroom protocol is frozen conceptually.
-- [ ] Learned-path/proxy/stop decision is recorded.
+- [ ] Full-development PASS -> continue / FAIL -> explicit predictive-uncertainty fallback decision is recorded.
 - [ ] No covariance or learned head was implemented.
 
 ## Handoff to next plan
 
-Plan 05 may assume a fixed uncertainty target/evaluation protocol only if learned prediction was approved. Plan 06 may instead consume the selected calibrated proxy; neither plan may use test sequences to choose calibration.
+The current audit and rerun may exercise the already implemented Plan 05
+components under the fixed uncertainty target/evaluation protocol. On PASS,
+continue the validated learned/proxy direction and evaluate downstream
+reliability utility. On FAIL, follow the ordered fallback above before new
+propagation or Stage2 integration experiments. Neither route may use
+`dataset_6` for architecture, loss, calibration, or checkpoint selection.

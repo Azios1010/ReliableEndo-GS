@@ -2,11 +2,17 @@
 
 ## Status
 
-IMPLEMENTATION: COMPLETE
-LOCAL SYNTHETIC/ANALYTIC VALIDATION: PASS
+IMPLEMENTATION: EXISTING; AUDIT/HARDENING PENDING
+LOCAL SYNTHETIC/ANALYTIC VALIDATION: PREVIOUS PASS; REVALIDATE ANY FIXES
 LEARNED PROVIDER SCIENTIFIC SELECTION: PENDING
 REAL-DATA VALIDATION: PENDING
 SCIENTIFIC ACCEPTANCE: PENDING
+
+The existing Laplace implementation is part of the current Phase I audit/fix
+scope after patched Stage2 fixed-10k acceptance. Its existence neither accepts
+its uncertainty quality nor activates a new fallback experiment. Run the current
+Phase I once more on the full SCARED-C development protocol before deciding
+whether to enter the Gaussian-then-Laplace fallback described in `PLAN.md`.
 
 ## Research stage
 
@@ -57,7 +63,7 @@ Plan 04 first proves signal/headroom. This milestone adds capacity only if justi
 - Train a Laplace scale predictor with explicit stability/regularization diagnostics.
 - Fit scalar temperature first; consider a monotonic method only if validation evidence shows systematic heteroscedastic miscalibration.
 - Evaluate raw and calibrated predictions separately on untouched held-out sequences.
-- Preserve the best cheap proxy as a required baseline and fallback.
+- Preserve the best cheap proxy as a required comparator; it may remain the provider only if the current full-development Phase I passes.
 
 ## Non-goals
 
@@ -169,7 +175,7 @@ git diff --check
 ## Acceptance criteria
 
 - Learned uncertainty is finite, stable, and calibration is fit without test data.
-- It outperforms the strongest cheap proxy on predeclared primary uncertainty criteria with consistent sequence/depth behavior, or the milestone explicitly selects the proxy fallback.
+- It outperforms the strongest cheap proxy on predeclared primary uncertainty criteria with consistent sequence/depth behavior, or the milestone explicitly selects a validated proxy within a passing current full-development Phase I.
 - Raw and calibrated checkpoints/artifacts are independently identified.
 - Baseline disparity behavior remains unchanged unless a separately declared fine-tuning experiment is approved.
 
@@ -179,7 +185,23 @@ git diff --check
 
 ## Pivot / rollback path
 
-Retain the negative learned result and use the best calibrated Plan 04 proxy for Plan 06. Consider proxy distillation or monotonic calibration only as a separately justified ablation; do not force the learned head into the Phase I contribution.
+Retain negative learned results. If the current full-development Phase I passes
+with an existing validated proxy, record that provider choice explicitly and
+evaluate its downstream utility. If the full run fails, stop heuristic proxy
+search, including proxy-distillation rescue, and freeze the strongest
+deterministic Stage1 mean predictor. The next experiments are Gaussian
+heteroscedastic disparity uncertainty followed by Laplace, using the same mean;
+compare calibration, NLL, coverage/width, sequence transfer, and selective
+prediction. Conditional residual diffusion is permitted only if those
+parametric alternatives are insufficient. Only validated uncertainty may enter
+disparity -> depth -> 3D positional propagation and Stage2 integration. See
+[Phase I Fallback Directions](../docs/ReliableEndoGS_PhaseI_Fallback_Directions.md).
+
+Keep mean disparity quality separate from uncertainty quality. `dataset_6`
+cannot select architecture, loss, calibration, or checkpoints. Positional
+uncertainty covariance is distinct from Gaussian surface/support covariance;
+diffusion sample variance is not total uncertainty. Preserve upstream geometry
+semantics throughout these comparisons.
 
 ## Artifact/provenance requirements
 

@@ -2,7 +2,26 @@
 
 ## Status
 
-IN PROGRESS — EARLY DEVELOPMENT REPRODUCTION INFRASTRUCTURE
+IN PROGRESS — PATCHED STAGE2 FIXED-10K VALIDATION PENDING
+
+### Current deterministic foundation
+
+- Stage1 60k remains provisionally frozen and is the fixed input to Stage2.
+- Old Stage2 10k is diagnostic only because the Gaussian rendering branch plateaued. The identified root cause is `Softplus(beta=100) -> clamp_max(0.01)`, causing near-dead scale gradients.
+- The patched Gaussian scale is `scale = 0.01 * sigmoid(raw_scale)`, with additional observability.
+- Patched Stage2 3k showed partial recovery but is not accepted: its 3k OneCycle schedule is not directly comparable to the old 10k control. Do not resume it or alter prior artifacts.
+- Next: audit parity except scale parameterization and diagnostics, then run a fresh patched Stage2 fixed-10k from the same Stage1 60k checkpoint, using the same split, seed, loss, optimizer, and fixed-10k scheduler/training protocol.
+- Evaluate the matched 422-frame validation set, keeping render metrics separate from disparity metrics. Freeze the deterministic foundation only if Stage2 is acceptable; otherwise preserve the failure evidence and continue deterministic diagnosis.
+
+These are the reported run findings and next acceptance steps, not new local
+experiment results. Track the patched deterministic variant separately from
+the original upstream reproduction. Its audit must preserve dataset loading,
+splits, preprocessing, masks, Stage1 checkpoint loading, opacity/rotation/center
+logic, `disp2depth`, `depth2pc`, and CUDA/Taichi/GS renderer behavior. No geometry
+semantic change is permitted merely to improve metrics. `dataset_6` stays
+untouched.
+
+### Original reproduction acceptance
 
 This milestone is split into two gates:
 
@@ -195,3 +214,9 @@ The baseline artifact records resolved config/hash, project commit/dirty state, 
 ## Handoff to next plan
 
 Plan 04 may assume one immutable, reproduced baseline artifact and frozen evaluation/split protocol. It must add uncertainty evidence outside the baseline path and preserve baseline outputs for every comparison.
+
+For the current SCARED-C development sequence, first accept the matched patched
+Stage2 fixed-10k foundation. Then audit/fix the existing Phase I implementation
+and rerun it once on the full development protocol before any probabilistic
+fallback. The development acceptance does not silently certify official
+upstream reproduction; retain the variant and reference identities separately.

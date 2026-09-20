@@ -1,0 +1,6 @@
+name: scared-c-development
+root: SCARED_C_DEVELOPMENT
+version: development-only
+split_manifest: null
+options:
+  index_schema: 1
