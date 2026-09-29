@@ -1,0 +1,35 @@
+schema_version: 1
+dataset_name: scared
+root_env_var: RELIABLE_ENDO_DATA_ROOT
+root_subdir: scared
+
+# The active A01 protocol uses all seven user-directed SCARED folds for
+# training/development.  Later final-evaluation freeze rules are separate.
+dataset_ids:
+  - dataset_1
+  - dataset_2
+  - dataset_3
+  - dataset_4
+  - dataset_5
+  - dataset_6
+  - dataset_7
+
+roles:
+  teacher_fit:
+    - dataset_1
+    - dataset_2
+    - dataset_3
+  qualification:
+    - dataset_4
+    - dataset_5
+    - dataset_6
+    - dataset_7
+
+cache_roles:
+  - teacher_fit
+  - qualification
+final_roles: []
+
+semantics:
+  teacher_fit: candidate adaptation and development target cache
+  qualification: held-out candidate comparison before reference freeze

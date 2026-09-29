@@ -15,6 +15,7 @@ from typing import Any, Protocol
 import torch
 
 from reliable_endo_gs.contracts import RenderOutput
+from reliable_endo_gs.contracts.deployment import RectifiedStereoCamera
 from reliable_endo_gs.probabilistic_gs.marginalization import RepresentationVariant
 from reliable_endo_gs.rendering.cross_view import CameraRequest, CameraView
 from reliable_endo_gs.rendering.protocol import (
@@ -71,6 +72,71 @@ class NativeRendererConfigurationError(ValueError):
 
 class NativeRendererInputError(ValueError):
     """Raised when a request cannot be represented by the native API."""
+
+
+def native_camera_batch_from_rectified(
+    camera: RectifiedStereoCamera,
+    image_hw: tuple[int, int],
+    view: CameraView | str = CameraView.LEFT,
+    *,
+    znear: float = 0.01,
+    zfar: float = 100.0,
+) -> "NativeCameraBatch":
+    """Construct Graphdeco settings from the first-party A00 camera contract.
+
+    The projection convention is the explicit optical-axis, y-down A00
+    convention.  ``viewmatrix`` is the transposed world-to-camera transform
+    expected by the pinned Graphdeco ABI, and ``projmatrix`` is its composed
+    view/projection matrix.  No baseline or third-party camera dictionaries are
+    imported here.
+    """
+
+    if not isinstance(camera, RectifiedStereoCamera):
+        raise TypeError("camera must be a RectifiedStereoCamera")
+    view = CameraView(view)
+    if len(image_hw) != 2 or any(type(item) is not int or item < 1 for item in image_hw):
+        raise ValueError("image_hw must contain positive integer height and width")
+    if znear <= 0 or zfar <= znear:
+        raise ValueError("znear/zfar must be positive with zfar > znear")
+    intrinsics = camera.K_L if view is CameraView.LEFT else camera.K_R
+    if view is CameraView.LEFT:
+        world_from_camera = torch.eye(4, dtype=intrinsics.dtype, device=intrinsics.device).repeat(
+            intrinsics.shape[0], 1, 1
+        )
+    else:
+        world_from_camera = torch.linalg.inv(camera.T_R_from_L)
+    world_to_camera = torch.linalg.inv(world_from_camera)
+    viewmatrix = world_to_camera.transpose(-1, -2).contiguous()
+    height, width = image_hw
+    fx, fy = intrinsics[:, 0, 0], intrinsics[:, 1, 1]
+    cx, cy = intrinsics[:, 0, 2], intrinsics[:, 1, 2]
+    if not bool((fx > 0).all() and (fy > 0).all()):
+        raise NativeRendererConfigurationError("A00 focal lengths must be strictly positive")
+    near_fx = znear / fx
+    near_fy = znear / fy
+    left = -(float(width) - cx) * near_fx
+    right = cx * near_fx
+    bottom = (cy - float(height)) * near_fy
+    top = cy * near_fy
+    projection = torch.zeros(
+        (intrinsics.shape[0], 4, 4), dtype=intrinsics.dtype, device=intrinsics.device
+    )
+    projection[:, 0, 0] = 2.0 * znear / (right - left)
+    projection[:, 1, 1] = 2.0 * znear / (top - bottom)
+    projection[:, 0, 2] = (right + left) / (right - left)
+    projection[:, 1, 2] = (top + bottom) / (top - bottom)
+    projection[:, 3, 2] = 1.0
+    projection[:, 2, 2] = zfar / (zfar - znear)
+    projection[:, 2, 3] = -(zfar * znear) / (zfar - znear)
+    projection = projection.transpose(-1, -2).contiguous()
+    return NativeCameraBatch(
+        viewmatrix=viewmatrix,
+        projmatrix=torch.bmm(viewmatrix, projection).contiguous(),
+        campos=world_from_camera[:, :3, 3].contiguous(),
+        tanfovx=(float(width) / (2.0 * fx)).contiguous(),
+        tanfovy=(float(height) / (2.0 * fy)).contiguous(),
+        background=torch.zeros((intrinsics.shape[0], 3), dtype=intrinsics.dtype, device=intrinsics.device),
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -513,6 +579,41 @@ class ProductionRenderer:
             raise RuntimeError("native rasterizer radii must share device with request")
 
 
+class ProductionFieldRenderer:
+    """First-party ``GaussianField`` to Graphdeco renderer boundary.
+
+    The adapter constructs native camera settings from the A00 contract for
+    each request and delegates the ABI call to :class:`ProductionRenderer`.
+    An injected backend is supported only for focused tests; with no backend,
+    the optional compiled extension is loaded lazily and unavailable status is
+    reported as ``NativeRendererUnavailableError``.
+    """
+
+    identity = f"graphdeco_{GRAPHDECO_RASTERIZER_REVISION[:7]}_a00_camera_v1"
+
+    def __init__(self, *, backend: NativeRasterizerBackend | None = None) -> None:
+        self.backend = backend
+
+    @property
+    def native_available(self) -> bool:
+        return self.backend is not None or native_renderer_available()
+
+    def render(self, request: object) -> RenderOutput:
+        from reliable_endo_gs.rendering.field import ExistingRendererBridge, FieldRenderRequest
+
+        if not isinstance(request, FieldRenderRequest):
+            raise TypeError("production field renderer requires FieldRenderRequest")
+        if self.backend is None and not native_renderer_available():
+            raise NativeRendererUnavailableError(
+                "A04 production renderer requires diff_gaussian_rasterization; "
+                "install the pinned CUDA extension before native rendering"
+            )
+        view = CameraView(request.view)
+        settings = native_camera_batch_from_rectified(request.camera, request.image_hw, view)
+        renderer = ProductionRenderer({view: settings}, backend=self.backend)
+        return ExistingRendererBridge(renderer).render(request)
+
+
 __all__ = [
     "GRAPHDECO_RASTERIZER_REVISION",
     "GRAPHDECO_COVARIANCE_ORDER",
@@ -526,6 +627,8 @@ __all__ = [
     "NativeRendererUnavailableError",
     "NativeRasterizerBackend",
     "ProductionRenderer",
+    "ProductionFieldRenderer",
+    "native_camera_batch_from_rectified",
     "pack_graphdeco_covariance",
     "native_renderer_available",
 ]

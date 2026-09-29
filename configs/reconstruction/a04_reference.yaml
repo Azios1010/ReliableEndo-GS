@@ -1,0 +1,89 @@
+schema_version: 1
+model_id: a04_teacher_backed_reference_v1
+stage: reference
+quality_first: true
+latency_optimization: false
+
+# A01 owns this role contract. All seven SCARED folds are training/development
+# roles; SCARED-C is explicitly excluded from the A04 reference path.
+data_role: teacher_fit
+split_identity: a01-scared-dataset1-7-v1
+active_dataset_ids:
+  - dataset_1
+  - dataset_2
+  - dataset_3
+  - dataset_4
+  - dataset_5
+  - dataset_6
+  - dataset_7
+excluded_dataset_names:
+  - SCARED-C
+
+teacher_identity:
+  status: injected_at_runtime
+  candidate_selection: compare_foundationstereo_and_defom_stereo_through_a03
+
+target_schema_hash: e1dd7c7bfb50eeabe652d8ea7e65bad9cdd7093245c932d30a909b11e80b4fd9
+alignment_identity: a01-aligned-target-v1
+calibration_identity: explicit-calibration-at-forward
+renderer_identity: injected-field-renderer
+supervision_views:
+  - left
+assessment_views:
+  - left
+  - right
+
+context_scale_m: 1.0
+head_input_dim: 13
+head_hidden_dims:
+  - 128
+  - 128
+residual_bounds:
+  max_rotation_rad: 0.35
+  max_log_scale: 0.75
+  max_alpha_logit: 2.0
+  min_scale_m: 0.000001
+  max_scale_m: 0.5
+  alpha_logit_epsilon: 0.0001
+
+# These values are passed directly to the A03 producer-neutral constructor.
+prior_policy:
+  alpha_valid: 1.0
+  sampling:
+    mode: fixed
+    stride: 2
+    cap: 100000
+    max_samples: 100000
+    offset_xy:
+      - 0
+      - 0
+  surface:
+    neighborhood_radius: 1
+    depth_discontinuity_abs_m: 0.01
+    depth_discontinuity_rel: 0.05
+    min_neighbor_count: 2
+    min_cross_area_m2: 0.0000000001
+    tangent_epsilon: 0.00001
+    scale_factor: 0.5
+    min_tangent_scale_m: 0.0001
+    max_tangent_scale_m: 0.25
+    normal_thickness_m: 0.001
+    max_normal_thickness_m: 0.25
+    fallback_scale_m: 0.005
+
+runtime:
+  hardware: NVIDIA RTX 5070 Ti 16 GB
+  device: cuda:0
+  memory_gib: 16
+  batch_size: 1
+  precision: fp16
+  geometry_precision: fp32
+  resolution_hw: [512, 640]
+  deadline_ms: 100.0
+  warmup: 20
+  repetitions: 1000
+  synchronize: true
+  compilation: eager
+
+seed: 0
+checkpoint_root: artifacts/a04_reference

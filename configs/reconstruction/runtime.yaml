@@ -1,0 +1,13 @@
+# Protocol only: resolution/deadline remain undecided; no experiment is launched.
+hardware: NVIDIA RTX 5070 Ti 16 GB
+device: cuda:0
+memory_gib: 16
+batch_size: 1
+precision: fp16
+geometry_precision: fp32
+resolution_hw: [512, 640]
+deadline_ms: 100.0
+warmup: 20
+repetitions: 1000
+synchronize: true
+compilation: eager

@@ -35,6 +35,14 @@ from reliable_endo_gs.geometry.disparity import (
     focal_length_x_from_intrinsics,
 )
 from reliable_endo_gs.geometry.pixels import pixel_grid
+from reliable_endo_gs.geometry.surface import (
+    SurfaceFrame,
+    SurfaceFramePolicy,
+    SurfaceFrameResult,
+    SurfacePolicy,
+    estimate_surface_frame,
+    estimate_surface_normals,
+)
 
 __all__ = [
     "BackprojectionDiagnostics",
@@ -64,4 +72,10 @@ __all__ = [
     "pixel_grid",
     "pixel_rays",
     "propagate_disparity_covariance",
+    "SurfaceFramePolicy",
+    "SurfaceFrameResult",
+    "SurfacePolicy",
+    "SurfaceFrame",
+    "estimate_surface_frame",
+    "estimate_surface_normals",
 ]

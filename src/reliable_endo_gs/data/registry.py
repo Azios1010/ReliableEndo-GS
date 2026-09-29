@@ -2,12 +2,7 @@
 
 from collections.abc import Callable
 
-from reliable_endo_gs.data.adapters import (
-    C3vdAdapter,
-    EndoNerfAdapter,
-    ScaredAdapter,
-    ScaredCAdapter,
-)
+from reliable_endo_gs.data.adapters import C3vdAdapter, EndoNerfAdapter, ScaredAdapter
 from reliable_endo_gs.data.base import DatasetAdapter
 
 
@@ -24,9 +19,17 @@ def normalize_dataset_name(name: str) -> str:
     return normalized
 
 
+def _scared_c_factory() -> DatasetAdapter:
+    """Load the historical adapter only for an explicit ``scared_c`` lookup."""
+
+    from reliable_endo_gs.data.adapters.scared_c import ScaredCAdapter
+
+    return ScaredCAdapter()
+
+
 _ADAPTER_FACTORIES: dict[str, Callable[[], DatasetAdapter]] = {
     "scared": ScaredAdapter,
-    "scaredc": ScaredCAdapter,
+    "scaredc": _scared_c_factory,
     "endonerf": EndoNerfAdapter,
     "c3vd": C3vdAdapter,
 }
