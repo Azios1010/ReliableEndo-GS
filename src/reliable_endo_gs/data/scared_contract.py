@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
 
 @dataclass(frozen=True, slots=True)
@@ -114,7 +113,7 @@ def validate_keyframe_processed_root(keyframe_dir: Path) -> KeyframeValidationRe
         issues.append(f"failed to read sample image: {error}")
 
     try:
-        with open(data_parent / "newpram_data" / f"{first_id}.json", "r", encoding="utf-8") as f:
+        with open(data_parent / "newpram_data" / f"{first_id}.json", encoding="utf-8") as f:
             np_data = json.load(f)
         if "intr0" not in np_data or "extr0" not in np_data:
             issues.append("newpram_data JSON missing 'intr0' or 'extr0'")
@@ -122,7 +121,7 @@ def validate_keyframe_processed_root(keyframe_dir: Path) -> KeyframeValidationRe
         issues.append(f"failed to read sample newpram_data: {error}")
 
     try:
-        with open(data_parent / "reprojection_data" / f"{first_id}.json", "r", encoding="utf-8") as f:
+        with open(data_parent / "reprojection_data" / f"{first_id}.json", encoding="utf-8") as f:
             rp_data = json.load(f)
         if "reprojection-matrix" not in rp_data:
             issues.append("reprojection_data JSON missing 'reprojection-matrix'")

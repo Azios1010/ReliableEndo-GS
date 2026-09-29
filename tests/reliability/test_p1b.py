@@ -297,6 +297,7 @@ def test_candidate_classification_uses_nearest_discrete_region_coverage() -> Non
             ],
         }
     }
-    assert classify_candidate(
-        {"dataset_7/keyframe_2": summary, "dataset_4/keyframe_4": summary}
-    ) == "PASS"
+    assert (
+        classify_candidate({"dataset_7/keyframe_2": summary, "dataset_4/keyframe_4": summary})
+        == "PASS"
+    )

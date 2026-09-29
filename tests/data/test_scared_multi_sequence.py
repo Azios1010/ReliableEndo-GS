@@ -14,7 +14,6 @@ from PIL import Image
 from torch.utils.data import DataLoader
 
 from reliable_endo_gs.data import (
-    KeyframeValidationReport,
     ScaredKeyframeDataset,
     ScaredMultiSequenceDataset,
     ScaredStage1Sample,
@@ -39,10 +38,10 @@ from reliable_endo_gs.data.scared_manifest import (
 )
 from reliable_endo_gs.data.splits import SplitManifestError
 
-
 # ---------------------------------------------------------------------------
 # 1. Manifest Provenance & Portable Path Tests
 # ---------------------------------------------------------------------------
+
 
 def test_parse_scared_keyframe_id_valid() -> None:
     ds_id, kf_id = parse_scared_keyframe_id("dataset_1/keyframe_1")
@@ -84,6 +83,7 @@ def test_make_scared_sample_id() -> None:
 # 2. Grouped Split & Leakage Tests
 # ---------------------------------------------------------------------------
 
+
 def test_committed_five_keyframe_manifest_validity() -> None:
     manifest_path = Path("splits/scared/five_keyframe_v1.json")
     assert manifest_path.is_file(), f"missing committed split manifest at {manifest_path}"
@@ -108,7 +108,6 @@ def test_committed_four_keyframe_manifest_validity() -> None:
     assert manifest.test == ()
     assert "dataset_9/keyframe_3" not in manifest.validation
     assert "dataset_9/keyframe_3" not in manifest.train
-
 
 
 def test_keyframe_overlap_leakage_is_rejected() -> None:
@@ -153,6 +152,7 @@ def test_sample_provenance_leakage_detector() -> None:
 # ---------------------------------------------------------------------------
 # 3. Stage-1 Tensor Contract & Validation Tests
 # ---------------------------------------------------------------------------
+
 
 def _valid_sample_dict(h: int = 16, w: int = 24) -> dict[str, Any]:
     return {
@@ -238,6 +238,7 @@ def test_validate_stage1_sample_rejects_shape_mismatches() -> None:
 # 4. Synthetic Keyframe Fixtures & Multi-Sequence Dataset Tests
 # ---------------------------------------------------------------------------
 
+
 def _create_synthetic_keyframe(
     root: Path,
     dataset_id: str,
@@ -300,7 +301,9 @@ def _create_synthetic_keyframe(
                 [0.0, 0.0, 0.25, 0.0],
             ]
         }
-        (kf_dir / "reprojection_data" / f"{fid}.json").write_text(json.dumps(reproj), encoding="utf-8")
+        (kf_dir / "reprojection_data" / f"{fid}.json").write_text(
+            json.dumps(reproj), encoding="utf-8"
+        )
 
     return root / dataset_id / keyframe_id
 
@@ -398,6 +401,7 @@ def test_scared_multi_sequence_dataset_composition_and_dataloader(tmp_path: Path
 # ---------------------------------------------------------------------------
 # 5. Real Keyframe Artifact Test (Optional / Environment Dependent)
 # ---------------------------------------------------------------------------
+
 
 def test_real_dataset_3_keyframe_1_sample() -> None:
     real_path = Path(r"E:\datasets\reliable-endo-gs\scared\dataset_3\keyframe_1")

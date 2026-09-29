@@ -22,7 +22,12 @@ def test_cached_stage1_sample_becomes_camera_local_stage2_sample() -> None:
                 dtype=torch.float32,
             ),
             "Q": torch.tensor(
-                [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 0.0, 20.0], [0.0, 0.0, 2.0, 0.0]],
+                [
+                    [1.0, 0.0, 0.0, 0.0],
+                    [0.0, 1.0, 0.0, 0.0],
+                    [0.0, 0.0, 0.0, 20.0],
+                    [0.0, 0.0, 2.0, 0.0],
+                ],
                 dtype=torch.float32,
             ),
             "sample_id": "scared_c/dataset_1/keyframe_1/1",
@@ -31,7 +36,9 @@ def test_cached_stage1_sample_becomes_camera_local_stage2_sample() -> None:
 
     assert result["name"] == "scared_c/dataset_1/keyframe_1/1"
     assert result["lmain"]["disp_const"] == pytest.approx(10.0)
-    assert torch.equal(result["lmain"]["extr"], torch.cat((torch.eye(3), torch.zeros((3, 1))), dim=1))
+    assert torch.equal(
+        result["lmain"]["extr"], torch.cat((torch.eye(3), torch.zeros((3, 1))), dim=1)
+    )
     assert torch.equal(result["lmain"]["mask"], torch.ones((1, height, width)))
 
 

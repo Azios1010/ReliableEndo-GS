@@ -23,9 +23,7 @@ SCARED_FOUR_KEYFRAME_TRAIN: tuple[str, ...] = (
     "dataset_2/keyframe_1",
     "dataset_3/keyframe_1",
 )
-SCARED_FOUR_KEYFRAME_VALIDATION: tuple[str, ...] = (
-    "dataset_7/keyframe_2",
-)
+SCARED_FOUR_KEYFRAME_VALIDATION: tuple[str, ...] = ("dataset_7/keyframe_2",)
 
 # Canonical aliases pointing to v2
 SCARED_CONTROLLED_SPLIT = SCARED_FOUR_KEYFRAME_SPLIT
@@ -65,9 +63,7 @@ def parse_scared_keyframe_id(entry: str) -> tuple[str, str]:
     if any(p in (".", "..") for p in parts):
         raise SplitManifestError(f"keyframe path {entry!r} contains invalid traversal segments")
     if len(parts) != 2:
-        raise SplitManifestError(
-            f"keyframe path {entry!r} must have format 'dataset_X/keyframe_Y'"
-        )
+        raise SplitManifestError(f"keyframe path {entry!r} must have format 'dataset_X/keyframe_Y'")
     dataset_id, keyframe_id = parts[0], parts[1]
     if not dataset_id.startswith("dataset_"):
         raise SplitManifestError(

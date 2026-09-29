@@ -245,7 +245,7 @@ def test_native_runner_constructs_stage_two_strictly_and_captures_pre_adapter_ou
     assert model.is_train_argument is False
     assert model.training is False
     assert _FakeConfigStereo.loaded_path is not None
-    assert _FakeConfigStereo.loaded_path.endswith("config\\stage2.yaml")
+    assert Path(_FakeConfigStereo.loaded_path).parts[-2:] == ("config", "stage2.yaml")
     assert observed["imports"] == [
         ("config.stereo_config", {"enforce_clean": True}),
         ("lib.network", {"require_corr_sampler": True, "enforce_clean": True}),

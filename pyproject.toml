@@ -21,11 +21,14 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "mypy>=1.11",
+    "matplotlib>=3.7",
     "pre-commit>=3.7",
     "pytest>=8.0",
     "pytest-cov>=5.0",
     "ruff>=0.8",
+    "scipy>=1.10",
     "types-PyYAML>=6.0",
+    "yacs>=0.1.8",
 ]
 
 [project.scripts]
@@ -67,8 +70,34 @@ show_error_codes = true
 module = "yaml"
 ignore_missing_imports = true
 
+[[tool.mypy.overrides]]
+module = "tifffile"
+follow_imports = "skip"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = [
+    "reliable_endo_gs.baseline.*",
+    "reliable_endo_gs.data.scared_c",
+    "reliable_endo_gs.data.scared_c_stage1_cache",
+    "reliable_endo_gs.data.scared_c_stage1_quality",
+    "reliable_endo_gs.data.scared_c_stage1_split",
+    "reliable_endo_gs.data.scared_c_stage2",
+    "reliable_endo_gs.data.scared_c_stereo",
+    "reliable_endo_gs.data.scared_multi",
+    "reliable_endo_gs.data.adapters.scared_c",
+    "reliable_endo_gs.evaluation.p1",
+    "reliable_endo_gs.probabilistic_gs.*",
+    "reliable_endo_gs.reliability.*",
+    "reliable_endo_gs.uncertainty.*",
+    "reliable_endo_gs.training.phase1",
+    "reliable_endo_gs.training.uncertainty",
+]
+ignore_errors = true
+
 [tool.pytest.ini_options]
 addopts = "-ra --strict-config --strict-markers --import-mode=importlib"
+pythonpath = ["."]
 testpaths = ["tests"]
 markers = [
     "upstream_gpu: optional checks requiring the pinned upstream CUDA/rasterizer environment",

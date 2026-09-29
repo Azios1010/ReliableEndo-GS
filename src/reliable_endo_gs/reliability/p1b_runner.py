@@ -236,7 +236,9 @@ def _verify_data_manifest(manifest_path: Path) -> dict[str, object]:
                 if keyframe is not None:
                     active_sequences.add(str(keyframe))
     if P1B_FINAL_SEQUENCES.intersection(active_sequences):
-        raise RuntimeError("P1b development manifest active split contains a forbidden final sequence")
+        raise RuntimeError(
+            "P1b development manifest active split contains a forbidden final sequence"
+        )
     return {
         "path": str(manifest_path),
         "sha256": sha256_file(manifest_path),

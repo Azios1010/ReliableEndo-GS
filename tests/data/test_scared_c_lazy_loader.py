@@ -207,14 +207,17 @@ def test_final_dataset_guard_precedes_static_content_decode(tmp_path: Path, make
     dataset.close()
 
 
-def test_inactive_manifest_and_root_resolution(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_inactive_manifest_and_root_resolution(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     manifest = load_scared_c_role_manifest()
     assert manifest.active is False
     assert manifest.roles["MEAN_MODEL_TRAIN"] == ("1_1", "2_2", "3_2")
     with pytest.raises(InactiveSplitError):
         manifest.require_active_role("MEAN_MODEL_TRAIN")
-    monkeypatch.setenv("RELIABLE_ENDO_DATA_ROOT", r"E:\mounted-data")
-    assert resolve_scared_c_root(config_root="scared_c") == Path(r"E:\mounted-data\scared_c")
+    mounted_root = tmp_path / "mounted-data"
+    monkeypatch.setenv("RELIABLE_ENDO_DATA_ROOT", str(mounted_root))
+    assert resolve_scared_c_root(config_root="scared_c") == mounted_root / "scared_c"
 
 
 def test_corrected_mode_name_is_explicit() -> None:

@@ -115,7 +115,9 @@ def _auprc(scores: torch.Tensor, labels: torch.Tensor) -> float | None:
     positions = torch.arange(1, labels.numel() + 1, device=labels.device, dtype=torch.float64)
     precision = true_positive / positions
     recall = true_positive / positive
-    previous_recall = torch.cat((torch.zeros(1, device=labels.device, dtype=torch.float64), recall[:-1]))
+    previous_recall = torch.cat(
+        (torch.zeros(1, device=labels.device, dtype=torch.float64), recall[:-1])
+    )
     return float(((recall - previous_recall) * precision).sum().item())
 
 
@@ -187,7 +189,9 @@ def evaluate_p1_proxy(
         proxy=proxy,
         valid_count=int(error.numel()),
         total_count=int(valid_mask.numel()),
-        spearman=_correlation(_average_ranks(values), _average_ranks(error)) if error.numel() else None,
+        spearman=_correlation(_average_ranks(values), _average_ranks(error))
+        if error.numel()
+        else None,
         auroc=_auroc(values, labels) if high_error_threshold is not None else None,
         auprc=_auprc(values, labels) if high_error_threshold is not None else None,
         risk_coverage=risk_coverage_curve(
@@ -244,7 +248,9 @@ def aggregate_fixed_grid(
     return tuple(output)
 
 
-def sequence_macro(values_by_sequence: Mapping[str, Mapping[str, float | None]]) -> dict[str, float | None]:
+def sequence_macro(
+    values_by_sequence: Mapping[str, Mapping[str, float | None]],
+) -> dict[str, float | None]:
     """Compute an unweighted macro mean over sequence summaries."""
 
     if not values_by_sequence:
@@ -252,7 +258,9 @@ def sequence_macro(values_by_sequence: Mapping[str, Mapping[str, float | None]])
     keys = tuple(next(iter(values_by_sequence.values())).keys())
     output: dict[str, float | None] = {}
     for key in keys:
-        values = [summary[key] for summary in values_by_sequence.values() if summary[key] is not None]
+        values = [
+            summary[key] for summary in values_by_sequence.values() if summary[key] is not None
+        ]
         output[key] = sum(values) / len(values) if values else None
     return output
 

@@ -41,5 +41,6 @@ def test_manifest_contains_required_fields_and_valid_timestamp() -> None:
 
 
 def test_git_lookup_failure_is_safe(tmp_path: Path) -> None:
-    assert get_git_commit(tmp_path) is None
-    assert is_git_dirty(tmp_path) is None
+    nonexistent_root = tmp_path / "not-a-directory"
+    assert get_git_commit(nonexistent_root) is None
+    assert is_git_dirty(nonexistent_root) is None

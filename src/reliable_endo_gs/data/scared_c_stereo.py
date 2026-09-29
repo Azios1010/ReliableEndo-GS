@@ -492,7 +492,9 @@ def read_xyz_tar_member(archive: tarfile.TarFile, member_name: str) -> np.ndarra
             raise ArchiveReadError(f"archive member cannot be read: {member_name}")
         return decode_xyz_tiff(stream.read(), member_name)
     except (KeyError, tarfile.TarError) as error:
-        raise ArchiveReadError(f"unable to read {member_name} from open archive: {error}") from error
+        raise ArchiveReadError(
+            f"unable to read {member_name} from open archive: {error}"
+        ) from error
 
 
 def read_static_rgb(path: Path) -> np.ndarray:

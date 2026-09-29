@@ -46,9 +46,14 @@ class ProxyOutputs:
             raise ValueError("disparity must have shape [B, 1, H, W]")
         if self.disparity_iterations.ndim != 4 or self.disparity_iterations.shape[0] != expected[0]:
             raise ValueError("disparity_iterations must have shape [B, K, H, W]")
-        if self.disparity_iterations.shape[1] < 2 or tuple(self.disparity_iterations.shape[2:]) != tuple(expected[2:]):
+        if self.disparity_iterations.shape[1] < 2 or tuple(
+            self.disparity_iterations.shape[2:]
+        ) != tuple(expected[2:]):
             raise ValueError("disparity_iterations must contain aligned spatial predictions")
-        if self.inference_valid_mask.shape != expected or self.inference_valid_mask.dtype != torch.bool:
+        if (
+            self.inference_valid_mask.shape != expected
+            or self.inference_valid_mask.dtype != torch.bool
+        ):
             raise ValueError("inference_valid_mask must be boolean and match disparity")
         if self.correlation_entropy is not None:
             raise ValueError("correlation entropy is unavailable for the pinned upstream contract")

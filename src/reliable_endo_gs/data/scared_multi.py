@@ -3,8 +3,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -309,7 +308,11 @@ class ScaredKeyframeDataset(Dataset):
             raise FileNotFoundError(f"keyframe directory does not exist: {self.keyframe_dir}")
 
         # Resolve subdirectories with standard and fallback paths
-        data_parent = self.keyframe_dir / "data" if (self.keyframe_dir / "data").is_dir() else self.keyframe_dir
+        data_parent = (
+            self.keyframe_dir / "data"
+            if (self.keyframe_dir / "data").is_dir()
+            else self.keyframe_dir
+        )
         self.calibs_dir = data_parent / "frame_data"
         self.rgbl_dir = data_parent / "left_finalpass"
         self.rgbr_dir = data_parent / "right_finalpass"
@@ -340,7 +343,7 @@ class ScaredKeyframeDataset(Dataset):
             skip_every = UPSTREAM_SKIP_EVERY.get(dataset_id, DEFAULT_SKIP_EVERY)
         self.skip_every = max(1, skip_every)
 
-        skipped_frame_ids = raw_frame_ids[::self.skip_every]
+        skipped_frame_ids = raw_frame_ids[:: self.skip_every]
         n_frames = len(skipped_frame_ids)
 
         if phase == "all":
@@ -361,7 +364,9 @@ class ScaredKeyframeDataset(Dataset):
 
     def __getitem__(self, index: int) -> ScaredStage1Sample:
         if index < 0 or index >= len(self.frame_ids):
-            raise IndexError(f"index {index} out of range for dataset of size {len(self.frame_ids)}")
+            raise IndexError(
+                f"index {index} out of range for dataset of size {len(self.frame_ids)}"
+            )
 
         frame_id = self.frame_ids[index]
 
@@ -383,14 +388,14 @@ class ScaredKeyframeDataset(Dataset):
         disp_t = torch.from_numpy(disp_arr).to(dtype=torch.float32)
 
         # Read camera intrinsics and extrinsics
-        with open(self.newpram_dir / f"{frame_id}.json", "r", encoding="utf-8") as f:
+        with open(self.newpram_dir / f"{frame_id}.json", encoding="utf-8") as f:
             newpram = json.load(f)
         intr_t = torch.tensor(newpram["intr0"], dtype=torch.float32)
         right_intr_t = torch.tensor(newpram["intr1"], dtype=torch.float32)
         extr_t = torch.tensor(newpram["extr0"], dtype=torch.float32)
 
         # Read reprojection matrix Q
-        with open(self.reproj_dir / f"{frame_id}.json", "r", encoding="utf-8") as f:
+        with open(self.reproj_dir / f"{frame_id}.json", encoding="utf-8") as f:
             reproj = json.load(f)
         Q_t = torch.tensor(reproj["reprojection-matrix"], dtype=torch.float32)
 
@@ -404,9 +409,14 @@ class ScaredKeyframeDataset(Dataset):
             right_t = functional.interpolate(
                 right_t.unsqueeze(0), size=(h, w), mode="bilinear", align_corners=False
             ).squeeze(0)
-            disp_t = functional.interpolate(
-                disp_t.unsqueeze(0).unsqueeze(0), size=(h, w), mode="nearest"
-            ).squeeze(0).squeeze(0) * inv_scale
+            disp_t = (
+                functional.interpolate(
+                    disp_t.unsqueeze(0).unsqueeze(0), size=(h, w), mode="nearest"
+                )
+                .squeeze(0)
+                .squeeze(0)
+                * inv_scale
+            )
 
             # Scale camera matrices
             intr_t[0, 0] *= inv_scale
@@ -509,7 +519,9 @@ class ScaredMultiSequenceDataset(Dataset):
 
     def __getitem__(self, index: int) -> ScaredStage1Sample:
         if index < 0 or index >= len(self._index_map):
-            raise IndexError(f"index {index} out of range for dataset with {len(self._index_map)} items")
+            raise IndexError(
+                f"index {index} out of range for dataset with {len(self._index_map)} items"
+            )
         kf_idx, local_idx = self._index_map[index]
         return self.keyframe_datasets[kf_idx][local_idx]
 
