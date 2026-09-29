@@ -94,6 +94,7 @@ ignore_errors = true
 
 [tool.pytest.ini_options]
 addopts = "-ra --strict-config --strict-markers --import-mode=importlib"
+pythonpath = ["."]
 testpaths = ["tests"]
 markers = [
     "upstream_gpu: optional checks requiring the pinned upstream CUDA/rasterizer environment",
