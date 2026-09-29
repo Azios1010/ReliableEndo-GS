@@ -22,9 +22,7 @@ def test_photometric_residual_has_zero_valid_error_for_known_integer_shift() -> 
 
 
 def test_extract_proxy_outputs_keeps_u5_unavailable_and_uses_inference_mask() -> None:
-    iterations = torch.tensor(
-        [[[[1.0, 1.0]], [[1.5, 1.0]], [[2.0, 1.0]]]], dtype=torch.float32
-    )
+    iterations = torch.tensor([[[[1.0, 1.0]], [[1.5, 1.0]], [[2.0, 1.0]]]], dtype=torch.float32)
     left = torch.zeros(1, 3, 1, 2)
     right = torch.zeros_like(left)
 

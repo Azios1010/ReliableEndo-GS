@@ -123,8 +123,10 @@ def stable_axis_angle_exp(delta_rotation: torch.Tensor) -> torch.Tensor:
     cross = _skew(vector)
     identity = torch.eye(3, dtype=work_dtype, device=vector.device)
     identity = identity.expand(*vector.shape[:-1], 3, 3)
-    return identity + coefficient_a.unsqueeze(-1) * cross + coefficient_b.unsqueeze(-1) * (
-        cross @ cross
+    return (
+        identity
+        + coefficient_a.unsqueeze(-1) * cross
+        + coefficient_b.unsqueeze(-1) * (cross @ cross)
     )
 
 
@@ -177,9 +179,7 @@ def compose_gaussian_attributes(
     )
 
     work_dtype = (
-        torch.float32
-        if prior.mu.dtype in (torch.float16, torch.bfloat16)
-        else prior.mu.dtype
+        torch.float32 if prior.mu.dtype in (torch.float16, torch.bfloat16) else prior.mu.dtype
     )
     frame = _safe_prior_frame(prior, valid).to(dtype=work_dtype)
     local_rotation = stable_axis_angle_exp(delta_rotation.to(dtype=work_dtype))
@@ -200,9 +200,9 @@ def compose_gaussian_attributes(
     alpha0 = prior.alpha0.to(dtype=work_dtype).clamp(
         min=resolved.alpha_logit_epsilon, max=1.0 - resolved.alpha_logit_epsilon
     )
-    alpha = torch.sigmoid(
-        torch.logit(alpha0) + delta_alpha.to(dtype=work_dtype)
-    ).clamp(min=0.0, max=1.0)
+    alpha = torch.sigmoid(torch.logit(alpha0) + delta_alpha.to(dtype=work_dtype)).clamp(
+        min=0.0, max=1.0
+    )
     alpha = torch.where(valid.unsqueeze(-1), alpha, torch.zeros_like(alpha))
 
     rotations = rotation_matrix_to_quaternion(composed_frame)
@@ -226,7 +226,9 @@ def compose_gaussian_attributes(
         diagnostics=CompositionDiagnostics(
             valid_count=int(valid.sum().item()),
             invalid_count=int((~valid).sum().item()),
-            rotation_saturated_count=_saturation_count(delta_rotation, resolved.max_rotation_rad, valid),
+            rotation_saturated_count=_saturation_count(
+                delta_rotation, resolved.max_rotation_rad, valid
+            ),
             log_scale_saturated_count=_saturation_count(
                 delta_log_scale, resolved.max_log_scale, valid
             ),
@@ -251,9 +253,7 @@ def compose_gaussian_field(
         prior.rgb.clamp(0.0, 1.0),
         torch.zeros_like(prior.rgb),
     )
-    means = torch.where(
-        composed.valid_mask.unsqueeze(-1), prior.mu, torch.zeros_like(prior.mu)
-    )
+    means = torch.where(composed.valid_mask.unsqueeze(-1), prior.mu, torch.zeros_like(prior.mu))
     return GaussianField(
         means3d=means,
         colors=colors,

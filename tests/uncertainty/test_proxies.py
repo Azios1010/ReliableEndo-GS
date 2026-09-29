@@ -62,10 +62,16 @@ def test_left_right_consistency_handles_varying_disparity_with_pixel_grid_warp()
     result = left_right_consistency_score(left, right, valid, valid)
 
     assert result.valid_mask[:, :, :, 3:].all()
-    assert torch.allclose(result.score[result.valid_mask], torch.zeros_like(result.score[result.valid_mask]), atol=2e-5)
+    assert torch.allclose(
+        result.score[result.valid_mask],
+        torch.zeros_like(result.score[result.valid_mask]),
+        atol=2e-5,
+    )
 
 
-def test_left_right_consistency_rejects_invalid_correspondence_and_zero_disparity_is_valid() -> None:
+def test_left_right_consistency_rejects_invalid_correspondence_and_zero_disparity_is_valid() -> (
+    None
+):
     height, width = 2, 12
     zero = torch.zeros(1, 1, height, width)
     valid = torch.ones_like(zero, dtype=torch.bool)

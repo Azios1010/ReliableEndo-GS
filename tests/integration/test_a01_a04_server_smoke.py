@@ -1,12 +1,12 @@
 """Bounded fake-teacher A01 cache and A04 CPU end-to-end smoke."""
 
-from dataclasses import replace
 import json
+from dataclasses import replace
 from pathlib import Path
 
-import torch
 import numpy as np
 import tifffile
+import torch
 from PIL import Image
 
 from reliable_endo_gs.config.deployment import DeploymentRuntimeProfile
@@ -23,15 +23,20 @@ from reliable_endo_gs.teachers.workflow import collect_targets, validate_cache
 from reliable_endo_gs.training.a04_reference import A04ReferenceTrainer
 
 
-
 def _fixture(root: Path) -> Path:
     data = root / "dataset_1" / "keyframe_1" / "data"
     for name in ("frame_data", "left_finalpass", "right_finalpass", "disparity", "newpram_data"):
         (data / name).mkdir(parents=True, exist_ok=True)
     frame_id = "frame_data000000"
-    Image.fromarray(np.full((4, 5, 3), 128, dtype=np.uint8)).save(data / "left_finalpass" / f"{frame_id}.png")
-    Image.fromarray(np.full((4, 5, 3), 64, dtype=np.uint8)).save(data / "right_finalpass" / f"{frame_id}.png")
-    tifffile.imwrite(data / "disparity" / f"{frame_id}.tiff", np.full((4, 5), 8.0, dtype=np.float32))
+    Image.fromarray(np.full((4, 5, 3), 128, dtype=np.uint8)).save(
+        data / "left_finalpass" / f"{frame_id}.png"
+    )
+    Image.fromarray(np.full((4, 5, 3), 64, dtype=np.uint8)).save(
+        data / "right_finalpass" / f"{frame_id}.png"
+    )
+    tifffile.imwrite(
+        data / "disparity" / f"{frame_id}.tiff", np.full((4, 5), 8.0, dtype=np.float32)
+    )
     (data / "frame_data" / f"{frame_id}.json").write_text("{}", encoding="utf-8")
     transform = np.eye(4, dtype=np.float64)
     transform[0, 3] = -0.1
@@ -54,7 +59,11 @@ def _fixture(root: Path) -> Path:
                 "distortion_removed": True,
                 "pixel_center": "integer",
                 "disparity": {"units": "pixels", "sign": "u_left_minus_right", "reference": "left"},
-                "extrinsics": {"source": "newpram.T_R_from_L", "direction": "right_from_left", "units": "m"},
+                "extrinsics": {
+                    "source": "newpram.T_R_from_L",
+                    "direction": "right_from_left",
+                    "units": "m",
+                },
                 "preprocessing": {"images_grid": "processed"},
             }
         ),
@@ -96,12 +105,16 @@ def test_fake_teacher_cache_resume_and_a04_cpu_smoke(tmp_path: Path) -> None:
     teacher = _teacher()
     cache = TargetCache(tmp_path / "cache")
     first = collect_targets(adapter, teacher, cache, split_identity="test-a01-v1")
-    second = collect_targets(adapter, teacher, TargetCache(tmp_path / "cache"), split_identity="test-a01-v1")
+    second = collect_targets(
+        adapter, teacher, TargetCache(tmp_path / "cache"), split_identity="test-a01-v1"
+    )
     assert first.computed == 1 and first.cache_hits == 0
     assert second.computed == 0 and second.cache_hits == 1
     assert validate_cache(TargetCache(tmp_path / "cache"))["valid"] == 1
 
-    runtime = replace(DeploymentRuntimeProfile(), device="cpu", resolution_hw=(4, 5), deadline_ms=100.0)
+    runtime = replace(
+        DeploymentRuntimeProfile(), device="cpu", resolution_hw=(4, 5), deadline_ms=100.0
+    )
     config = replace(
         ReferenceConfig(),
         teacher_identity=teacher.identity.to_dict(),

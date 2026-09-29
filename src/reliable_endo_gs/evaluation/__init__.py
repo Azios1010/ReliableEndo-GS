@@ -13,6 +13,15 @@ from reliable_endo_gs.evaluation.depth import (
     depth_rmse,
     evaluate_depth,
 )
+from reliable_endo_gs.evaluation.p1 import (
+    P1MetricSummary,
+    aggregate_fixed_grid,
+    cluster_bootstrap_mean,
+    evaluate_p1_proxy,
+    oracle_disparity_error,
+    risk_coverage_curve,
+    sequence_macro,
+)
 from reliable_endo_gs.evaluation.provenance import (
     ARTIFACT_SCHEMA_NAME,
     ARTIFACT_SCHEMA_VERSION,
@@ -31,15 +40,6 @@ from reliable_endo_gs.evaluation.rendering import (
     lpips,
     psnr,
     ssim,
-)
-from reliable_endo_gs.evaluation.p1 import (
-    P1MetricSummary,
-    aggregate_fixed_grid,
-    cluster_bootstrap_mean,
-    evaluate_p1_proxy,
-    oracle_disparity_error,
-    risk_coverage_curve,
-    sequence_macro,
 )
 from reliable_endo_gs.evaluation.stereo import (
     MetricInputError,

@@ -6,7 +6,7 @@ import os
 import tempfile
 from collections.abc import Mapping, MutableMapping
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import torch
 
@@ -135,7 +135,9 @@ def _load_payload(path: Path) -> Mapping[str, object]:
         except TypeError:
             payload = torch.load(path, map_location="cpu")
     except (OSError, RuntimeError, ValueError) as error:
-        raise ReferenceCheckpointError(f"unable to load reference checkpoint {path}: {error}") from error
+        raise ReferenceCheckpointError(
+            f"unable to load reference checkpoint {path}: {error}"
+        ) from error
     if not isinstance(payload, Mapping):
         raise ReferenceCheckpointError("reference checkpoint must contain a mapping")
     return cast(Mapping[str, object], payload)
@@ -205,10 +207,14 @@ def load_reference_checkpoint(
     try:
         model.load_state_dict(state_dict, strict=strict)
     except (RuntimeError, ValueError) as error:
-        raise ReferenceCheckpointError(f"reference head state does not match model: {error}") from error
+        raise ReferenceCheckpointError(
+            f"reference head state does not match model: {error}"
+        ) from error
     record = _provenance_from_dict(payload.get("provenance"))
     if record.config_hash != model.config.config_hash:
-        raise ReferenceCheckpointError("checkpoint provenance config_hash does not match model config")
+        raise ReferenceCheckpointError(
+            "checkpoint provenance config_hash does not match model config"
+        )
     try:
         runtime_teacher_identity = model._teacher_identity()
     except ReferenceModelError as error:
@@ -225,7 +231,7 @@ def load_reference_checkpoint(
         optimizer_state = payload.get("optimizer_state")
         if isinstance(optimizer_state, Mapping):
             try:
-                optimizer.load_state_dict(optimizer_state)
+                optimizer.load_state_dict(cast(dict[str, Any], dict(optimizer_state)))
             except (RuntimeError, ValueError, TypeError) as error:
                 raise ReferenceCheckpointError(
                     f"reference optimizer state does not match model: {error}"

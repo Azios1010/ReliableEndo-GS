@@ -231,7 +231,9 @@ def _validate_map(
 
 TeacherLoader: TypeAlias = Callable[[], object]
 TeacherInference: TypeAlias = Callable[[object, torch.Tensor, torch.Tensor], object]
-TeacherPreprocess: TypeAlias = Callable[[torch.Tensor, torch.Tensor], tuple[torch.Tensor, torch.Tensor]]
+TeacherPreprocess: TypeAlias = Callable[
+    [torch.Tensor, torch.Tensor], tuple[torch.Tensor, torch.Tensor]
+]
 TeacherOutputConverter: TypeAlias = Callable[[object], object]
 AvailabilityProbe: TypeAlias = Callable[[], bool | str | CandidateAvailability]
 
@@ -498,11 +500,7 @@ def convert_teacher_output_to_a00(
         else torch.isfinite(converted) & (converted > 0)
     )
     declared_support = prediction.support
-    support = (
-        declared_support
-        if declared_support is not None
-        else torch.isfinite(converted)
-    )
+    support = declared_support if declared_support is not None else torch.isfinite(converted)
     metadata = dict(prediction.metadata)
     metadata.update(
         {
@@ -513,7 +511,9 @@ def convert_teacher_output_to_a00(
             "support_semantics": "declared_or_finite_teacher_output",
         }
     )
-    return replace(prediction, disparity=converted, validity=validity, support=support, metadata=metadata)
+    return replace(
+        prediction, disparity=converted, validity=validity, support=support, metadata=metadata
+    )
 
 
 def coerce_teacher_prediction(value: object) -> TeacherPrediction:

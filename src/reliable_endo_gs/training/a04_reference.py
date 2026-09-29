@@ -9,14 +9,14 @@ never registered as trainable model components.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from contextlib import nullcontext
+from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass, replace
 from pathlib import Path
+from typing import cast
 
 import torch
 from torch.utils.data import DataLoader
 
-from reliable_endo_gs.config.deployment import DeploymentRuntimeProfile
 from reliable_endo_gs.contracts.deployment import DeploymentStereoBatch, RectifiedStereoCamera
 from reliable_endo_gs.data.scared_a00 import (
     ScaredA00Adapter,
@@ -167,9 +167,9 @@ class A04ReferenceTrainer:
     ) -> tuple[AlignedTeacherTarget, str]:
         if self.cache is not None:
             try:
-                cache_identity = self.teacher
-                if cache_identity is None:
-                    cache_identity = _CacheIdentityTeacher(self.config.teacher_identity)
+                cache_identity: Teacher = self.teacher or cast(
+                    Teacher, _CacheIdentityTeacher(self.config.teacher_identity)
+                )
                 key = target_cache_key(
                     sample,
                     cache_identity,
@@ -177,7 +177,9 @@ class A04ReferenceTrainer:
                 )
                 cached = self.cache.get(key)
             except (ValueError, A01WorkflowError) as error:
-                raise A04TrainingError(f"invalid A01 cache identity for {sample.sample_id}: {error}") from error
+                raise A04TrainingError(
+                    f"invalid A01 cache identity for {sample.sample_id}: {error}"
+                ) from error
             if cached is not None:
                 return _move_target(cached, self.device), "a01_cache"
         if self.teacher is None:
@@ -187,7 +189,9 @@ class A04ReferenceTrainer:
         target = infer_and_align(replace(sample, batch=batch), self.teacher)
         return _move_target(target, self.device), "live_teacher_inference"
 
-    def _forward_step(self, sample: ScaredA00Sample) -> tuple[ReferenceReconstructionResult, torch.Tensor | None, int, str]:
+    def _forward_step(
+        self, sample: ScaredA00Sample
+    ) -> tuple[ReferenceReconstructionResult, torch.Tensor | None, int, str]:
         batch = _move_batch(sample.batch, self.device)
         target, target_source = self._target(sample, batch)
         with self._autocast_context():
@@ -208,7 +212,7 @@ class A04ReferenceTrainer:
         )
         return result, loss_result.loss, loss_result.valid_count, target_source
 
-    def _autocast_context(self):
+    def _autocast_context(self) -> AbstractContextManager[None]:
         """Use AMP only on CUDA, where the declared precision policy applies."""
 
         if self.device.type != "cuda":
@@ -232,7 +236,15 @@ class A04ReferenceTrainer:
         if not bool(torch.isfinite(result.render_left.image).all()):
             raise A04TrainingError("A04 smoke renderer returned non-finite pixels")
         return A04RunResult(
-            (A04StepResult(sample.sample_id, None if loss is None else float(loss.item()), valid_count, loss is None, target_source),)
+            (
+                A04StepResult(
+                    sample.sample_id,
+                    None if loss is None else float(loss.item()),
+                    valid_count,
+                    loss is None,
+                    target_source,
+                ),
+            )
         )
 
     def train(self, *, epochs: int = 1, max_steps: int | None = None) -> A04RunResult:
@@ -251,7 +263,9 @@ class A04ReferenceTrainer:
                 self.optimizer.zero_grad(set_to_none=True)
                 result, loss, valid_count, target_source = self._forward_step(sample)
                 if loss is None or valid_count == 0:
-                    steps.append(A04StepResult(sample.sample_id, None, valid_count, True, target_source))
+                    steps.append(
+                        A04StepResult(sample.sample_id, None, valid_count, True, target_source)
+                    )
                     continue
                 if not bool(torch.isfinite(loss)):
                     raise A04TrainingError(f"non-finite A04 loss for {sample.sample_id}")
@@ -263,7 +277,15 @@ class A04ReferenceTrainer:
                     loss.backward()
                     self.optimizer.step()
                 self._optimizer_steps += 1
-                steps.append(A04StepResult(sample.sample_id, float(loss.detach().item()), valid_count, False, target_source))
+                steps.append(
+                    A04StepResult(
+                        sample.sample_id,
+                        float(loss.detach().item()),
+                        valid_count,
+                        False,
+                        target_source,
+                    )
+                )
                 completed += 1
                 if max_steps is not None and completed >= max_steps:
                     return A04RunResult(tuple(steps))
@@ -289,7 +311,9 @@ class A04ReferenceTrainer:
                 )
         return A04RunResult(tuple(steps))
 
-    def profile(self, *, warmup: int = 0, repetitions: int = 1) -> tuple[RuntimeProfile, ReferenceReconstructionResult]:
+    def profile(
+        self, *, warmup: int = 0, repetitions: int = 1
+    ) -> tuple[RuntimeProfile, ReferenceReconstructionResult]:
         """Profile one bounded DataLoader sample using the declared device."""
 
         self.model.eval()
@@ -303,7 +327,9 @@ class A04ReferenceTrainer:
             device=self.device,
             warmup=warmup,
             repetitions=repetitions,
-            reset_peak_memory=(torch.cuda.reset_peak_memory_stats if self.device.type == "cuda" else None),
+            reset_peak_memory=(
+                torch.cuda.reset_peak_memory_stats if self.device.type == "cuda" else None
+            ),
             peak_memory=(torch.cuda.max_memory_allocated if self.device.type == "cuda" else None),
         )
         return self.model.profile(
@@ -315,7 +341,9 @@ class A04ReferenceTrainer:
             hooks=hooks,
         )
 
-    def save(self, path: Path | None = None, *, result: ReferenceReconstructionResult | None = None) -> Path:
+    def save(
+        self, path: Path | None = None, *, result: ReferenceReconstructionResult | None = None
+    ) -> Path:
         """Save a provenance-bound head checkpoint without overwriting."""
 
         if result is None:

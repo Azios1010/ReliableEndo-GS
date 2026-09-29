@@ -20,7 +20,6 @@ import json
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
 import torch
 import torch.nn.functional as functional
@@ -30,8 +29,8 @@ from reliable_endo_gs.contracts.deployment import DeploymentStereoBatch, Rectifi
 from reliable_endo_gs.data.scared_manifest import make_scared_sample_id
 from reliable_endo_gs.geometry.rectified import crop_resize_camera
 from reliable_endo_gs.teachers.roles import (
-    A01ScaredDataRoles,
     DEFAULT_A01_SCARED_ROLES,
+    A01ScaredDataRoles,
 )
 from reliable_endo_gs.utils.io import write_json_atomic
 
@@ -112,7 +111,15 @@ def _homogeneous(value: object, name: str) -> torch.Tensor:
 
 def _translation_scale(unit: object) -> float:
     normalized = str(unit).strip().casefold()
-    scales = {"m": 1.0, "meter": 1.0, "metre": 1.0, "mm": 1.0e-3, "millimeter": 1.0e-3, "millimetre": 1.0e-3, "cm": 1.0e-2}
+    scales = {
+        "m": 1.0,
+        "meter": 1.0,
+        "metre": 1.0,
+        "mm": 1.0e-3,
+        "millimeter": 1.0e-3,
+        "millimetre": 1.0e-3,
+        "cm": 1.0e-2,
+    }
     if normalized not in scales:
         raise ScaredA00ProtocolError(
             "extrinsics.units must explicitly be one of m, cm, or mm; no unit inference is allowed"
@@ -161,7 +168,7 @@ class A00Protocol:
         return _hash_json(self.raw)
 
     @classmethod
-    def from_mapping(cls, value: Mapping[str, object], *, source: str) -> "A00Protocol":
+    def from_mapping(cls, value: Mapping[str, object], *, source: str) -> A00Protocol:
         raw = _mapping(value, f"A00 protocol from {source}")
         missing = [key for key in _REQUIRED_PROTOCOL_FIELDS if key not in raw]
         if missing:
@@ -313,7 +320,9 @@ def _load_json(path: Path, name: str) -> dict[str, object]:
     return _mapping(value, name)
 
 
-def _load_protocol(keyframe_dir: Path, frame_data: Mapping[str, object], newpram: Mapping[str, object]) -> A00Protocol:
+def _load_protocol(
+    keyframe_dir: Path, frame_data: Mapping[str, object], newpram: Mapping[str, object]
+) -> A00Protocol:
     path = _protocol_path(keyframe_dir)
     if path.is_file():
         return A00Protocol.from_mapping(_load_json(path, "A00 protocol"), source=str(path))
@@ -354,7 +363,7 @@ def _extract_relative_transform(
         raise ScaredA00ProtocolError(f"declared extrinsics source {source!r} is absent")
     try:
         transform = _homogeneous(value, f"extrinsics {source}")
-    except ScaredA00ProtocolError:
+    except ScaredA00ProtocolError as error:
         # Some processed SCARED metadata stores ``T`` as a 3x1 vector and
         # ``R`` beside it.  Accept that representation only when the protocol
         # names the companion rotation field explicitly.
@@ -366,14 +375,16 @@ def _extract_relative_transform(
         ):
             raise ScaredA00ProtocolError(
                 f"extrinsics {source} is a translation vector; extrinsics.rotation_source must name its 3x3 rotation"
-            )
+            ) from error
         rotation_name = str(rotation_source["rotation_source"])
         if rotation_name.startswith("frame_data."):
             rotation_value = _lookup_nested(frame_data, rotation_name[len("frame_data.") :])
         elif rotation_name.startswith("newpram."):
             rotation_value = _lookup_nested(newpram, rotation_name[len("newpram.") :])
         else:
-            raise ScaredA00ProtocolError("extrinsics.rotation_source must use frame_data. or newpram.")
+            raise ScaredA00ProtocolError(
+                "extrinsics.rotation_source must use frame_data. or newpram."
+            ) from error
         rotation = _matrix(rotation_value, f"extrinsics {rotation_name}", (3, 3))
         translation = torch.as_tensor(value, dtype=torch.float64).reshape(3)
         transform = torch.eye(4, dtype=torch.float64)
@@ -436,9 +447,13 @@ class ScaredA00Adapter:
         self.root = Path(root)
         self.roles = roles
         self._file_hash_cache: dict[tuple[Path, int, int], str] = {}
-        self.manifest = load_a01_manifest(manifest, roles=roles) if isinstance(manifest, Path) else manifest
+        self.manifest = (
+            load_a01_manifest(manifest, roles=roles) if isinstance(manifest, Path) else manifest
+        )
         if self.manifest.role_contract_hash != roles.role_hash:
-            raise ScaredA00SampleError("A01 manifest role contract does not match active role configuration")
+            raise ScaredA00SampleError(
+                "A01 manifest role contract does not match active role configuration"
+            )
 
     def __len__(self) -> int:
         return len(self.manifest.entries)
@@ -496,10 +511,12 @@ class ScaredA00Adapter:
         # Protocol metadata may be embedded in frame_data/newpram_data, so it
         # is validated by _load_protocol rather than treated as a path-only
         # requirement here.
-        required_paths = paths[:4]
+        required_paths: tuple[Path, ...] = paths[:4]
         if include_supervision:
             required_paths += (paths[4],)
-        missing = [str(path.relative_to(self.root)) for path in required_paths if not path.is_file()]
+        missing = [
+            str(path.relative_to(self.root)) for path in required_paths if not path.is_file()
+        ]
         if missing:
             raise ScaredA00SampleError(
                 f"missing active SCARED sample files for {sample_id}: {', '.join(missing)}"
@@ -518,12 +535,14 @@ class ScaredA00Adapter:
         include_supervision: bool = True,
     ) -> ScaredA00Sample:
         normalized = self.roles.validate_sample_id(
-            sample_id, role=data_role or self.roles.role_for_dataset(_safe_relative_id(sample_id)[0]), cache=False
+            sample_id,
+            role=data_role or self.roles.role_for_dataset(_safe_relative_id(sample_id)[0]),
+            cache=False,
         )
         _, _, frame_id = _safe_relative_id(normalized)
         entry_role = data_role or self.roles.role_for_dataset(normalized.split("/", maxsplit=1)[0])
-        left_path, right_path, frame_path, newpram_path, disparity_path, _, keyframe_dir = self._paths(
-            normalized, include_supervision=include_supervision
+        left_path, right_path, frame_path, newpram_path, disparity_path, _, keyframe_dir = (
+            self._paths(normalized, include_supervision=include_supervision)
         )
         frame_data = _load_json(frame_path, "frame_data")
         newpram = _load_json(newpram_path, "newpram_data")
@@ -533,9 +552,21 @@ class ScaredA00Adapter:
         if left.shape != right.shape:
             raise ScaredA00SampleError("left/right processed images must have matching shape")
         calibration_dtype = left.dtype
-        k_left = _matrix(newpram.get("intr0"), "newpram.intr0", (3, 3)).to(calibration_dtype).unsqueeze(0)
-        k_right = _matrix(newpram.get("intr1"), "newpram.intr1", (3, 3)).to(calibration_dtype).unsqueeze(0)
-        transform = _extract_relative_transform(protocol, frame_data, newpram).to(calibration_dtype).unsqueeze(0)
+        k_left = (
+            _matrix(newpram.get("intr0"), "newpram.intr0", (3, 3))
+            .to(calibration_dtype)
+            .unsqueeze(0)
+        )
+        k_right = (
+            _matrix(newpram.get("intr1"), "newpram.intr1", (3, 3))
+            .to(calibration_dtype)
+            .unsqueeze(0)
+        )
+        transform = (
+            _extract_relative_transform(protocol, frame_data, newpram)
+            .to(calibration_dtype)
+            .unsqueeze(0)
+        )
         camera = RectifiedStereoCamera(k_left, k_right, transform, True)
         height, width = int(left.shape[1]), int(left.shape[2])
         if (
@@ -545,27 +576,45 @@ class ScaredA00Adapter:
         ):
             raise ScaredA00SampleError("crop origins must be non-negative integer (x, y) pairs")
         if crop_xy_left[1] != crop_xy_right[1]:
-            raise ScaredA00SampleError("left/right crop y origins must match for rectified A00 input")
+            raise ScaredA00SampleError(
+                "left/right crop y origins must match for rectified A00 input"
+            )
         resolved_crop_hw = crop_hw or (height - crop_xy_left[1], width - crop_xy_left[0])
-        if (
-            len(resolved_crop_hw) != 2
-            or any(type(value) is not int or value < 1 for value in resolved_crop_hw)
+        if len(resolved_crop_hw) != 2 or any(
+            type(value) is not int or value < 1 for value in resolved_crop_hw
         ):
             raise ScaredA00SampleError("crop_hw must be positive")
         if output_hw is not None and (
-            len(output_hw) != 2
-            or any(type(value) is not int or value < 1 for value in output_hw)
+            len(output_hw) != 2 or any(type(value) is not int or value < 1 for value in output_hw)
         ):
             raise ScaredA00SampleError("output_hw must contain positive integer height and width")
-        if crop_xy_left[1] + resolved_crop_hw[0] > height or crop_xy_left[0] + resolved_crop_hw[1] > width:
+        if (
+            crop_xy_left[1] + resolved_crop_hw[0] > height
+            or crop_xy_left[0] + resolved_crop_hw[1] > width
+        ):
             raise ScaredA00SampleError("left crop exceeds processed image dimensions")
-        if crop_xy_right[1] + resolved_crop_hw[0] > height or crop_xy_right[0] + resolved_crop_hw[1] > width:
+        if (
+            crop_xy_right[1] + resolved_crop_hw[0] > height
+            or crop_xy_right[0] + resolved_crop_hw[1] > width
+        ):
             raise ScaredA00SampleError("right crop exceeds processed image dimensions")
-        left = left[:, crop_xy_left[1] : crop_xy_left[1] + resolved_crop_hw[0], crop_xy_left[0] : crop_xy_left[0] + resolved_crop_hw[1]]
-        right = right[:, crop_xy_right[1] : crop_xy_right[1] + resolved_crop_hw[0], crop_xy_right[0] : crop_xy_right[0] + resolved_crop_hw[1]]
+        left = left[
+            :,
+            crop_xy_left[1] : crop_xy_left[1] + resolved_crop_hw[0],
+            crop_xy_left[0] : crop_xy_left[0] + resolved_crop_hw[1],
+        ]
+        right = right[
+            :,
+            crop_xy_right[1] : crop_xy_right[1] + resolved_crop_hw[0],
+            crop_xy_right[0] : crop_xy_right[0] + resolved_crop_hw[1],
+        ]
         if output_hw is not None:
-            left = functional.interpolate(left.unsqueeze(0), size=output_hw, mode="bilinear", align_corners=False).squeeze(0)
-            right = functional.interpolate(right.unsqueeze(0), size=output_hw, mode="bilinear", align_corners=False).squeeze(0)
+            left = functional.interpolate(
+                left.unsqueeze(0), size=output_hw, mode="bilinear", align_corners=False
+            ).squeeze(0)
+            right = functional.interpolate(
+                right.unsqueeze(0), size=output_hw, mode="bilinear", align_corners=False
+            ).squeeze(0)
         camera = crop_resize_camera(
             camera,
             left_crop_xy=crop_xy_left,
@@ -590,12 +639,16 @@ class ScaredA00Adapter:
             # coordinate by ``-left_x + right_x`` before any resize.
             disparity = disparity - float(crop_xy_left[0] - crop_xy_right[0])
             if output_hw is not None:
-                disparity = functional.interpolate(
-                    disparity[None, None], size=output_hw, mode="nearest"
-                ).squeeze(0).squeeze(0)
+                disparity = (
+                    functional.interpolate(disparity[None, None], size=output_hw, mode="nearest")
+                    .squeeze(0)
+                    .squeeze(0)
+                )
                 disparity = disparity * (output_hw[1] / resolved_crop_hw[1])
             valid = torch.isfinite(disparity) & (disparity > 0)
-            safe_disparity = torch.where(torch.isfinite(disparity), disparity, torch.zeros_like(disparity))
+            safe_disparity = torch.where(
+                torch.isfinite(disparity), disparity, torch.zeros_like(disparity)
+            )
             supervision = ScaredSupervision(
                 safe_disparity.unsqueeze(0).unsqueeze(0), valid.unsqueeze(0).unsqueeze(0)
             )
@@ -626,9 +679,7 @@ class ScaredA00Adapter:
                 "frame_data": self._source_hash(frame_path),
                 "newpram_data": self._source_hash(newpram_path),
                 "a00_protocol": (
-                    self._source_hash(protocol_path)
-                    if protocol_path.is_file()
-                    else None
+                    self._source_hash(protocol_path) if protocol_path.is_file() else None
                 ),
             },
         }
@@ -655,8 +706,7 @@ class ScaredA00Dataset(Dataset[ScaredA00Sample]):
                 raise ScaredA00SampleError(str(error)) from error
         self.data_role = data_role
         if output_hw is not None and (
-            len(output_hw) != 2
-            or any(type(value) is not int or value < 1 for value in output_hw)
+            len(output_hw) != 2 or any(type(value) is not int or value < 1 for value in output_hw)
         ):
             raise ScaredA00SampleError("output_hw must contain positive integer height and width")
         self.output_hw = output_hw
@@ -709,8 +759,12 @@ def build_a01_manifest(
             missing_folds.append(dataset_id)
             continue
         found_fold = False
-        for keyframe_root in sorted(path for path in dataset_root.glob("keyframe_*") if path.is_dir()):
-            data_dir = keyframe_root / "data" if (keyframe_root / "data").is_dir() else keyframe_root
+        for keyframe_root in sorted(
+            path for path in dataset_root.glob("keyframe_*") if path.is_dir()
+        ):
+            data_dir = (
+                keyframe_root / "data" if (keyframe_root / "data").is_dir() else keyframe_root
+            )
             for frame_path in sorted((data_dir / "frame_data").glob("*.json")):
                 sample_id = make_scared_sample_id(dataset_id, keyframe_root.name, frame_path.stem)
                 entries.append(A01ManifestEntry(sample_id, roles.role_for_dataset(dataset_id)))
@@ -728,7 +782,9 @@ def build_a01_manifest(
     return manifest
 
 
-def load_a01_manifest(path: Path, *, roles: A01ScaredDataRoles = DEFAULT_A01_SCARED_ROLES) -> A01Manifest:
+def load_a01_manifest(
+    path: Path, *, roles: A01ScaredDataRoles = DEFAULT_A01_SCARED_ROLES
+) -> A01Manifest:
     """Load and validate the active role-bound manifest."""
 
     try:
@@ -739,7 +795,9 @@ def load_a01_manifest(path: Path, *, roles: A01ScaredDataRoles = DEFAULT_A01_SCA
     if raw.get("schema_version") != 1 or raw.get("dataset_name") != "scared":
         raise ScaredA00SampleError("A01 manifest must be schema 1 with dataset_name=scared")
     if raw.get("role_contract_hash") != roles.role_hash:
-        raise ScaredA00SampleError("A01 manifest role_contract_hash does not match active role policy")
+        raise ScaredA00SampleError(
+            "A01 manifest role_contract_hash does not match active role policy"
+        )
     raw_entries = raw.get("entries")
     if not isinstance(raw_entries, Sequence) or isinstance(raw_entries, (str, bytes)):
         raise ScaredA00SampleError("A01 manifest entries must be a sequence")
@@ -749,7 +807,9 @@ def load_a01_manifest(path: Path, *, roles: A01ScaredDataRoles = DEFAULT_A01_SCA
         sample_id = entry.get("sample_id")
         data_role = entry.get("data_role")
         if not isinstance(sample_id, str) or not isinstance(data_role, str):
-            raise ScaredA00SampleError("A01 manifest entries require string sample_id and data_role")
+            raise ScaredA00SampleError(
+                "A01 manifest entries require string sample_id and data_role"
+            )
         normalized = roles.validate_sample_id(sample_id, role=data_role, cache=False)
         entries.append(A01ManifestEntry(normalized, data_role))
     return A01Manifest(str(raw["role_contract_hash"]), tuple(entries))

@@ -2,8 +2,8 @@
 
 import argparse
 import json
-from dataclasses import asdict, replace
 from collections.abc import Sequence
+from dataclasses import asdict, replace
 from pathlib import Path
 
 from reliable_endo_gs.config import ConfigError, config_to_dict, hash_config, load_config
@@ -14,12 +14,12 @@ from reliable_endo_gs.data.scared_a00 import (
     ScaredA00SampleError,
     build_a01_manifest,
 )
+from reliable_endo_gs.data.schema import load_dataset_config
+from reliable_endo_gs.data.validation import DatasetValidationReport
 from reliable_endo_gs.reconstruction import load_reference_config
 from reliable_endo_gs.rendering import ProductionFieldRenderer
 from reliable_endo_gs.rendering.cross_view import ReferenceRenderer
 from reliable_endo_gs.rendering.field import ExistingRendererBridge
-from reliable_endo_gs.data.schema import load_dataset_config
-from reliable_endo_gs.data.validation import DatasetValidationReport
 from reliable_endo_gs.runtime.git import get_git_commit, is_git_dirty
 from reliable_endo_gs.runtime.logging import configure_logging
 from reliable_endo_gs.runtime.manifest import (
@@ -28,9 +28,7 @@ from reliable_endo_gs.runtime.manifest import (
     utc_timestamp,
     write_run_manifest,
 )
-from reliable_endo_gs.utils.io import create_unique_directory, write_yaml_atomic
-from reliable_endo_gs.utils.seed import set_seed
-from reliable_endo_gs.teachers import TargetCache, load_a01_roles
+from reliable_endo_gs.teachers import TargetCache, Teacher, load_a01_roles
 from reliable_endo_gs.teachers.workflow import (
     A01WorkflowError,
     collect_targets,
@@ -40,6 +38,8 @@ from reliable_endo_gs.teachers.workflow import (
     validate_cache,
 )
 from reliable_endo_gs.training.a04_reference import A04ReferenceTrainer, A04TrainingError
+from reliable_endo_gs.utils.io import create_unique_directory, write_yaml_atomic
+from reliable_endo_gs.utils.seed import set_seed
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -79,7 +79,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     data_index_parser = data_subparsers.add_parser(
-        "a01-index", description="Build an explicit active SCARED dataset_1..dataset_7 sample manifest"
+        "a01-index",
+        description="Build an explicit active SCARED dataset_1..dataset_7 sample manifest",
     )
     data_index_parser.add_argument("--data-root", required=True, type=Path)
     data_index_parser.add_argument("--output", required=True, type=Path)
@@ -101,7 +102,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--roles", type=Path, default=Path("configs/teachers/a01_scared.yaml")
     )
 
-    a01_parser = subparsers.add_parser("a01", description="A01 frozen teacher and target-cache commands")
+    a01_parser = subparsers.add_parser(
+        "a01", description="A01 frozen teacher and target-cache commands"
+    )
     a01_subparsers = a01_parser.add_subparsers(dest="a01_command", required=True)
     for name, description in (
         ("teacher-smoke", "Run one explicit injected teacher and A00 alignment"),
@@ -109,11 +112,17 @@ def build_parser() -> argparse.ArgumentParser:
         ("cache-validate", "Validate every A01 cache item and manifest checksum"),
     ):
         command_parser = a01_subparsers.add_parser(name, description=description)
-        command_parser.add_argument("--cache-root", type=Path, default=Path("artifacts/targets/a01"))
+        command_parser.add_argument(
+            "--cache-root", type=Path, default=Path("artifacts/targets/a01")
+        )
         command_parser.add_argument("--data-root", type=Path)
         command_parser.add_argument("--manifest", type=Path)
-        command_parser.add_argument("--teacher-factory", help="Injected module:function Teacher factory")
-        command_parser.add_argument("--roles", type=Path, default=Path("configs/teachers/a01_scared.yaml"))
+        command_parser.add_argument(
+            "--teacher-factory", help="Injected module:function Teacher factory"
+        )
+        command_parser.add_argument(
+            "--roles", type=Path, default=Path("configs/teachers/a01_scared.yaml")
+        )
         command_parser.add_argument("--split-identity", default="a01-scared-dataset1-7-v1")
         command_parser.add_argument(
             "--device",
@@ -129,7 +138,9 @@ def build_parser() -> argparse.ArgumentParser:
         )
     a01_subparsers.choices["cache-validate"].set_defaults(cache_root=Path("artifacts/targets/a01"))
 
-    a04_parser = subparsers.add_parser("a04", description="A04 bounded reference smoke/train/eval/profile commands")
+    a04_parser = subparsers.add_parser(
+        "a04", description="A04 bounded reference smoke/train/eval/profile commands"
+    )
     a04_subparsers = a04_parser.add_subparsers(dest="a04_command", required=True)
     for name, description in (
         ("smoke", "Run one bounded A04 batch"),
@@ -138,13 +149,23 @@ def build_parser() -> argparse.ArgumentParser:
         ("profile", "Profile one bounded A04 batch"),
     ):
         command_parser = a04_subparsers.add_parser(name, description=description)
-        command_parser.add_argument("--config", type=Path, default=Path("configs/reconstruction/a04_reference.yaml"))
+        command_parser.add_argument(
+            "--config", type=Path, default=Path("configs/reconstruction/a04_reference.yaml")
+        )
         command_parser.add_argument("--data-root", required=True, type=Path)
         command_parser.add_argument("--manifest", required=True, type=Path)
-        command_parser.add_argument("--roles", type=Path, default=Path("configs/teachers/a01_scared.yaml"))
-        command_parser.add_argument("--cache-root", type=Path, default=Path("artifacts/targets/a01"))
-        command_parser.add_argument("--teacher-factory", help="Injected module:function Teacher factory")
-        command_parser.add_argument("--renderer", choices=("reference", "native"), default="reference")
+        command_parser.add_argument(
+            "--roles", type=Path, default=Path("configs/teachers/a01_scared.yaml")
+        )
+        command_parser.add_argument(
+            "--cache-root", type=Path, default=Path("artifacts/targets/a01")
+        )
+        command_parser.add_argument(
+            "--teacher-factory", help="Injected module:function Teacher factory"
+        )
+        command_parser.add_argument(
+            "--renderer", choices=("reference", "native"), default="reference"
+        )
         command_parser.add_argument(
             "--data-role",
             choices=("teacher_fit", "qualification"),
@@ -241,7 +262,9 @@ def run_a01_index(
     }
 
 
-def _load_a01_adapter(data_root: Path, manifest_path: Path, roles_path: Path) -> tuple[ScaredA00Adapter, object]:
+def _load_a01_adapter(
+    data_root: Path, manifest_path: Path, roles_path: Path
+) -> tuple[ScaredA00Adapter, object]:
     roles = load_a01_roles(roles_path)
     # Reuse the explicit role object for cache and adapter validation while
     # keeping all sample path resolution inside the first-party adapter.
@@ -251,7 +274,7 @@ def _load_a01_adapter(data_root: Path, manifest_path: Path, roles_path: Path) ->
     return ScaredA00Adapter(data_root, manifest, roles=roles), roles
 
 
-def _load_cli_teacher(factory_spec: str | None):
+def _load_cli_teacher(factory_spec: str | None) -> Teacher:
     if not factory_spec:
         raise A01WorkflowError(
             "an explicit --teacher-factory module:function is required; no external teacher is bundled"
@@ -262,7 +285,11 @@ def _load_cli_teacher(factory_spec: str | None):
 def _run_a01(arguments: argparse.Namespace) -> dict[str, object]:
     roles = load_a01_roles(arguments.roles)
     if arguments.a01_command == "cache-validate":
-        if arguments.manifest is None or arguments.data_root is None or arguments.teacher_factory is None:
+        if (
+            arguments.manifest is None
+            or arguments.data_root is None
+            or arguments.teacher_factory is None
+        ):
             raise A01WorkflowError(
                 "cache validation requires --manifest, --data-root and --teacher-factory "
                 "to verify expected samples and teacher-bound cache keys"
@@ -285,25 +312,27 @@ def _run_a01(arguments: argparse.Namespace) -> dict[str, object]:
             ).digest
             for sample in adapter.iter_samples(include_supervision=False, output_hw=output_hw)
         ]
-        report = validate_cache(
+        validation_report = validate_cache(
             cache,
             expected_sample_ids=expected_sample_ids,
             expected_key_digests=expected_key_digests,
         )
         if (
-            report["stale_or_missing"]
-            or report["missing_expected"]
-            or report["missing_expected_keys"]
+            validation_report["stale_or_missing"]
+            or validation_report["missing_expected"]
+            or validation_report["missing_expected_keys"]
         ):
             raise A01WorkflowError(
                 "A01 cache validation failed: "
-                f"stale_or_missing={report['stale_or_missing']}, "
-                f"missing_expected={report['missing_expected']}, "
-                f"missing_expected_keys={report['missing_expected_keys']}"
+                f"stale_or_missing={validation_report['stale_or_missing']}, "
+                f"missing_expected={validation_report['missing_expected']}, "
+                f"missing_expected_keys={validation_report['missing_expected_keys']}"
             )
-        return report
+        return validation_report
     if arguments.data_root is None or arguments.manifest is None:
-        raise A01WorkflowError("--data-root and --manifest are required for A01 teacher/cache commands")
+        raise A01WorkflowError(
+            "--data-root and --manifest are required for A01 teacher/cache commands"
+        )
     adapter, _ = _load_a01_adapter(arguments.data_root, arguments.manifest, arguments.roles)
     teacher = _load_cli_teacher(arguments.teacher_factory)
     if arguments.a01_command == "teacher-smoke":
@@ -326,9 +355,7 @@ def _run_a01(arguments: argparse.Namespace) -> dict[str, object]:
         split_identity=arguments.split_identity,
         roles=roles,
         device=arguments.device,
-        output_hw=(
-            None if arguments.resolution_hw is None else tuple(arguments.resolution_hw)
-        ),
+        output_hw=(None if arguments.resolution_hw is None else tuple(arguments.resolution_hw)),
     )
     return {
         "processed": report.processed,
@@ -349,7 +376,9 @@ def _run_a04(arguments: argparse.Namespace) -> dict[str, object]:
         config = replace(config, data_role=arguments.data_role)
     adapter, _ = _load_a01_adapter(arguments.data_root, arguments.manifest, arguments.roles)
     teacher = load_teacher_factory(arguments.teacher_factory) if arguments.teacher_factory else None
-    cache = TargetCache(arguments.cache_root, roles=roles) if arguments.cache_root.exists() else None
+    cache = (
+        TargetCache(arguments.cache_root, roles=roles) if arguments.cache_root.exists() else None
+    )
     if arguments.renderer == "native":
         renderer = ProductionFieldRenderer()
     else:
@@ -372,7 +401,10 @@ def _run_a04(arguments: argparse.Namespace) -> dict[str, object]:
         trainer.resume(arguments.checkpoint)
     if arguments.a04_command == "smoke":
         result = trainer.smoke()
-        return {"completed_steps": result.completed_steps, "steps": [asdict(step) for step in result.steps]}
+        return {
+            "completed_steps": result.completed_steps,
+            "steps": [asdict(step) for step in result.steps],
+        }
     if arguments.a04_command == "train":
         result = trainer.train(epochs=arguments.epochs, max_steps=arguments.max_steps)
         destination = arguments.output_checkpoint
@@ -384,7 +416,10 @@ def _run_a04(arguments: argparse.Namespace) -> dict[str, object]:
         return {"completed_steps": result.completed_steps, "checkpoint": checkpoint.as_posix()}
     if arguments.a04_command == "eval":
         result = trainer.evaluate()
-        return {"completed_steps": result.completed_steps, "steps": [asdict(step) for step in result.steps]}
+        return {
+            "completed_steps": result.completed_steps,
+            "steps": [asdict(step) for step in result.steps],
+        }
     profile, measured = trainer.profile(warmup=arguments.warmup, repetitions=arguments.repetitions)
     return {"profile": profile.to_dict(), "metrics": dict(measured.metrics)}
 
@@ -417,15 +452,39 @@ def main(argv: Sequence[str] | None = None) -> int:
                 )
                 return 0 if report.valid else 1
             if arguments.data_command == "a01-index":
-                print(json.dumps(run_a01_index(arguments.data_root, arguments.output, roles_path=arguments.roles, require_all_folds=arguments.require_all_folds), indent=2, sort_keys=True))
+                print(
+                    json.dumps(
+                        run_a01_index(
+                            arguments.data_root,
+                            arguments.output,
+                            roles_path=arguments.roles,
+                            require_all_folds=arguments.require_all_folds,
+                        ),
+                        indent=2,
+                        sort_keys=True,
+                    )
+                )
                 return 0
         if arguments.command == "a01":
             print(json.dumps(_run_a01(arguments), ensure_ascii=False, indent=2, sort_keys=True))
             return 0
         if arguments.command == "a04":
-            print(json.dumps(_run_a04(arguments), ensure_ascii=False, indent=2, sort_keys=True, default=str))
+            print(
+                json.dumps(
+                    _run_a04(arguments), ensure_ascii=False, indent=2, sort_keys=True, default=str
+                )
+            )
             return 0
-    except (A01WorkflowError, A04TrainingError, ScaredA00SampleError, ConfigError, LookupError, OSError, RuntimeError, ValueError) as error:
+    except (
+        A01WorkflowError,
+        A04TrainingError,
+        ScaredA00SampleError,
+        ConfigError,
+        LookupError,
+        OSError,
+        RuntimeError,
+        ValueError,
+    ) as error:
         parser.exit(status=2, message=f"error: {error}\n")
 
     parser.error(f"Unsupported command: {arguments.command}")

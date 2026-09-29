@@ -14,6 +14,16 @@ import torch
 def stage2_modules(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
     """Load real CPU/stdlib-only helpers without importing the native trainer."""
     root = Path(__file__).resolve().parents[2] / "third_party" / "endo_e2e_gs" / "lib"
+    required = tuple(
+        root / f"{name}.py"
+        for name in ("scale_parameterization", "stage2_diagnostics", "stage2_run")
+    )
+    missing = tuple(path.name for path in required if not path.is_file())
+    if missing:
+        pytest.skip(
+            "pinned upstream does not contain optional local Stage-2 diagnostics modules: "
+            + ", ".join(missing)
+        )
     package = ModuleType("_stage2_test_lib")
     package.__path__ = [str(root)]
     monkeypatch.setitem(sys.modules, package.__name__, package)

@@ -214,7 +214,9 @@ class ReferenceProvenance:
         if self.dataset_name != "scared":
             raise ReferenceModelError("A04 reference provenance is restricted to SCARED")
         if tuple(self.active_dataset_ids) != A01_DATASET_IDS:
-            raise ReferenceModelError("provenance must enumerate active SCARED dataset_1 through dataset_7")
+            raise ReferenceModelError(
+                "provenance must enumerate active SCARED dataset_1 through dataset_7"
+            )
         if "SCARED-C" not in self.excluded_dataset_names:
             raise ReferenceModelError("provenance must record SCARED-C as excluded")
         supervision = _validate_views("supervision_views", self.supervision_views)
@@ -273,7 +275,7 @@ class ReferenceReconstructionResult:
     stereo: StereoPrediction
     target: AlignedTeacherTarget
     prior: GeometryPrior
-    gaussians: object
+    gaussians: GaussianField
     render_left: RenderOutput
     render_right: RenderOutput | None
     provenance: Mapping[str, object]
@@ -355,7 +357,10 @@ class ReferenceReconstructionModel(nn.Module):
         )
         if not isinstance(resolved_head, nn.Module):
             raise TypeError("head must be a torch.nn.Module")
-        if getattr(resolved_head, "input_dim", self.config.head_input_dim) != self.config.head_input_dim:
+        if (
+            getattr(resolved_head, "input_dim", self.config.head_input_dim)
+            != self.config.head_input_dim
+        ):
             raise ReferenceModelError("reference head input_dim does not match configuration")
         self.head = resolved_head
         # Teacher/renderer are runtime dependencies, not trainable model
@@ -486,9 +491,13 @@ class ReferenceReconstructionModel(nn.Module):
             )
         prediction = replace(prediction, metadata=metadata)
         spatial_shape = (int(batch.left.shape[2]), int(batch.left.shape[3]))
+        teacher_hw = (
+            int(prediction.disparity.shape[-2]),
+            int(prediction.disparity.shape[-1]),
+        )
         resolved_alignment = alignment or self._identity_alignment(
             spatial_shape,
-            teacher_hw=tuple(int(value) for value in prediction.disparity.shape[-2:]),
+            teacher_hw=teacher_hw,
         )
         resolved_calibration = calibration_metadata
         if resolved_calibration is None:
@@ -651,7 +660,8 @@ class ReferenceReconstructionModel(nn.Module):
             key: value
             for key, value in target.metadata.items()
             if key.endswith("_transform_id")
-            or key in {
+            or key
+            in {
                 "alignment_schema",
                 "input_hw",
                 "teacher_hw",

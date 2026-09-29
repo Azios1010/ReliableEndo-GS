@@ -47,6 +47,7 @@ from reliable_endo_gs.teachers.targets import (
     align_teacher_prediction,
     convert_teacher_disparity,
 )
+
 _WORKFLOW_EXPORTS = {
     name: ("reliable_endo_gs.teachers.workflow", name)
     for name in (
@@ -71,6 +72,7 @@ def __getattr__(name: str) -> Any:
     value = getattr(import_module(module_name), attribute_name)
     globals()[name] = value
     return value
+
 
 __all__ = [
     "A01_CACHE_ROLES",

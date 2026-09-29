@@ -20,26 +20,50 @@ _LAZY_EXPORTS: dict[str, tuple[str, str]] = {
     "CrossViewCameraRequest": ("reliable_endo_gs.rendering.cross_view", "CrossViewCameraRequest"),
     "CrossViewLossResult": ("reliable_endo_gs.rendering.cross_view", "CrossViewLossResult"),
     "CrossViewMaskResult": ("reliable_endo_gs.rendering.cross_view", "CrossViewMaskResult"),
-    "GRAPHDECO_COVARIANCE_ORDER": ("reliable_endo_gs.rendering.production", "GRAPHDECO_COVARIANCE_ORDER"),
-    "GRAPHDECO_RASTERIZER_REVISION": ("reliable_endo_gs.rendering.production", "GRAPHDECO_RASTERIZER_REVISION"),
+    "GRAPHDECO_COVARIANCE_ORDER": (
+        "reliable_endo_gs.rendering.production",
+        "GRAPHDECO_COVARIANCE_ORDER",
+    ),
+    "GRAPHDECO_RASTERIZER_REVISION": (
+        "reliable_endo_gs.rendering.production",
+        "GRAPHDECO_RASTERIZER_REVISION",
+    ),
     "CameraSettingsProvider": ("reliable_endo_gs.rendering.production", "CameraSettingsProvider"),
     "CameraSettingsSource": ("reliable_endo_gs.rendering.production", "CameraSettingsSource"),
-    "GraphdecoRasterizerBackend": ("reliable_endo_gs.rendering.production", "GraphdecoRasterizerBackend"),
+    "GraphdecoRasterizerBackend": (
+        "reliable_endo_gs.rendering.production",
+        "GraphdecoRasterizerBackend",
+    ),
     "MaskedLossResult": ("reliable_endo_gs.rendering.cross_view", "MaskedLossResult"),
     "MaskEvidence": ("reliable_endo_gs.rendering.cross_view", "MaskEvidence"),
     "NativeCameraBatch": ("reliable_endo_gs.rendering.production", "NativeCameraBatch"),
-    "NativeRasterizationSettings": ("reliable_endo_gs.rendering.production", "NativeRasterizationSettings"),
+    "NativeRasterizationSettings": (
+        "reliable_endo_gs.rendering.production",
+        "NativeRasterizationSettings",
+    ),
     "NativeRasterizerBackend": ("reliable_endo_gs.rendering.production", "NativeRasterizerBackend"),
-    "NativeRendererConfigurationError": ("reliable_endo_gs.rendering.production", "NativeRendererConfigurationError"),
-    "NativeRendererInputError": ("reliable_endo_gs.rendering.production", "NativeRendererInputError"),
-    "NativeRendererUnavailableError": ("reliable_endo_gs.rendering.production", "NativeRendererUnavailableError"),
+    "NativeRendererConfigurationError": (
+        "reliable_endo_gs.rendering.production",
+        "NativeRendererConfigurationError",
+    ),
+    "NativeRendererInputError": (
+        "reliable_endo_gs.rendering.production",
+        "NativeRendererInputError",
+    ),
+    "NativeRendererUnavailableError": (
+        "reliable_endo_gs.rendering.production",
+        "NativeRendererUnavailableError",
+    ),
     "ProductionRenderer": ("reliable_endo_gs.rendering.production", "ProductionRenderer"),
     "ProductionFieldRenderer": ("reliable_endo_gs.rendering.production", "ProductionFieldRenderer"),
     "native_camera_batch_from_rectified": (
         "reliable_endo_gs.rendering.production",
         "native_camera_batch_from_rectified",
     ),
-    "pack_graphdeco_covariance": ("reliable_endo_gs.rendering.production", "pack_graphdeco_covariance"),
+    "pack_graphdeco_covariance": (
+        "reliable_endo_gs.rendering.production",
+        "pack_graphdeco_covariance",
+    ),
     "ReferenceRenderer": ("reliable_endo_gs.rendering.cross_view", "ReferenceRenderer"),
     "RendererContractResult": ("reliable_endo_gs.rendering.reference", "RendererContractResult"),
     "RendererRequest": ("reliable_endo_gs.rendering.protocol", "RendererRequest"),
@@ -49,9 +73,18 @@ _LAZY_EXPORTS: dict[str, tuple[str, str]] = {
     "build_cross_view_mask": ("reliable_endo_gs.rendering.cross_view", "build_cross_view_mask"),
     "cross_view_loss": ("reliable_endo_gs.rendering.cross_view", "cross_view_loss"),
     "make_camera_request": ("reliable_endo_gs.rendering.cross_view", "make_camera_request"),
-    "renderer_contract_metadata": ("reliable_endo_gs.rendering.reference", "renderer_contract_metadata"),
-    "native_renderer_available": ("reliable_endo_gs.rendering.production", "native_renderer_available"),
-    "validate_renderer_request": ("reliable_endo_gs.rendering.reference", "validate_renderer_request"),
+    "renderer_contract_metadata": (
+        "reliable_endo_gs.rendering.reference",
+        "renderer_contract_metadata",
+    ),
+    "native_renderer_available": (
+        "reliable_endo_gs.rendering.production",
+        "native_renderer_available",
+    ),
+    "validate_renderer_request": (
+        "reliable_endo_gs.rendering.reference",
+        "validate_renderer_request",
+    ),
 }
 
 

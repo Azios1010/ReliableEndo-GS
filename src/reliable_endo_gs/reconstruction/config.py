@@ -185,18 +185,40 @@ def _prior_policy_from_dict(value: object) -> GeometryPriorPolicy:
         ),
     )
     surface = SurfaceFramePolicy(
-        neighborhood_radius=_integer(surface_raw.get("neighborhood_radius", 1), "surface.neighborhood_radius"),
-        depth_discontinuity_abs_m=_number(surface_raw.get("depth_discontinuity_abs_m", 0.01), "surface.depth_discontinuity_abs_m"),
-        depth_discontinuity_rel=_number(surface_raw.get("depth_discontinuity_rel", 0.05), "surface.depth_discontinuity_rel"),
-        min_neighbor_count=_integer(surface_raw.get("min_neighbor_count", 2), "surface.min_neighbor_count"),
-        min_cross_area_m2=_number(surface_raw.get("min_cross_area_m2", 1.0e-10), "surface.min_cross_area_m2"),
-        tangent_epsilon=_number(surface_raw.get("tangent_epsilon", 1.0e-5), "surface.tangent_epsilon"),
+        neighborhood_radius=_integer(
+            surface_raw.get("neighborhood_radius", 1), "surface.neighborhood_radius"
+        ),
+        depth_discontinuity_abs_m=_number(
+            surface_raw.get("depth_discontinuity_abs_m", 0.01), "surface.depth_discontinuity_abs_m"
+        ),
+        depth_discontinuity_rel=_number(
+            surface_raw.get("depth_discontinuity_rel", 0.05), "surface.depth_discontinuity_rel"
+        ),
+        min_neighbor_count=_integer(
+            surface_raw.get("min_neighbor_count", 2), "surface.min_neighbor_count"
+        ),
+        min_cross_area_m2=_number(
+            surface_raw.get("min_cross_area_m2", 1.0e-10), "surface.min_cross_area_m2"
+        ),
+        tangent_epsilon=_number(
+            surface_raw.get("tangent_epsilon", 1.0e-5), "surface.tangent_epsilon"
+        ),
         scale_factor=_number(surface_raw.get("scale_factor", 0.5), "surface.scale_factor"),
-        min_tangent_scale_m=_number(surface_raw.get("min_tangent_scale_m", 1.0e-4), "surface.min_tangent_scale_m"),
-        max_tangent_scale_m=_number(surface_raw.get("max_tangent_scale_m", 0.25), "surface.max_tangent_scale_m"),
-        normal_thickness_m=_number(surface_raw.get("normal_thickness_m", 1.0e-3), "surface.normal_thickness_m"),
-        max_normal_thickness_m=_number(surface_raw.get("max_normal_thickness_m", 0.25), "surface.max_normal_thickness_m"),
-        fallback_scale_m=_number(surface_raw.get("fallback_scale_m", 5.0e-3), "surface.fallback_scale_m"),
+        min_tangent_scale_m=_number(
+            surface_raw.get("min_tangent_scale_m", 1.0e-4), "surface.min_tangent_scale_m"
+        ),
+        max_tangent_scale_m=_number(
+            surface_raw.get("max_tangent_scale_m", 0.25), "surface.max_tangent_scale_m"
+        ),
+        normal_thickness_m=_number(
+            surface_raw.get("normal_thickness_m", 1.0e-3), "surface.normal_thickness_m"
+        ),
+        max_normal_thickness_m=_number(
+            surface_raw.get("max_normal_thickness_m", 0.25), "surface.max_normal_thickness_m"
+        ),
+        fallback_scale_m=_number(
+            surface_raw.get("fallback_scale_m", 5.0e-3), "surface.fallback_scale_m"
+        ),
     )
     return GeometryPriorPolicy(
         surface=surface,
@@ -227,16 +249,24 @@ def _runtime_from_dict(value: object) -> DeploymentRuntimeProfile:
             "runtime contains unsupported field(s): " + ", ".join(sorted(unexpected))
         )
     resolution = raw.get("resolution_hw")
-    resolution_hw = None if resolution is None else _integer_pair(resolution, "runtime.resolution_hw")
+    resolution_hw = (
+        None if resolution is None else _integer_pair(resolution, "runtime.resolution_hw")
+    )
     return DeploymentRuntimeProfile(
         hardware=_string(raw.get("hardware", "NVIDIA RTX 5070 Ti 16 GB"), "runtime.hardware"),
         device=_string(raw.get("device", "cuda:0"), "runtime.device"),
         memory_gib=_integer(raw.get("memory_gib", 16), "runtime.memory_gib"),
         batch_size=_integer(raw.get("batch_size", 1), "runtime.batch_size"),
         precision=_string(raw.get("precision", "fp16"), "runtime.precision"),
-        geometry_precision=_string(raw.get("geometry_precision", "fp32"), "runtime.geometry_precision"),
+        geometry_precision=_string(
+            raw.get("geometry_precision", "fp32"), "runtime.geometry_precision"
+        ),
         resolution_hw=resolution_hw,
-        deadline_ms=(None if raw.get("deadline_ms") is None else _number(raw["deadline_ms"], "runtime.deadline_ms")),
+        deadline_ms=(
+            None
+            if raw.get("deadline_ms") is None
+            else _number(raw["deadline_ms"], "runtime.deadline_ms")
+        ),
         warmup=_integer(raw.get("warmup", 20), "runtime.warmup"),
         repetitions=_integer(raw.get("repetitions", 1000), "runtime.repetitions"),
         synchronize=bool(raw.get("synchronize", True)),
@@ -278,20 +308,31 @@ class ReferenceConfig:
     def __post_init__(self) -> None:
         if self.schema_version != 1:
             raise ReferenceConfigError("unsupported A04 reference config schema")
-        for name in ("model_id", "stage", "split_identity", "alignment_identity", "calibration_identity", "renderer_identity"):
+        for name in (
+            "model_id",
+            "stage",
+            "split_identity",
+            "alignment_identity",
+            "calibration_identity",
+            "renderer_identity",
+        ):
             value = getattr(self, name)
             if not isinstance(value, str) or not value.strip():
                 raise ReferenceConfigError(f"{name} must be a non-empty string")
         if self.stage != "reference":
             raise ReferenceConfigError("A04 config must describe the quality reference stage")
         if self.quality_first is not True or self.latency_optimization is not False:
-            raise ReferenceConfigError("A04 reference requires quality_first and disables latency optimization")
+            raise ReferenceConfigError(
+                "A04 reference requires quality_first and disables latency optimization"
+            )
         try:
             DEFAULT_A01_SCARED_ROLES.datasets_for_role(self.data_role)
         except ValueError as error:
             raise ReferenceConfigError(str(error)) from error
         if tuple(self.active_dataset_ids) != A01_DATASET_IDS:
-            raise ReferenceConfigError("active_dataset_ids must be exactly SCARED dataset_1 through dataset_7")
+            raise ReferenceConfigError(
+                "active_dataset_ids must be exactly SCARED dataset_1 through dataset_7"
+            )
         if not self.excluded_dataset_names or "SCARED-C" not in self.excluded_dataset_names:
             raise ReferenceConfigError("SCARED-C must remain explicitly excluded")
         if not isinstance(self.teacher_identity, Mapping):
@@ -329,7 +370,9 @@ class ReferenceConfig:
                 "A04 sampling requires a finite cap/max_samples for the 16 GiB deployment target"
             )
         if self.checkpoint_root.is_absolute() or ".." in self.checkpoint_root.parts:
-            raise ReferenceConfigError("checkpoint_root must be a portable repository-relative path")
+            raise ReferenceConfigError(
+                "checkpoint_root must be a portable repository-relative path"
+            )
         object.__setattr__(self, "active_dataset_ids", tuple(self.active_dataset_ids))
         object.__setattr__(self, "excluded_dataset_names", tuple(self.excluded_dataset_names))
         object.__setattr__(self, "supervision_views", tuple(self.supervision_views))
@@ -371,7 +414,9 @@ class ReferenceConfig:
     def config_hash(self) -> str:
         """Return the stable resolved-config SHA-256 identity."""
 
-        encoded = json.dumps(_canonical(self.to_dict()), sort_keys=True, separators=(",", ":")).encode()
+        encoded = json.dumps(
+            _canonical(self.to_dict()), sort_keys=True, separators=(",", ":")
+        ).encode()
         return hashlib.sha256(encoded).hexdigest()
 
     @classmethod
@@ -410,8 +455,7 @@ class ReferenceConfig:
         unexpected = set(raw) - config_fields
         if unexpected:
             raise ReferenceConfigError(
-                "A04 configuration contains unsupported field(s): "
-                + ", ".join(sorted(unexpected))
+                "A04 configuration contains unsupported field(s): " + ", ".join(sorted(unexpected))
             )
         bounds = ResidualBounds.from_dict(raw.get("residual_bounds", ResidualBounds().to_dict()))
         prior_policy = _prior_policy_from_dict(
@@ -433,7 +477,9 @@ class ReferenceConfig:
             ),
             active_dataset_ids=tuple(
                 _string(item, "active_dataset_ids[]")
-                for item in _sequence(raw.get("active_dataset_ids", A01_DATASET_IDS), "active_dataset_ids")
+                for item in _sequence(
+                    raw.get("active_dataset_ids", A01_DATASET_IDS), "active_dataset_ids"
+                )
             ),
             excluded_dataset_names=tuple(
                 _string(item, "excluded_dataset_names[]")
@@ -441,9 +487,12 @@ class ReferenceConfig:
                     raw.get("excluded_dataset_names", ("SCARED-C",)), "excluded_dataset_names"
                 )
             ),
-            teacher_identity=_mapping(raw.get("teacher_identity", {"status": "injected_at_runtime"}), "teacher_identity"),
+            teacher_identity=_mapping(
+                raw.get("teacher_identity", {"status": "injected_at_runtime"}), "teacher_identity"
+            ),
             target_schema_hash=_string(
-                raw.get("target_schema_hash", DEFAULT_TARGET_SCHEMA.schema_hash), "target_schema_hash"
+                raw.get("target_schema_hash", DEFAULT_TARGET_SCHEMA.schema_hash),
+                "target_schema_hash",
             ),
             alignment_identity=_string(
                 raw.get("alignment_identity", "a01-aligned-target-v1"), "alignment_identity"
@@ -485,7 +534,9 @@ def load_reference_config(path: Path) -> ReferenceConfig:
     try:
         raw: object = yaml.safe_load(path.read_text(encoding="utf-8"))
     except (OSError, yaml.YAMLError) as error:
-        raise ReferenceConfigError(f"unable to read A04 reference config {path}: {error}") from error
+        raise ReferenceConfigError(
+            f"unable to read A04 reference config {path}: {error}"
+        ) from error
     if not isinstance(raw, Mapping):
         raise ReferenceConfigError("A04 reference config must contain a mapping")
     return ReferenceConfig.from_dict(raw)

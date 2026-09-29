@@ -17,7 +17,6 @@ from __future__ import annotations
 import json
 import math
 from pathlib import Path
-from typing import Any
 
 import numpy as np
 import pytest
@@ -26,11 +25,8 @@ import torch
 from PIL import Image
 
 from reliable_endo_gs.baseline.native import NativeInferenceInput
+from reliable_endo_gs.baseline.upstream import import_upstream_module
 from reliable_endo_gs.data import (
-    DEFAULT_ZFAR,
-    DEFAULT_ZNEAR,
-    ScaredKeyframeDataset,
-    ScaredMultiSequenceDataset,
     ScaredStage1Sample,
     ScaredStage2Dataset,
     ScaredStage2Sample,
@@ -47,10 +43,18 @@ from reliable_endo_gs.data import (
     validate_stage2_sample,
 )
 
-
 # ---------------------------------------------------------------------------
 # Helpers & Synthetic Fixtures
 # ---------------------------------------------------------------------------
+
+
+def _upstream_graphics_utils():
+    return import_upstream_module(
+        "lib.graphics_utils",
+        Path(__file__).resolve().parents[2] / "third_party" / "endo_e2e_gs",
+        check_python_dependencies=False,
+    )
+
 
 def _make_stage1_sample(
     *,
@@ -166,7 +170,9 @@ def _create_synthetic_keyframe(
                 [0.0, 0.0, 0.25, 0.0],
             ]
         }
-        (kf_dir / "reprojection_data" / f"{fid}.json").write_text(json.dumps(reproj), encoding="utf-8")
+        (kf_dir / "reprojection_data" / f"{fid}.json").write_text(
+            json.dumps(reproj), encoding="utf-8"
+        )
 
     return root / dataset_id / keyframe_id
 
@@ -174,6 +180,7 @@ def _create_synthetic_keyframe(
 # ---------------------------------------------------------------------------
 # 1. Q Matrix & Disparity Constant Tests
 # ---------------------------------------------------------------------------
+
 
 def test_compute_disp_const_canonical() -> None:
     Q = torch.tensor(
@@ -206,6 +213,7 @@ def test_compute_disp_const_invalid_shape_raises() -> None:
 # ---------------------------------------------------------------------------
 # 2. Camera Center Tests (C = -R.T @ t)
 # ---------------------------------------------------------------------------
+
 
 def test_compute_camera_center_identity_pose() -> None:
     extr = torch.tensor(
@@ -266,8 +274,9 @@ def test_compute_camera_center_arbitrary_pose() -> None:
 # 3. Projection Matrix & World-View Transform Tests
 # ---------------------------------------------------------------------------
 
+
 def test_compute_projection_matrix_matches_upstream() -> None:
-    from lib.graphics_utils import getProjectionMatrix
+    getProjectionMatrix = _upstream_graphics_utils().getProjectionMatrix
 
     h, w = 1024, 1280
     intr = torch.tensor(
@@ -286,7 +295,7 @@ def test_compute_projection_matrix_matches_upstream() -> None:
 
 
 def test_compute_world_view_transform_matches_upstream() -> None:
-    from lib.graphics_utils import getWorld2View2
+    getWorld2View2 = _upstream_graphics_utils().getWorld2View2
 
     extr = torch.tensor(
         [
@@ -329,6 +338,7 @@ def test_compute_fov() -> None:
 # ---------------------------------------------------------------------------
 # 4. Safe Disparity & Depth Masking Tests
 # ---------------------------------------------------------------------------
+
 
 def test_compute_safe_depth_valid_positive() -> None:
     disp = torch.tensor([[10.0, 20.0], [40.0, 50.0]], dtype=torch.float32)
@@ -420,9 +430,12 @@ def test_compute_safe_depth_constant_valid_no_nan() -> None:
 # 5. Full Stage-1 to Stage-2 Sample Transformation & Validation
 # ---------------------------------------------------------------------------
 
+
 def test_stage1_to_stage2_sample_structure_and_types() -> None:
     h, w = 32, 48
-    s1 = _make_stage1_sample(h=h, w=w, dataset_id="dataset_1", keyframe_id="keyframe_1", frame_id="frame_001")
+    s1 = _make_stage1_sample(
+        h=h, w=w, dataset_id="dataset_1", keyframe_id="keyframe_1", frame_id="frame_001"
+    )
     s2 = stage1_to_stage2_sample(s1)
 
     assert isinstance(s2, ScaredStage2Sample)
@@ -512,12 +525,13 @@ def test_validate_stage2_sample_rejects_missing_keys_or_bad_shapes() -> None:
 # 6. Multi-Sequence Dataset Wrapper & Sequence Identity (No Hardcoded dataset_3)
 # ---------------------------------------------------------------------------
 
+
 def test_stage2_dataset_multi_sequence_identity(tmp_path: Path) -> None:
     # Build synthetic keyframes for dataset_1, dataset_2, dataset_7, dataset_4 (matching v3 manifest sequences)
-    kf1 = _create_synthetic_keyframe(tmp_path, "dataset_1", "keyframe_1", num_frames=2)
-    kf2 = _create_synthetic_keyframe(tmp_path, "dataset_2", "keyframe_1", num_frames=2)
-    kf7 = _create_synthetic_keyframe(tmp_path, "dataset_7", "keyframe_2", num_frames=2)
-    kf4 = _create_synthetic_keyframe(tmp_path, "dataset_4", "keyframe_4", num_frames=2)
+    _create_synthetic_keyframe(tmp_path, "dataset_1", "keyframe_1", num_frames=2)
+    _create_synthetic_keyframe(tmp_path, "dataset_2", "keyframe_1", num_frames=2)
+    _create_synthetic_keyframe(tmp_path, "dataset_7", "keyframe_2", num_frames=2)
+    _create_synthetic_keyframe(tmp_path, "dataset_4", "keyframe_4", num_frames=2)
 
     manifest = SplitManifest(
         schema_version=1,
@@ -616,6 +630,7 @@ def test_stage2_dataset_wrapping_existing_stage1_dataset() -> None:
 # ---------------------------------------------------------------------------
 # 7. Batch Collation & NativeInferenceInput Integration Tests
 # ---------------------------------------------------------------------------
+
 
 def test_stage2_collate_fn_and_native_inference_input() -> None:
     s1_a = _make_stage1_sample(h=16, w=24, dataset_id="dataset_1", frame_id="f0")

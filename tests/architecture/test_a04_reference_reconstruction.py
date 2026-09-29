@@ -38,9 +38,11 @@ from reliable_endo_gs.teachers import AlignedTeacherTarget, TeacherIdentity, Tea
 
 
 def _camera(batch_size: int = 1, dtype: torch.dtype = torch.float64) -> RectifiedStereoCamera:
-    left = torch.tensor(
-        [[100.0, 0.0, 2.0], [0.0, 100.0, 2.0], [0.0, 0.0, 1.0]], dtype=dtype
-    ).unsqueeze(0).repeat(batch_size, 1, 1)
+    left = (
+        torch.tensor([[100.0, 0.0, 2.0], [0.0, 100.0, 2.0], [0.0, 0.0, 1.0]], dtype=dtype)
+        .unsqueeze(0)
+        .repeat(batch_size, 1, 1)
+    )
     right = left.clone()
     right[:, 0, 2] -= 3.0
     transform = torch.eye(4, dtype=dtype).unsqueeze(0).repeat(batch_size, 1, 1)
@@ -129,8 +131,10 @@ class _FakeRenderer:
         self.requests.append(request)
         height, width = request.image_hw
         colors = request.field.colors
-        image = colors.mean(dim=1).view(colors.shape[0], 3, 1, 1).expand(
-            colors.shape[0], 3, height, width
+        image = (
+            colors.mean(dim=1)
+            .view(colors.shape[0], 3, 1, 1)
+            .expand(colors.shape[0], 3, height, width)
         )
         depth = request.field.means3d[..., 2].mean(dim=1).view(colors.shape[0], 1, 1, 1)
         depth = depth.expand(colors.shape[0], 1, height, width)
@@ -149,7 +153,9 @@ def test_zero_residual_identity_and_bound_composition() -> None:
     assert torch.equal(residuals.delta_rotation, torch.zeros_like(residuals.delta_rotation))
     field = compose_gaussian_field(prior, residuals, bounds=head.bounds)
     rotation = quaternion_to_rotation_matrix(field.rotations)
-    torch.testing.assert_close(rotation[prior.valid_mask], prior.R0[prior.valid_mask], atol=1e-8, rtol=1e-8)
+    torch.testing.assert_close(
+        rotation[prior.valid_mask], prior.R0[prior.valid_mask], atol=1e-8, rtol=1e-8
+    )
     torch.testing.assert_close(field.scales[prior.valid_mask], prior.S0[prior.valid_mask])
     torch.testing.assert_close(field.opacities[prior.valid_mask], prior.alpha0[prior.valid_mask])
 
@@ -287,7 +293,9 @@ assert ReferenceConfig().quality_first
 assert ReferenceAttributeHead
 assert ReferenceReconstructionModel
 """
-    subprocess.run([sys.executable, "-c", code], cwd=root, check=True, capture_output=True, text=True)
+    subprocess.run(
+        [sys.executable, "-c", code], cwd=root, check=True, capture_output=True, text=True
+    )
 
 
 def test_reference_rejects_scared_c_and_unverified_sample_roles() -> None:

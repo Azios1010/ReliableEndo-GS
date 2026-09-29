@@ -2,19 +2,19 @@
 
 from __future__ import annotations
 
-import importlib
 import hashlib
+import importlib
 import json
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
+from typing import cast
 
 import torch
 
 from reliable_endo_gs.contracts.deployment import DeploymentStereoBatch, RectifiedStereoCamera
 from reliable_endo_gs.data.scared_a00 import ScaredA00Adapter, ScaredA00Sample
 from reliable_endo_gs.teachers.base import (
-    LazyTeacherAdapter,
     Teacher,
     TeacherContractError,
     TeacherPrediction,
@@ -26,7 +26,7 @@ from reliable_endo_gs.teachers.cache import (
     TargetCacheKey,
     TargetCacheResult,
 )
-from reliable_endo_gs.teachers.roles import A01ScaredDataRoles, DEFAULT_A01_SCARED_ROLES
+from reliable_endo_gs.teachers.roles import DEFAULT_A01_SCARED_ROLES, A01ScaredDataRoles
 from reliable_endo_gs.teachers.targets import (
     AlignedTeacherTarget,
     RectifiedAlignment,
@@ -155,8 +155,13 @@ def infer_and_align(
     with torch.inference_mode():
         prediction = teacher.infer(batch.left, batch.right)
     if not isinstance(prediction, TeacherPrediction):
-        raise A01WorkflowError("teacher inference must return TeacherPrediction after output conversion")
-    teacher_hw = tuple(int(value) for value in prediction.disparity.shape[-2:])
+        raise A01WorkflowError(
+            "teacher inference must return TeacherPrediction after output conversion"
+        )
+    teacher_hw = (
+        int(prediction.disparity.shape[-2]),
+        int(prediction.disparity.shape[-1]),
+    )
     return align_teacher_prediction(
         prediction,
         _alignment(sample, teacher_hw=teacher_hw),
@@ -177,6 +182,7 @@ def collect_one_target(
     """Resume one cache item or compute it exactly once."""
 
     key = target_cache_key(sample, teacher, split_identity=split_identity, roles=roles)
+
     def produce() -> AlignedTeacherTarget:
         target = infer_and_align(sample, teacher, device=device)
         return replace(
@@ -225,11 +231,19 @@ def collect_targets(
                 cache_hits += 1
             else:
                 computed += 1
-        except (A01WorkflowError, TeacherContractError, TeacherUnavailableError, ValueError, OSError) as error:
+        except (
+            A01WorkflowError,
+            TeacherContractError,
+            TeacherUnavailableError,
+            ValueError,
+            OSError,
+        ) as error:
             failures.append(f"{sample.sample_id}: {type(error).__name__}: {error}")
             if stop_on_error:
                 raise A01WorkflowError(failures[-1]) from error
-    return A01CacheReport(processed, cache_hits, computed, tuple(failures), identity_hash, cache.root)
+    return A01CacheReport(
+        processed, cache_hits, computed, tuple(failures), identity_hash, cache.root
+    )
 
 
 def validate_cache(
@@ -291,10 +305,12 @@ def load_teacher_factory(spec: str, *, kwargs: Mapping[str, object] | None = Non
     try:
         factory = getattr(importlib.import_module(module_name), function_name)
     except (ImportError, AttributeError) as error:
-        raise A01WorkflowError(f"unable to import injected teacher factory {spec!r}: {error}") from error
+        raise A01WorkflowError(
+            f"unable to import injected teacher factory {spec!r}: {error}"
+        ) from error
     if not callable(factory):
         raise A01WorkflowError(f"injected teacher factory {spec!r} is not callable")
-    teacher = factory(**dict(kwargs or {}))
+    teacher = cast(Teacher, factory(**dict(kwargs or {})))
     if not callable(getattr(teacher, "infer", None)) or not hasattr(teacher, "identity"):
         raise A01WorkflowError("injected teacher factory must return the A01 Teacher protocol")
     return teacher

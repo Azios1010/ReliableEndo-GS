@@ -78,5 +78,5 @@ def test_original_scared_adapter_is_not_an_alias() -> None:
 
     assert original.name == "scared"
     assert corrected.name == "scared_c"
-    with pytest.raises(NotImplementedError):
+    with pytest.raises(ValueError, match="existing directory"):
         original.enumerate_sequences(Path("unused"))

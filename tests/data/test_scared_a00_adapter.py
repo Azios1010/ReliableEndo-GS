@@ -5,8 +5,8 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-import torch
 import tifffile
+import torch
 from PIL import Image
 
 from reliable_endo_gs.data.scared_a00 import (
@@ -22,9 +22,15 @@ def _fixture(root: Path, *, dataset_id: str = "dataset_1", with_protocol: bool =
     for name in ("frame_data", "left_finalpass", "right_finalpass", "disparity", "newpram_data"):
         (data / name).mkdir(parents=True, exist_ok=True)
     frame_id = "frame_data000000"
-    Image.fromarray(np.full((4, 5, 3), 128, dtype=np.uint8)).save(data / "left_finalpass" / f"{frame_id}.png")
-    Image.fromarray(np.full((4, 5, 3), 64, dtype=np.uint8)).save(data / "right_finalpass" / f"{frame_id}.png")
-    tifffile.imwrite(data / "disparity" / f"{frame_id}.tiff", np.full((4, 5), 8.0, dtype=np.float32))
+    Image.fromarray(np.full((4, 5, 3), 128, dtype=np.uint8)).save(
+        data / "left_finalpass" / f"{frame_id}.png"
+    )
+    Image.fromarray(np.full((4, 5, 3), 64, dtype=np.uint8)).save(
+        data / "right_finalpass" / f"{frame_id}.png"
+    )
+    tifffile.imwrite(
+        data / "disparity" / f"{frame_id}.tiff", np.full((4, 5), 8.0, dtype=np.float32)
+    )
     (data / "frame_data" / f"{frame_id}.json").write_text("{}", encoding="utf-8")
     transform = np.eye(4, dtype=np.float64)
     transform[0, 3] = -0.1

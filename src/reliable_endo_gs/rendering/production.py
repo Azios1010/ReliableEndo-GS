@@ -81,7 +81,7 @@ def native_camera_batch_from_rectified(
     *,
     znear: float = 0.01,
     zfar: float = 100.0,
-) -> "NativeCameraBatch":
+) -> NativeCameraBatch:
     """Construct Graphdeco settings from the first-party A00 camera contract.
 
     The projection convention is the explicit optical-axis, y-down A00
@@ -135,7 +135,9 @@ def native_camera_batch_from_rectified(
         campos=world_from_camera[:, :3, 3].contiguous(),
         tanfovx=(float(width) / (2.0 * fx)).contiguous(),
         tanfovy=(float(height) / (2.0 * fy)).contiguous(),
-        background=torch.zeros((intrinsics.shape[0], 3), dtype=intrinsics.dtype, device=intrinsics.device),
+        background=torch.zeros(
+            (intrinsics.shape[0], 3), dtype=intrinsics.dtype, device=intrinsics.device
+        ),
     )
 
 

@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import pytest
 import torch
 
-from reliable_endo_gs.training import stage1_scared_c as training
+from reliable_endo_gs.baseline.training import stage1_scared_c as training
 
 
 @pytest.mark.parametrize("steps", [3, 12])
