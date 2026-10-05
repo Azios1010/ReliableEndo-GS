@@ -1,0 +1,12 @@
+schema: a04_benchmark.v1
+data_role: final_test
+# null uses the saved checkpoint's input grid (currently 512x640).
+# Explicit [1024,1280] is a separate protocol; test memory before a full run.
+resolution_hw: null
+warmup: 3
+profile_repetitions: 5
+cloud_max_points: 2048
+cloud_chunk_size: 256
+log_every: 25
+# false: measurements under shared GPU load are diagnostics, not paper FPS parity.
+dedicated_gpu: false

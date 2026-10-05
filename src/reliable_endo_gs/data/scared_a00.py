@@ -20,6 +20,7 @@ import json
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import cast
 
 import torch
 import torch.nn.functional as functional
@@ -137,8 +138,8 @@ def _safe_relative_id(sample_id: str) -> tuple[str, str, str]:
     dataset_id, keyframe_id, frame_id = parts
     if dataset_id not in DEFAULT_A01_SCARED_ROLES.dataset_ids:
         raise ScaredA00SampleError(
-            "active A01 SCARED path accepts only dataset_1 through dataset_7; "
-            "SCARED-C and dataset_9 are rejected"
+            "active A01 SCARED path accepts only original SCARED dataset_1 through dataset_9; "
+            "SCARED-C and dataset_10+ are rejected"
         )
     if not keyframe_id.startswith("keyframe_") or not frame_id:
         raise ScaredA00SampleError("sample_id has an invalid keyframe or frame component")
@@ -262,7 +263,7 @@ class A01ManifestEntry:
 
     def __post_init__(self) -> None:
         _safe_relative_id(self.sample_id)
-        if self.data_role not in ("teacher_fit", "qualification"):
+        if self.data_role not in ("final_train", "final_test"):
             raise ScaredA00SampleError(f"unsupported active A01 role {self.data_role!r}")
 
     def to_dict(self) -> dict[str, str]:
@@ -271,7 +272,7 @@ class A01ManifestEntry:
 
 @dataclass(frozen=True, slots=True)
 class A01Manifest:
-    """Explicit sample index for the active seven-fold A01 role policy."""
+    """Explicit sample index for the active nine-fold A01 role policy."""
 
     role_contract_hash: str
     entries: tuple[A01ManifestEntry, ...]
@@ -523,6 +524,58 @@ class ScaredA00Adapter:
             )
         return paths
 
+    def validate_deployment_files(self, sample_id: str, *, data_role: str) -> dict[str, object]:
+        """Decode deployment RGB and validate calibration/protocol, without GT or hashing images.
+
+        This CPU preflight uses the loader's metadata readers, RGB codec
+        conversion and camera contract. It retains only shapes/counts,
+        never deployment tensors.
+        """
+
+        normalized = self.roles.validate_sample_id(sample_id, role=data_role, cache=False)
+        left_path, right_path, frame_path, newpram_path, _, _, keyframe_dir = self._paths(
+            normalized, include_supervision=False
+        )
+        frame_data = _load_json(frame_path, "frame_data")
+        newpram = _load_json(newpram_path, "newpram_data")
+        protocol = _load_protocol(keyframe_dir, frame_data, newpram)
+        camera = RectifiedStereoCamera(
+            _matrix(newpram.get("intr0"), "newpram.intr0", (3, 3)).float().unsqueeze(0),
+            _matrix(newpram.get("intr1"), "newpram.intr1", (3, 3)).float().unsqueeze(0),
+            _extract_relative_transform(protocol, frame_data, newpram).float().unsqueeze(0),
+            True,
+        )
+
+        def image_shape(path: Path) -> tuple[int, int]:
+            # RGB conversion is the same codec operation as _read_image.
+            # Pillow RGB is uint8: finiteness and 0..255 are structural.
+            # Avoid allocating/checking full float tensors during preflight.
+            try:
+                from PIL import Image
+
+                with Image.open(path) as image:
+                    rgb = image.convert("RGB")
+                    rgb.load()  # Decode the complete file, not just its header.
+                    if protocol.image_range == "float01":
+                        extrema = cast(tuple[tuple[int, int], ...], rgb.getextrema())
+                        if any(low < 0 or high > 1 for low, high in extrema):
+                            raise ScaredA00SampleError(f"image {path} is not finite in [0,1]")
+                    return rgb.height, rgb.width
+            except (OSError, ValueError) as error:
+                raise ScaredA00SampleError(f"unable to decode RGB image {path}: {error}") from error
+
+        left_shape = image_shape(left_path)
+        right_shape = image_shape(right_path)
+        if left_shape != right_shape:
+            raise ScaredA00SampleError("left/right processed images must have matching shape")
+        return {
+            "sample_id": normalized,
+            "data_role": data_role,
+            "image_hw": left_shape,
+            "baseline_m": float(camera.baseline.item()),
+            "ground_truth_loaded": False,
+        }
+
     def load(
         self,
         sample_id: str,
@@ -631,6 +684,13 @@ class ScaredA00Adapter:
                 raise ScaredA00SampleError(
                     f"disparity shape {tuple(disparity.shape)} does not match processed image {(height, width)}"
                 )
+            # Invalid zero targets must stay invalid when asymmetric crops
+            # change disparity coordinates. Preserve source validity separately.
+            source_valid = torch.isfinite(disparity) & (disparity > 0)
+            source_valid = source_valid[
+                crop_xy_left[1] : crop_xy_left[1] + resolved_crop_hw[0],
+                crop_xy_left[0] : crop_xy_left[0] + resolved_crop_hw[1],
+            ]
             disparity = disparity[
                 crop_xy_left[1] : crop_xy_left[1] + resolved_crop_hw[0],
                 crop_xy_left[0] : crop_xy_left[0] + resolved_crop_hw[1],
@@ -645,7 +705,15 @@ class ScaredA00Adapter:
                     .squeeze(0)
                 )
                 disparity = disparity * (output_hw[1] / resolved_crop_hw[1])
-            valid = torch.isfinite(disparity) & (disparity > 0)
+                source_valid = (
+                    functional.interpolate(
+                        source_valid[None, None].float(), size=output_hw, mode="nearest"
+                    )
+                    .squeeze(0)
+                    .squeeze(0)
+                    .bool()
+                )
+            valid = source_valid & torch.isfinite(disparity) & (disparity > 0)
             safe_disparity = torch.where(
                 torch.isfinite(disparity), disparity, torch.zeros_like(disparity)
             )
@@ -748,7 +816,7 @@ def build_a01_manifest(
     roles: A01ScaredDataRoles = DEFAULT_A01_SCARED_ROLES,
     require_all_folds: bool = True,
 ) -> A01Manifest:
-    """Index existing processed frames without inventing missing samples."""
+    """Index processed folds 1–9 and assign final train/test roles."""
 
     root = Path(root)
     entries: list[A01ManifestEntry] = []

@@ -28,7 +28,7 @@ from reliable_endo_gs.teachers.roles import DEFAULT_A01_SCARED_ROLES
 
 @dataclass(frozen=True, slots=True)
 class ScaredAdapter:
-    """Validate/index active SCARED dataset_1..dataset_7 processed roots."""
+    """Validate/index active SCARED dataset_1..dataset_9 processed roots."""
 
     name: str = "scared"
     layout_validation_status: str = "implemented_a00_processed_layout_v1"
@@ -89,7 +89,7 @@ class ScaredAdapter:
         status = "USABLE" if valid else ("INCOMPLETE" if sample_count else "INVALID")
         messages = (
             f"STATUS: {status}",
-            f"found {len(present)}/7 active folds and {sample_count} frame records",
+            f"found {len(present)}/9 active folds and {sample_count} frame records",
             *issues,
         )
         return DatasetValidationReport(
@@ -122,8 +122,8 @@ class ScaredAdapter:
     def inspect_metadata(self, root: Path, sequence_id: str) -> Mapping[str, object]:
         if sequence_id not in DEFAULT_A01_SCARED_ROLES.dataset_ids:
             raise KeyError(
-                "active SCARED metadata accepts only dataset_1 through dataset_7; "
-                "SCARED-C and dataset_9 are not active"
+                "active SCARED metadata accepts only dataset_1 through dataset_9; "
+                "SCARED-C and dataset_10+ are not active"
             )
         sequence_root = Path(root) / sequence_id
         if not sequence_root.is_dir():

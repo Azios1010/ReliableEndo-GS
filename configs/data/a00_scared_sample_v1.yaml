@@ -1,0 +1,58 @@
+schema_version: 1
+preprocessing_id: reliable_endo_gs_a00_scared_sample_v1
+
+input:
+  video_file: data/rgb.mp4
+  frame_data_archive: data/frame_data.tar.gz
+  scene_points_archive: data/scene_points.tar.gz
+  frame_height: 1024
+  frame_width: 1280
+  stacked_video_layout: top_left_bottom_right
+  stacked_scene_points_layout: top_left_bottom_right_xyz
+  calibration_field: camera-calibration
+
+rectification:
+  flags: CALIB_ZERO_DISPARITY
+  alpha: 0.0
+  map_type: CV_32FC1
+  image_interpolation: INTER_LINEAR
+  border_mode: BORDER_CONSTANT
+  border_value: 0
+  pixel_center: integer
+  crop: none
+  resize: none
+
+calibration:
+  source_field: frame_data.camera-calibration.R/T
+  calibration_value_source_file: endoscope_calibration.yaml
+  # This hash pins the numeric R/T source only; it does not establish units,
+  # producer semantics, or camera order. Geometry validation resolves these.
+  trusted_calibration_value_source_sha256: 597878f105e38ff2c2b7973d2c3a6af31293b904ca3b73bbe0a5f239466e6e9e
+  output_transform_field: newpram.T_R_from_L
+  output_translation_unit: m
+  output_direction: right_from_left
+
+disparity:
+  source: scene_points_left_xyz_projected_through_rectified_P1_P2
+  units: pixels
+  sign: u_left_minus_right
+  reference: left
+  invalid_value: 0.0
+  rasterization: nearest_integer_pixel_nearest_positive_z
+
+validation:
+  rectified_rotation_atol: 0.00001
+  rectified_translation_yz_atol_mm: 0.001
+  # Scene-point scale is grounded in the metric SCARED GT/cross-view evidence,
+  # not declared by endoscope_calibration.yaml.
+  scene_points_xyz_unit: mm
+  full_image_support_required: true
+  q_vs_a00_max_abs_error_mm: 0.01
+  metric_gt_max_abs_error_mm: 0.05
+  cross_view_evidence_tolerance_mm: 0.01
+  cross_view_acceptance:
+    max_declared_median_mm: 0.2
+    max_declared_p90_mm: 0.5
+    max_declared_p99_mm: 1.0
+    min_control_to_declared_p90_ratio: 2.0
+    min_control_p90_gap_mm: 0.05

@@ -283,8 +283,8 @@ class ReferenceConfig:
     stage: str = "reference"
     quality_first: bool = True
     latency_optimization: bool = False
-    data_role: str = "teacher_fit"
-    split_identity: str = "a01-scared-dataset1-7-v1"
+    data_role: str = "final_train"
+    split_identity: str = "a01-scared-final-train-1-7-test-8-9-v1"
     active_dataset_ids: tuple[str, ...] = A01_DATASET_IDS
     excluded_dataset_names: tuple[str, ...] = ("SCARED-C",)
     teacher_identity: Mapping[str, object] = field(
@@ -331,7 +331,7 @@ class ReferenceConfig:
             raise ReferenceConfigError(str(error)) from error
         if tuple(self.active_dataset_ids) != A01_DATASET_IDS:
             raise ReferenceConfigError(
-                "active_dataset_ids must be exactly SCARED dataset_1 through dataset_7"
+                "active_dataset_ids must be exactly original SCARED dataset_1 through dataset_9"
             )
         if not self.excluded_dataset_names or "SCARED-C" not in self.excluded_dataset_names:
             raise ReferenceConfigError("SCARED-C must remain explicitly excluded")
@@ -471,9 +471,9 @@ class ReferenceConfig:
             stage=_string(raw.get("stage", "reference"), "stage"),
             quality_first=bool(raw.get("quality_first", True)),
             latency_optimization=bool(raw.get("latency_optimization", False)),
-            data_role=_string(raw.get("data_role", "teacher_fit"), "data_role"),
+            data_role=_string(raw.get("data_role", "final_train"), "data_role"),
             split_identity=_string(
-                raw.get("split_identity", "a01-scared-dataset1-7-v1"), "split_identity"
+                raw.get("split_identity", "a01-scared-final-train-1-7-test-8-9-v1"), "split_identity"
             ),
             active_dataset_ids=tuple(
                 _string(item, "active_dataset_ids[]")

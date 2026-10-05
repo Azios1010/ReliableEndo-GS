@@ -50,12 +50,14 @@ def _camera(batch_size: int = 1, dtype: torch.dtype = torch.float64) -> Rectifie
     return RectifiedStereoCamera(left, right, transform, True)
 
 
-def _batch(batch_size: int = 1) -> DeploymentStereoBatch:
+def _batch(
+    batch_size: int = 1, *, dtype: torch.dtype = torch.float64
+) -> DeploymentStereoBatch:
     height, width = 5, 5
-    left = torch.full((batch_size, 3, height, width), 0.25, dtype=torch.float64)
+    left = torch.full((batch_size, 3, height, width), 0.25, dtype=dtype)
     right = torch.full_like(left, 0.2)
     support = torch.ones((batch_size, 1, height, width), dtype=torch.bool)
-    return DeploymentStereoBatch(left, right, _camera(batch_size), support)
+    return DeploymentStereoBatch(left, right, _camera(batch_size, dtype), support)
 
 
 def _target(batch: DeploymentStereoBatch, *, alpha_support: bool = True) -> AlignedTeacherTarget:
@@ -221,7 +223,7 @@ def test_reference_forward_freezes_teacher_records_provenance_and_profiles() -> 
     assert result.provenance_record.calibration["calibration_identity"] == (
         "explicit-calibration-at-forward"
     )
-    assert result.provenance_record.data_role == "teacher_fit"
+    assert result.provenance_record.data_role == "final_train"
     assert result.provenance_record.excluded_dataset_names == ("SCARED-C",)
     assert result.metrics["quality_target_status"] == (
         "not_assessed_without_declared_observation_metric"
@@ -234,6 +236,66 @@ def test_reference_forward_freezes_teacher_records_provenance_and_profiles() -> 
     assert profiled.metrics["valid_gaussian_count"] == result.metrics["valid_gaussian_count"]
     assert len(profile.latencies_ms) == 2
     assert profile.peak_memory_bytes == 123
+
+
+@pytest.mark.parametrize("amp_dtype", [torch.float16, torch.bfloat16])
+def test_reference_amp_keeps_geometry_and_renderer_fp32(amp_dtype: torch.dtype) -> None:
+    from reliable_endo_gs.rendering.field import FieldRenderRequest
+    from reliable_endo_gs.rendering.production import native_camera_batch_from_rectified
+
+    class PrecisionRenderer(_FakeRenderer):
+        def render(self, request: object) -> RenderOutput:
+            assert isinstance(request, FieldRenderRequest)
+            assert not torch.is_autocast_enabled("cpu")
+            field = request.field
+            for value in (field.means3d, field.scales, field.rotations, field.opacities):
+                assert value.dtype == torch.float32
+            native = native_camera_batch_from_rectified(
+                request.camera, request.image_hw, request.view
+            )
+            assert native.viewmatrix.dtype == native.projmatrix.dtype == torch.float32
+            output = super().render(request)
+            # Exercise head gradients through composition and a differentiable
+            # renderer surrogate; no native extension or medical data is used.
+            signal = field.scales.mean() + field.opacities.mean() + field.rotations.mean()
+            return RenderOutput(image=output.image + 0.01 * signal, depth=output.depth)
+
+    teacher = _FakeTeacher()
+    renderer = PrecisionRenderer()
+    model = ReferenceReconstructionModel(
+        teacher=teacher,
+        renderer=renderer,
+        config=replace(ReferenceConfig(), head_hidden_dims=(8, 8)),
+    )
+    with torch.no_grad():
+        model.head.output.bias.fill_(0.05)
+    linear_dtypes: list[torch.dtype] = []
+    hook = model.head.output.register_forward_hook(
+        lambda _module, _inputs, output: linear_dtypes.append(output.dtype)
+    )
+    try:
+        with torch.autocast("cpu", dtype=amp_dtype):
+            result = model(_batch(dtype=torch.float32))
+    finally:
+        hook.remove()
+
+    assert linear_dtypes == [amp_dtype]
+    assert len(renderer.requests) == 2
+    prior = result.prior
+    assert prior.mu.dtype == prior.R0.dtype == prior.S0.dtype == torch.float32
+    assert prior.cov_surface.dtype == torch.float32
+    field = result.gaussians
+    assert field.cov_surface is not None and field.cov_surface.dtype == torch.float32
+    rotation = quaternion_to_rotation_matrix(field.rotations)
+    expected_covariance = rotation @ torch.diag_embed(field.scales.square())
+    expected_covariance = expected_covariance @ rotation.transpose(-1, -2)
+    torch.testing.assert_close(field.cov_surface, expected_covariance, rtol=1e-5, atol=1e-10)
+    result.render_left.image.square().mean().backward()
+    gradients = [parameter.grad for parameter in model.head.parameters()]
+    assert all(gradient is not None and torch.isfinite(gradient).all() for gradient in gradients)
+    assert model.head.output.weight.grad is not None
+    assert bool((model.head.output.weight.grad != 0).any())
+    assert teacher.weight.grad is None and not teacher.weight.requires_grad
 
 
 def test_checkpoint_and_config_roundtrip_keep_teacher_renderer_external(tmp_path: Path) -> None:
@@ -302,5 +364,5 @@ def test_reference_rejects_scared_c_and_unverified_sample_roles() -> None:
     model = ReferenceReconstructionModel(teacher=None, renderer=_FakeRenderer())
     batch = _batch()
     target = _target(batch)
-    with pytest.raises(ValueError, match="dataset_1 through dataset_7|unknown dataset"):
+    with pytest.raises(ValueError, match="dataset_1 through dataset_9|unknown dataset"):
         model(batch, target=target, sample_ids=("SCARED-C/frame_000",))

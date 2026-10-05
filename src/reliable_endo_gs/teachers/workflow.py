@@ -216,7 +216,15 @@ def collect_targets(
     identity_hash = _teacher_identity_hash(teacher)
     processed = cache_hits = computed = 0
     failures: list[str] = []
-    for sample in adapter.iter_samples(include_supervision=False, output_hw=output_hw):
+    for entry in adapter.manifest.entries:
+        if entry.data_role not in roles.cache_roles:
+            continue
+        sample = adapter.load(
+            entry.sample_id,
+            data_role=entry.data_role,
+            include_supervision=False,
+            output_hw=output_hw,
+        )
         try:
             result = collect_one_target(
                 sample,

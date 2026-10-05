@@ -1,0 +1,15 @@
+# Constructor arguments from the official DEFOM-Stereo demo; bind to a matching
+# checkpoint and source revision. These defaults do not establish compatibility.
+mixed_precision: false
+dinov2_encoder: vitl
+idepth_scale: 0.5
+hidden_dims: [128, 128, 128]
+corr_implementation: reg
+shared_backbone: false
+corr_levels: 2
+corr_radius: 4
+scale_list: [0.125, 0.25, 0.5, 0.75, 1, 1.25, 1.5, 2]
+scale_corr_radius: 2
+n_downsample: 2
+context_norm: batch
+n_gru_layers: 3
