@@ -1,0 +1,13 @@
+# CPU CI versions corresponding to the locally validated Python 3.10 stack.
+# Install torch/torchvision from the official CPU wheel index first.
+# This file constrains CI only; it does not change the server training runtime.
+torch==2.7.1
+torchvision==0.22.1
+numpy==2.2.6
+scipy==1.15.3
+tifffile==2025.5.10
+omegaconf==2.3.1
+ruff==0.16.7
+mypy==2.3.1
+pytest==9.1.1
+types-PyYAML==6.0.12.20260906
