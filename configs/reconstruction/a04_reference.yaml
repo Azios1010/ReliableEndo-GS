@@ -4,10 +4,10 @@ stage: reference
 quality_first: true
 latency_optimization: false
 
-# A01 owns this role contract. All seven SCARED folds are training/development
-# roles; SCARED-C is explicitly excluded from the A04 reference path.
-data_role: teacher_fit
-split_identity: a01-scared-dataset1-7-v1
+# A01 owns this role contract. Folds 1–7 are final training data, and folds
+# 8–9 remain reserved for the final evaluation. SCARED-C is excluded.
+data_role: final_train
+split_identity: a01-scared-final-train-1-7-test-8-9-v1
 active_dataset_ids:
   - dataset_1
   - dataset_2
@@ -16,6 +16,8 @@ active_dataset_ids:
   - dataset_5
   - dataset_6
   - dataset_7
+  - dataset_8
+  - dataset_9
 excluded_dataset_names:
   - SCARED-C
 

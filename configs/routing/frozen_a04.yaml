@@ -1,0 +1,19 @@
+schema: frozen_a04_action_selector.v1
+# Experimental user-authorized extension; this does not certify Gate I/II.
+# A04 reference + teacher frozen. Only repair heads and then selector learn.
+tile_hw: [256, 320]
+halo: 4
+width: 32
+max_disparity_px: 4.0
+# Learned A04 opacity can be above 0.9999. Re-composition must not reclip it
+# to the old prior epsilon; use the explicit FP32 repair stabilization value.
+composition_alpha_epsilon: 0.0000001
+learning_rate: 0.001
+# U = decrease in mean LR Charbonnier - lambda * measured milliseconds.
+cost_weight_per_ms: 0.000001
+budget_ms: 1000.0
+action_epochs: 1
+selector_epochs: 1
+checkpoint_every: 100
+max_consecutive_skips: 100
+seed: 0

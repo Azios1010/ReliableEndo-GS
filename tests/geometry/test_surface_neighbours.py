@@ -26,7 +26,7 @@ def test_shifted_neighbour_masks_every_border_without_wraparound(dy: int, dx: in
     assert torch.equal(mask[0], expected_mask)
     # Values outside support may be rolled, but they must never be admitted by
     # the mask; supported values must always come from the in-bounds source.
-    torch.testing.assert_close(shifted[0, expected_mask, 0], expected_values[expected_mask])
+    torch.testing.assert_close(shifted[0, ..., 0][expected_mask], expected_values[expected_mask])
 
 
 def test_shifted_neighbour_rejects_wrapped_corner_values() -> None:

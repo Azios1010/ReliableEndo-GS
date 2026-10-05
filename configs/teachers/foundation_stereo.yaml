@@ -1,0 +1,19 @@
+# Runtime template: configure external artifacts and replace null pins before use.
+# RELIABLE_ENDO_TEACHER_CONFIG points to this YAML or an external filled copy.
+schema_version: 1
+model: foundation_stereo
+source_root: ${RELIABLE_ENDO_FOUNDATION_ROOT}
+source_revision: null   # full git rev-parse HEAD (40 hex)
+source_sha256: null     # source_tree_sha256(source_root)
+checkpoint: ${RELIABLE_ENDO_FOUNDATION_CHECKPOINT}
+checkpoint_sha256: null
+license_file: ${RELIABLE_ENDO_FOUNDATION_ROOT}/LICENSE
+license_sha256: null
+architecture: ${RELIABLE_ENDO_FOUNDATION_ARCHITECTURE}  # matching checkpoint cfg.yaml
+architecture_sha256: null
+checkpoint_format: model
+precision: float32
+valid_iters: 32
+mode: regular           # explicitly choose hierarchical for high-resolution runs
+small_ratio: 0.5
+scale_iters: 8          # unused by FoundationStereo, retained in config identity

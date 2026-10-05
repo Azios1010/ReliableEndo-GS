@@ -10,6 +10,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from importlib import import_module
+from math import isfinite
 from typing import Any, Protocol
 
 import torch
@@ -25,6 +26,8 @@ from reliable_endo_gs.rendering.protocol import (
 
 GRAPHDECO_RASTERIZER_REVISION = "59f5f77e3ddbac3ed9db93ec2cfe99ed6c5d121d"
 GRAPHDECO_COVARIANCE_ORDER = ("xx", "xy", "xz", "yy", "yz", "zz")
+# Pinned auxiliary.h::in_frustum culls p_view.z <= 0.2 in native scene units.
+GRAPHDECO_NEAR_THRESHOLD = 0.2
 
 
 def pack_graphdeco_covariance(covariance: torch.Tensor) -> torch.Tensor:
@@ -81,6 +84,7 @@ def native_camera_batch_from_rectified(
     *,
     znear: float = 0.01,
     zfar: float = 100.0,
+    native_units_per_metre: float = 1.0,
 ) -> NativeCameraBatch:
     """Construct Graphdeco settings from the first-party A00 camera contract.
 
@@ -88,7 +92,9 @@ def native_camera_batch_from_rectified(
     convention.  ``viewmatrix`` is the transposed world-to-camera transform
     expected by the pinned Graphdeco ABI, and ``projmatrix`` is its composed
     view/projection matrix.  No baseline or third-party camera dictionaries are
-    imported here.
+    imported here. ``znear/zfar`` are in metres. Camera translations and
+    clip distances are converted to the declared native scene units; focal
+    lengths and the input camera remain unchanged.
     """
 
     if not isinstance(camera, RectifiedStereoCamera):
@@ -96,8 +102,10 @@ def native_camera_batch_from_rectified(
     view = CameraView(view)
     if len(image_hw) != 2 or any(type(item) is not int or item < 1 for item in image_hw):
         raise ValueError("image_hw must contain positive integer height and width")
-    if znear <= 0 or zfar <= znear:
+    if not isfinite(znear) or not isfinite(zfar) or znear <= 0 or zfar <= znear:
         raise ValueError("znear/zfar must be positive with zfar > znear")
+    if not isfinite(native_units_per_metre) or native_units_per_metre <= 0:
+        raise ValueError("native_units_per_metre must be finite and positive")
     intrinsics = camera.K_L if view is CameraView.LEFT else camera.K_R
     if view is CameraView.LEFT:
         world_from_camera = torch.eye(4, dtype=intrinsics.dtype, device=intrinsics.device).repeat(
@@ -105,6 +113,12 @@ def native_camera_batch_from_rectified(
         )
     else:
         world_from_camera = torch.linalg.inv(camera.T_R_from_L)
+    # Change native scene units, including the stereo camera translation.
+    # A00 camera tensors remain in metres and are never modified in place.
+    world_from_camera = world_from_camera.clone()
+    world_from_camera[:, :3, 3] *= native_units_per_metre
+    znear *= native_units_per_metre
+    zfar *= native_units_per_metre
     world_to_camera = torch.linalg.inv(world_from_camera)
     viewmatrix = world_to_camera.transpose(-1, -2).contiguous()
     height, width = image_hw
@@ -138,6 +152,7 @@ def native_camera_batch_from_rectified(
         background=torch.zeros(
             (intrinsics.shape[0], 3), dtype=intrinsics.dtype, device=intrinsics.device
         ),
+        native_units_per_metre=native_units_per_metre,
     )
 
 
@@ -157,6 +172,7 @@ class NativeRasterizationSettings:
     campos: torch.Tensor
     prefiltered: bool
     debug: bool
+    native_units_per_metre: float = 1.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -164,7 +180,9 @@ class NativeCameraBatch:
     """Explicit, already-resolved native camera settings for a request.
 
     Tensor shapes are ``viewmatrix/projmatrix [B,4,4]``, ``campos [B,3]``,
-    ``tanfovx/tanfovy [B]``, and ``background [B,3]``.  No field is derived
+    ``tanfovx/tanfovy [B]``, and ``background [B,3]``. Translations use
+    ``native_units_per_metre``; the ABI dispatcher converts metric Gaussian
+    coordinates and support to those same units. No field is derived
     from :class:`~reliable_endo_gs.contracts.CameraBatch` by this adapter.
     """
 
@@ -178,6 +196,7 @@ class NativeCameraBatch:
     sh_degree: int = 0
     prefiltered: bool = False
     debug: bool = False
+    native_units_per_metre: float = 1.0
 
     def __post_init__(self) -> None:
         tensors = {
@@ -214,6 +233,8 @@ class NativeCameraBatch:
             raise ValueError("sh_degree must be non-negative")
         if not torch.isfinite(torch.tensor(self.scale_modifier)) or self.scale_modifier <= 0:
             raise ValueError("scale_modifier must be finite and strictly positive")
+        if not isfinite(self.native_units_per_metre) or self.native_units_per_metre <= 0:
+            raise ValueError("native_units_per_metre must be finite and positive")
 
     @property
     def batch_size(self) -> int:
@@ -244,6 +265,7 @@ class NativeCameraBatch:
             campos=self.campos[index],
             prefiltered=self.prefiltered,
             debug=self.debug,
+            native_units_per_metre=self.native_units_per_metre,
         )
 
 
@@ -422,6 +444,10 @@ class ProductionRenderer:
             raise NativeRendererConfigurationError(
                 "native camera settings must share dtype with renderer request"
             )
+        if camera_settings.native_units_per_metre != 1.0 and request.length_unit != "m":
+            raise NativeRendererInputError(
+                "native_units_per_metre conversion requires a request in metres"
+            )
         backend = self._backend if self._backend is not None else GraphdecoRasterizerBackend()
 
         images: list[torch.Tensor] = []
@@ -446,6 +472,14 @@ class ProductionRenderer:
             scales, rotations, covariance = self._native_gaussian_arguments(
                 request, batch_index, valid_indices
             )
+            # Uniform unit conversion at the ABI boundary preserves screen
+            # projection/covariance and autograd. Camera matrices use the same
+            # scale; first-party GaussianField/RendererRequest stay in metres.
+            units = settings.native_units_per_metre
+            if units != 1.0:
+                means3d = means3d * units
+                scales = None if scales is None else scales * units
+                covariance = None if covariance is None else covariance * (units * units)
             color, radii = backend.render(
                 settings,
                 means3d=means3d,
@@ -589,12 +623,35 @@ class ProductionFieldRenderer:
     An injected backend is supported only for focused tests; with no backend,
     the optional compiled extension is loaded lazily and unavailable status is
     reported as ``NativeRendererUnavailableError``.
+    A uniform native scene-unit conversion maps the pinned kernel's 0.2 near
+    threshold to ``znear_m``. Metric geometry and historical rendering paths
+    remain unchanged. The conversion policy is bound into renderer identity.
     """
 
-    identity = f"graphdeco_{GRAPHDECO_RASTERIZER_REVISION[:7]}_a00_camera_v1"
-
-    def __init__(self, *, backend: NativeRasterizerBackend | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        backend: NativeRasterizerBackend | None = None,
+        znear_m: float = 0.01,
+        zfar_m: float = 100.0,
+    ) -> None:
+        if not isfinite(znear_m) or not isfinite(zfar_m) or znear_m <= 0 or zfar_m <= znear_m:
+            raise ValueError("znear_m/zfar_m must be finite with 0 < znear_m < zfar_m")
         self.backend = backend
+        self.znear_m = znear_m
+        self.zfar_m = zfar_m
+        self.native_units_per_metre = GRAPHDECO_NEAR_THRESHOLD / znear_m
+        self.identity = (
+            f"graphdeco_{GRAPHDECO_RASTERIZER_REVISION[:7]}_a00_camera_v2"
+            f"_near_{znear_m:.17g}m_far_{zfar_m:.17g}m"
+            f"_units_{self.native_units_per_metre:.17g}"
+        )
+
+    @property
+    def metric_near_plane_m(self) -> float:
+        """Native centre-culling threshold, expressed in first-party metres."""
+
+        return self.znear_m
 
     @property
     def native_available(self) -> bool:
@@ -611,7 +668,14 @@ class ProductionFieldRenderer:
                 "install the pinned CUDA extension before native rendering"
             )
         view = CameraView(request.view)
-        settings = native_camera_batch_from_rectified(request.camera, request.image_hw, view)
+        settings = native_camera_batch_from_rectified(
+            request.camera,
+            request.image_hw,
+            view,
+            znear=self.znear_m,
+            zfar=self.zfar_m,
+            native_units_per_metre=self.native_units_per_metre,
+        )
         renderer = ProductionRenderer({view: settings}, backend=self.backend)
         return ExistingRendererBridge(renderer).render(request)
 

@@ -21,9 +21,10 @@ class A01RoleError(ValueError):
 
 
 A01_DATASET_NAME = "scared"
-A01_DATASET_IDS: tuple[str, ...] = tuple(f"dataset_{index}" for index in range(1, 8))
-A01_FINAL_DATASET_IDS: tuple[str, ...] = ()
-A01_CACHE_ROLES: tuple[str, ...] = ("teacher_fit", "qualification")
+A01_TRAIN_DATASET_IDS: tuple[str, ...] = tuple(f"dataset_{index}" for index in range(1, 8))
+A01_FINAL_DATASET_IDS: tuple[str, ...] = ("dataset_8", "dataset_9")
+A01_DATASET_IDS: tuple[str, ...] = A01_TRAIN_DATASET_IDS + A01_FINAL_DATASET_IDS
+A01_CACHE_ROLES: tuple[str, ...] = ("final_train",)
 
 
 def _as_mapping(value: object, context: str) -> dict[str, object]:
@@ -43,32 +44,30 @@ def _normal_ids(values: object, context: str) -> tuple[str, ...]:
     if len(set(result)) != len(result):
         raise A01RoleError(f"{context} contains duplicate identifiers")
     if any(value not in A01_DATASET_IDS for value in result):
-        raise A01RoleError(f"{context} contains an identifier outside dataset_1..dataset_7")
+        raise A01RoleError(f"{context} contains an identifier outside dataset_1..dataset_9")
     return result
 
 
 @dataclass(frozen=True, slots=True)
 class A01ScaredDataRoles:
-    """Explicit SCARED fold roles for A01 target collection.
+    """Explicit final SCARED train/test roles for A01 and A04.
 
-    ``teacher_fit`` is adaptation/cache-development data, ``qualification``
-    is held out from fitting for candidate comparison.  All seven user-directed
-    SCARED folds are active for training/development; later final-evaluation
-    freeze rules are not applied to this A01 target cache.
+    Folds 1–7 are the final training pool. Folds 8–9 are reserved for final
+    evaluation and are never admitted to the A01 training-target cache.
     """
 
     dataset_name: str = A01_DATASET_NAME
     root_env_var: str = "RELIABLE_ENDO_DATA_ROOT"
-    root_subdir: str = "scared"
+    root_subdir: str = "SCARED"
     dataset_ids: tuple[str, ...] = A01_DATASET_IDS
     roles: Mapping[str, tuple[str, ...]] = field(
         default_factory=lambda: {
-            "teacher_fit": ("dataset_1", "dataset_2", "dataset_3"),
-            "qualification": ("dataset_4", "dataset_5", "dataset_6", "dataset_7"),
+            "final_train": A01_TRAIN_DATASET_IDS,
+            "final_test": A01_FINAL_DATASET_IDS,
         }
     )
     cache_roles: tuple[str, ...] = A01_CACHE_ROLES
-    final_roles: tuple[str, ...] = ()
+    final_roles: tuple[str, ...] = ("final_test",)
 
     def __post_init__(self) -> None:
         if self.dataset_name != A01_DATASET_NAME:
@@ -84,10 +83,17 @@ class A01ScaredDataRoles:
             raise A01RoleError("dataset root must be a portable relative subdirectory")
         dataset_ids = tuple(self.dataset_ids)
         if dataset_ids != A01_DATASET_IDS:
-            raise A01RoleError("active A01 roles must enumerate dataset_1 through dataset_7")
+            raise A01RoleError("active A01 roles must enumerate dataset_1 through dataset_9")
         normalized_roles = {str(name): tuple(values) for name, values in self.roles.items()}
-        if set(normalized_roles) != {"teacher_fit", "qualification"}:
-            raise A01RoleError("roles must define teacher_fit and qualification")
+        if set(normalized_roles) != {"final_train", "final_test"}:
+            raise A01RoleError("roles must define final_train and final_test")
+        if normalized_roles != {
+            "final_train": A01_TRAIN_DATASET_IDS,
+            "final_test": A01_FINAL_DATASET_IDS,
+        }:
+            raise A01RoleError(
+                "final roles must map dataset_1..dataset_7 to train and dataset_8..9 to test"
+            )
         seen: set[str] = set()
         for role_name, values in normalized_roles.items():
             if not values:
@@ -100,10 +106,10 @@ class A01ScaredDataRoles:
             seen.update(values)
         if seen != set(A01_DATASET_IDS):
             raise A01RoleError("roles must cover every active dataset exactly once")
-        if tuple(self.final_roles):
-            raise A01RoleError("A01 target collection has no protected final role")
-        if set(self.cache_roles) != set(normalized_roles):
-            raise A01RoleError("all active A01 roles must be approved for target caching")
+        if tuple(self.final_roles) != ("final_test",):
+            raise A01RoleError("final_test must be the only protected final role")
+        if set(self.cache_roles) != {"final_train"}:
+            raise A01RoleError("only final_train is approved for A01 target caching")
         object.__setattr__(self, "roles", normalized_roles)
 
     @property
@@ -141,7 +147,9 @@ class A01ScaredDataRoles:
         normalized = sample_id.strip().replace("\\", "/")
         dataset_id = normalized.split("/", maxsplit=1)[0]
         if dataset_id not in self.dataset_ids:
-            raise A01RoleError("sample_id must begin with dataset_1 through dataset_7")
+            raise A01RoleError(
+                "sample_id must begin with original SCARED dataset_1 through dataset_9"
+            )
         if "/" not in normalized or any(part in {"", ".", ".."} for part in normalized.split("/")):
             raise A01RoleError("sample_id must be a portable relative identifier")
         if cache:
@@ -152,7 +160,7 @@ class A01ScaredDataRoles:
 
     def to_dict(self) -> dict[str, object]:
         return {
-            "schema_version": 1,
+            "schema_version": 2,
             "dataset_name": self.dataset_name,
             "root_env_var": self.root_env_var,
             "root_subdir": self.root_subdir,
@@ -161,8 +169,8 @@ class A01ScaredDataRoles:
             "cache_roles": list(self.cache_roles),
             "final_roles": list(self.final_roles),
             "semantics": {
-                "teacher_fit": "candidate adaptation and development target cache",
-                "qualification": "held-out candidate comparison before reference freeze",
+                "final_train": "all original SCARED folds used to fit the final A04 reference",
+                "final_test": "dataset_8 and dataset_9 reserved for final evaluation only",
             },
         }
 
@@ -202,11 +210,11 @@ def load_a01_roles(path: Path) -> A01ScaredDataRoles:
     }
     if set(mapping) != required:
         raise A01RoleError(f"A01 role configuration keys must be exactly {sorted(required)}")
-    if mapping["schema_version"] != 1:
+    if mapping["schema_version"] != 2:
         raise A01RoleError("unsupported A01 role schema version")
     dataset_ids = _normal_ids(mapping["dataset_ids"], "dataset_ids")
     if dataset_ids != A01_DATASET_IDS:
-        raise A01RoleError("A01 config must enumerate dataset_1 through dataset_7")
+        raise A01RoleError("A01 config must enumerate dataset_1 through dataset_9")
     roles_mapping = _as_mapping(mapping["roles"], "roles")
     roles = {role: _normal_ids(values, f"roles.{role}") for role, values in roles_mapping.items()}
     cache_roles_raw = mapping["cache_roles"]
@@ -216,8 +224,8 @@ def load_a01_roles(path: Path) -> A01ScaredDataRoles:
     if not isinstance(final_roles_raw, Sequence) or isinstance(final_roles_raw, (str, bytes)):
         raise A01RoleError("final_roles must be a sequence")
     semantics = _as_mapping(mapping["semantics"], "semantics")
-    if set(semantics) != {"teacher_fit", "qualification"}:
-        raise A01RoleError("semantics must document both active A01 roles")
+    if set(semantics) != {"final_train", "final_test"}:
+        raise A01RoleError("semantics must document final_train and final_test")
     return A01ScaredDataRoles(
         dataset_name=str(mapping["dataset_name"]),
         root_env_var=str(mapping["root_env_var"]),
@@ -234,6 +242,7 @@ __all__ = [
     "A01_DATASET_IDS",
     "A01_DATASET_NAME",
     "A01_FINAL_DATASET_IDS",
+    "A01_TRAIN_DATASET_IDS",
     "A01RoleError",
     "A01ScaredDataRoles",
     "DEFAULT_A01_SCARED_ROLES",

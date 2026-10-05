@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import torch
+import torch.nn.functional as functional
 
 from reliable_endo_gs.contracts import RenderOutput
 from reliable_endo_gs.evaluation.stereo import MetricInputError, MetricResult
@@ -106,6 +107,47 @@ def lpips(*args: object, **kwargs: object) -> MetricResult:
 
     del args, kwargs
     raise UnsupportedMetricError("LPIPS requires an explicitly pinned optional backend")
+
+
+def windowed_ssim(predicted: torch.Tensor, target: torch.Tensor) -> MetricResult:
+    """Upstream-compatible RGB SSIM: Gaussian 11x11, sigma=1.5, zero padding.
+
+    Inputs are finite float RGB ``[B,3,H,W]`` in [0,1]. This is a full-image
+    metric; applying a mask after convolution would change the protocol.
+    The older :func:`ssim` remains the explicitly global development metric.
+    Reference: Endo-E2E-GS lib/loss.py::ssim at the pinned upstream revision.
+    """
+    _pair(predicted, target)
+    if predicted.shape[1] != 3:
+        raise MetricInputError("windowed SSIM requires RGB [B,3,H,W]")
+    if not bool(torch.isfinite(predicted).all() & torch.isfinite(target).all()):
+        raise MetricInputError("windowed SSIM requires finite full images")
+    x, y = predicted.float(), target.float()
+    if not bool(((x >= 0) & (x <= 1) & (y >= 0) & (y <= 1)).all()):
+        raise MetricInputError("windowed SSIM RGB must be in [0,1]")
+    # Compute the kernel in FP32, matching upstream's float Gaussian window.
+    axis = torch.arange(11, device=x.device, dtype=x.dtype) - 5
+    weights = torch.exp(-(axis.square()) / (2 * 1.5**2))
+    weights = weights / weights.sum()
+    kernel = (weights[:, None] * weights[None, :]).expand(3, 1, 11, 11).contiguous()
+
+    def smooth(image: torch.Tensor) -> torch.Tensor:
+        return functional.conv2d(image, kernel, padding=5, groups=3)
+
+    with torch.autocast(device_type=x.device.type, enabled=False):
+        ux, uy = smooth(x), smooth(y)
+        vx, vy = smooth(x.square()) - ux.square(), smooth(y.square()) - uy.square()
+        covariance = smooth(x * y) - ux * uy
+        score = ((2 * ux * uy + 0.01**2) * (2 * covariance + 0.03**2)) / (
+            (ux.square() + uy.square() + 0.01**2) * (vx + vy + 0.03**2)
+        )
+    return MetricResult(
+        "ssim_windowed",
+        float(score.mean()),
+        x.numel(),
+        x.numel(),
+        "RGB Gaussian11 sigma1.5 zero_padding5 C1=0.01^2 C2=0.03^2 full_image",
+    )
 
 
 def evaluate_rendering(
