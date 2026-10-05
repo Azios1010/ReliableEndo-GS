@@ -106,8 +106,11 @@ class ActionSelector(nn.Module):
             nn.ReLU(),
             nn.Linear(width, 2),
         )
-        nn.init.zeros_(self.network[-1].weight)
-        nn.init.zeros_(self.network[-1].bias)
+        output = self.network[-1]
+        if not isinstance(output, nn.Linear) or output.bias is None:
+            raise TypeError("selector output must be a Linear with bias")
+        nn.init.zeros_(output.weight)
+        nn.init.zeros_(output.bias)
 
     def forward(self, features: torch.Tensor) -> torch.Tensor:
         """Return [R,3] utilities in action enum order."""

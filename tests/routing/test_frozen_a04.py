@@ -102,6 +102,23 @@ def test_zero_repair_identity_before_learning(setup):
     assert max(errors.values()) < 1e-6
 
 
+def test_output_layer_types_zero_initialization_and_state_keys(setup):
+    learner, _ = setup
+    stereo_output = learner.actions.stereo[-1]
+    selector_output = learner.selector.network[-1]
+    assert isinstance(stereo_output, torch.nn.Conv2d)
+    assert isinstance(selector_output, torch.nn.Linear)
+    for output in (stereo_output, selector_output):
+        assert output.bias is not None
+        assert torch.equal(output.weight, torch.zeros_like(output.weight))
+        assert torch.equal(output.bias, torch.zeros_like(output.bias))
+        assert output.weight.requires_grad and output.bias.requires_grad
+    assert "stereo.4.weight" in learner.actions.state_dict()
+    assert "stereo.4.bias" in learner.actions.state_dict()
+    assert "network.4.weight" in learner.selector.state_dict()
+    assert "network.4.bias" in learner.selector.state_dict()
+
+
 def test_gaussian_zero_does_not_reclip_learned_near_unit_opacity(setup):
     learner, state = setup
     field = replace(

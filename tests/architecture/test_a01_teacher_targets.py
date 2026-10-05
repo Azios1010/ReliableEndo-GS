@@ -27,6 +27,27 @@ from reliable_endo_gs.teachers import (
     load_a01_roles,
     make_foundation_stereo_candidate,
 )
+from reliable_endo_gs.teachers.targets import _resize_map
+
+
+@pytest.mark.parametrize("mode", ["nearest", "bilinear"])
+def test_resize_map_preserves_tensor_values_and_gradients(mode: str) -> None:
+    value = torch.arange(6.0).reshape(1, 1, 2, 3).requires_grad_()
+    actual = _resize_map(value, (4, 6), mode=mode)
+    options = {} if mode == "nearest" else {"align_corners": False}
+    expected = torch.nn.functional.interpolate(value, size=(4, 6), mode=mode, **options)
+    assert isinstance(actual, torch.Tensor)
+    torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+    actual.sum().backward()
+    assert value.grad is not None and bool(torch.isfinite(value.grad).all())
+
+
+def test_resize_map_rejects_a_non_tensor_result(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "reliable_endo_gs.teachers.targets.functional.interpolate", lambda *args, **kwargs: object()
+    )
+    with pytest.raises(TeacherContractError, match="interpolation must return a Tensor"):
+        _resize_map(torch.ones(1, 1, 2, 3), (4, 6), mode="nearest")
 
 
 def _target() -> AlignedTeacherTarget:

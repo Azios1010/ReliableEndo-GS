@@ -118,8 +118,11 @@ class RepairActions(nn.Module):
             nn.ReLU(),
             nn.Conv2d(width, 1, 1),
         )
-        nn.init.zeros_(self.stereo[-1].weight)
-        nn.init.zeros_(self.stereo[-1].bias)
+        stereo_output = self.stereo[-1]
+        if not isinstance(stereo_output, nn.Conv2d) or stereo_output.bias is None:
+            raise TypeError("stereo output must be a Conv2d with bias")
+        nn.init.zeros_(stereo_output.weight)
+        nn.init.zeros_(stereo_output.bias)
         self.gaussian = ReferenceAttributeHead(
             hidden_dims=(width, width), bounds=reference.config.residual_bounds
         )
