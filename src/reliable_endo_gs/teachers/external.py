@@ -264,29 +264,46 @@ def _foundation_metadata_globals(names: set[str]) -> list[Any]:
     These globals are scoped to a weights-only read; metadata is then discarded.
     """
     supported = {
-        "builtins.int", "builtins.dict", "builtins.list", "collections.defaultdict",
-        "typing.Any", "numpy.dtype", "numpy.core.multiarray.scalar",
-        "numpy._core.multiarray.scalar", "omegaconf.base.ContainerMetadata",
-        "omegaconf.base.Metadata", "omegaconf.dictconfig.DictConfig",
-        "omegaconf.listconfig.ListConfig", "omegaconf.nodes.AnyNode",
+        "builtins.int",
+        "builtins.dict",
+        "builtins.list",
+        "collections.defaultdict",
+        "typing.Any",
+        "numpy.dtype",
+        "numpy.core.multiarray.scalar",
+        "numpy._core.multiarray.scalar",
+        "omegaconf.base.ContainerMetadata",
+        "omegaconf.base.Metadata",
+        "omegaconf.dictconfig.DictConfig",
+        "omegaconf.listconfig.ListConfig",
+        "omegaconf.nodes.AnyNode",
     }
     unknown = names - supported
     if unknown:
-        raise TeacherContractError(f"unsupported FoundationStereo checkpoint globals: {sorted(unknown)}")
+        raise TeacherContractError(
+            f"unsupported FoundationStereo checkpoint globals: {sorted(unknown)}"
+        )
     known: dict[str, Any] = {
-        "builtins.int": int, "builtins.dict": dict, "builtins.list": list,
-        "collections.defaultdict": defaultdict, "typing.Any": Any,
+        "builtins.int": int,
+        "builtins.dict": dict,
+        "builtins.list": list,
+        "collections.defaultdict": defaultdict,
+        "typing.Any": Any,
     }
     dynamic: list[Any] = []
     if any(name.startswith("numpy.") for name in names):
         numpy = importlib.import_module("numpy")
-        scalar_module = "numpy._core.multiarray" if hasattr(numpy, "_core") else "numpy.core.multiarray"
+        scalar_module = (
+            "numpy._core.multiarray" if hasattr(numpy, "_core") else "numpy.core.multiarray"
+        )
         scalar = importlib.import_module(scalar_module).scalar
-        known.update({
-            "numpy.dtype": numpy.dtype,
-            "numpy.core.multiarray.scalar": (scalar, "numpy.core.multiarray.scalar"),
-            "numpy._core.multiarray.scalar": (scalar, "numpy._core.multiarray.scalar"),
-        })
+        known.update(
+            {
+                "numpy.dtype": numpy.dtype,
+                "numpy.core.multiarray.scalar": (scalar, "numpy.core.multiarray.scalar"),
+                "numpy._core.multiarray.scalar": (scalar, "numpy._core.multiarray.scalar"),
+            }
+        )
         dynamic = [type(numpy.dtype(numpy.float32)), type(numpy.dtype(numpy.float64))]
     if any(name.startswith("omegaconf.") for name in names):
         for module_name, class_names in (
@@ -326,7 +343,9 @@ def _checkpoint_state(config: ExternalTeacherConfig) -> Mapping[str, torch.Tenso
     if (
         not isinstance(state, Mapping)
         or not state
-        or not all(isinstance(key, str) and isinstance(value, torch.Tensor) for key, value in state.items())
+        or not all(
+            isinstance(key, str) and isinstance(value, torch.Tensor) for key, value in state.items()
+        )
     ):
         raise TeacherContractError("checkpoint does not match the declared state-dict format")
     return cast(Mapping[str, torch.Tensor], state)

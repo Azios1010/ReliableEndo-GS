@@ -276,9 +276,10 @@ def test_role_config_uses_dataset_1_to_7_for_training_and_protects_8_to_9(
     )
     TargetCache(tmp_path / "dataset-six-cache", roles=roles).put(dataset_six_key, _target())
 
-    assert roles.validate_sample_id(
-        "dataset_8/keyframe_1/frame_000", role="final_test", cache=False
-    ) == "dataset_8/keyframe_1/frame_000"
+    assert (
+        roles.validate_sample_id("dataset_8/keyframe_1/frame_000", role="final_test", cache=False)
+        == "dataset_8/keyframe_1/frame_000"
+    )
     final_test_key = TargetCacheKey(
         sample_id="dataset_8/keyframe_1/frame_000",
         split_identity="a01-scared-final-train-1-7-test-8-9-v1",

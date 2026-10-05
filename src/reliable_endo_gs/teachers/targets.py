@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from typing import cast
 
 import torch
 import torch.nn.functional as functional
@@ -176,8 +177,10 @@ class AlignedTeacherTarget:
 def _resize_map(value: torch.Tensor, size: tuple[int, int], *, mode: str) -> torch.Tensor:
     source = value.to(dtype=torch.float32) if not value.is_floating_point() else value
     if mode == "nearest":
-        return functional.interpolate(source, size=size, mode=mode)
-    return functional.interpolate(source, size=size, mode=mode, align_corners=False)
+        return cast(torch.Tensor, functional.interpolate(source, size=size, mode=mode))
+    return cast(
+        torch.Tensor, functional.interpolate(source, size=size, mode=mode, align_corners=False)
+    )
 
 
 def _embed(

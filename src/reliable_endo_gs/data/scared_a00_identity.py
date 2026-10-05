@@ -9,6 +9,7 @@ Unknown code changes require regeneration or a new compatibility review.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from typing import cast
 
 POSITIVE_GT_PROCESSOR_PAIR = (
     "2b00968de6cbfaf46ca0635b10e017ebe8819f655e165c57d5f2e0438ebc6278",
@@ -24,6 +25,11 @@ CALIBRATION_CORRESPONDENCE_PROCESSOR_PAIR = (
     "7e73d55412b17166ce26b7367edf786ff194233041d4c952237cade6c87bfe7e",
 )
 
+TYPED_FORMATTED_PROCESSOR_PAIR = (
+    "fcb3190893f3d75bef23ba068824ca57ed1065464396741eb962fc289650439d",
+    "7f60dd5a7197d0c44ceee27db3bc96570569e10aabaed685d97bbb4b233acf3c",
+)
+
 
 def a00_processor_compatibility(
     recorded_pair: tuple[object, object],
@@ -33,6 +39,14 @@ def a00_processor_compatibility(
     """Return an explicit compatibility decision; never rewrite producer hashes."""
     if recorded_pair == current_pair:
         return "exact_code_identity"
+    if current_pair == TYPED_FORMATTED_PROCESSOR_PAIR:
+        # Reviewed against CALIBRATION_CORRESPONDENCE_PROCESSOR_PAIR:
+        # only formatting, type annotations/imports and identity typing.cast
+        # calls changed. The executable AST is identical after removing those
+        # typing-only constructs. Keep historical producer hashes immutable.
+        if recorded_pair == CALIBRATION_CORRESPONDENCE_PROCESSOR_PAIR:
+            return "reviewed_typing_format_compatibility"
+        current_pair = CALIBRATION_CORRESPONDENCE_PROCESSOR_PAIR
     if (
         recorded_pair == EMPTY_GT_PROCESSOR_PAIR
         and current_pair == CALIBRATION_CORRESPONDENCE_PROCESSOR_PAIR
@@ -62,7 +76,7 @@ def a00_processor_compatibility(
         return None
     if not metric_summaries or any(
         type(summary.get("valid_pixel_count")) is not int
-        or summary["valid_pixel_count"] <= 0
+        or cast(int, summary["valid_pixel_count"]) <= 0
         or summary.get("status") == "unavailable"
         for summary in metric_summaries
     ):

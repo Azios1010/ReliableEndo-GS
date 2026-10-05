@@ -50,9 +50,7 @@ def _camera(batch_size: int = 1, dtype: torch.dtype = torch.float64) -> Rectifie
     return RectifiedStereoCamera(left, right, transform, True)
 
 
-def _batch(
-    batch_size: int = 1, *, dtype: torch.dtype = torch.float64
-) -> DeploymentStereoBatch:
+def _batch(batch_size: int = 1, *, dtype: torch.dtype = torch.float64) -> DeploymentStereoBatch:
     height, width = 5, 5
     left = torch.full((batch_size, 3, height, width), 0.25, dtype=dtype)
     right = torch.full_like(left, 0.2)

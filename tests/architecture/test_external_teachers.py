@@ -259,7 +259,9 @@ def test_checkpoint_format_is_explicit_and_strict(external):
 @pytest.mark.parametrize("scalar_type", [np.float32, np.float64])
 def test_foundation_numpy_metadata_is_scoped_and_weights_only(external, monkeypatch, scalar_type):
     path, raw, _ = external
-    torch.save({"model": {"weight": torch.tensor(8.0)}, "metric": scalar_type(0.1)}, raw["checkpoint"])
+    torch.save(
+        {"model": {"weight": torch.tensor(8.0)}, "metric": scalar_type(0.1)}, raw["checkpoint"]
+    )
     _rewrite(path, raw, checkpoint_sha256=sha256_file(Path(raw["checkpoint"])))
     original_load = torch.load
     calls = []
@@ -293,7 +295,9 @@ def test_foundation_omegaconf_training_metadata(external, monkeypatch):
 
 def test_foundation_read_preserves_outer_safe_globals(external):
     path, raw, _ = external
-    torch.save({"model": {"weight": torch.tensor(8.0)}, "metric": np.float64(0.1)}, raw["checkpoint"])
+    torch.save(
+        {"model": {"weight": torch.tensor(8.0)}, "metric": np.float64(0.1)}, raw["checkpoint"]
+    )
     _rewrite(path, raw, checkpoint_sha256=sha256_file(Path(raw["checkpoint"])))
     with torch.serialization.safe_globals([type(np.dtype(np.float64))]):
         before = set(torch.serialization.get_safe_globals())
@@ -309,7 +313,9 @@ def test_unknown_checkpoint_metadata_rejected_before_constructor(external):
     )
     _rewrite(path, raw, checkpoint_sha256=sha256_file(Path(raw["checkpoint"])))
     before = set(torch.serialization.get_safe_globals())
-    with pytest.raises(TeacherUnavailableError, match="unsupported FoundationStereo checkpoint globals"):
+    with pytest.raises(
+        TeacherUnavailableError, match="unsupported FoundationStereo checkpoint globals"
+    ):
         build_foundation_stereo(path).load()
     assert "core.foundation_stereo" not in sys.modules
     assert set(torch.serialization.get_safe_globals()) == before
@@ -318,7 +324,8 @@ def test_unknown_checkpoint_metadata_rejected_before_constructor(external):
 def test_legacy_tensor_checkpoint_keeps_weights_only_behavior(external):
     path, raw, _ = external
     torch.save(
-        {"model": {"weight": torch.tensor(8.0)}}, raw["checkpoint"],
+        {"model": {"weight": torch.tensor(8.0)}},
+        raw["checkpoint"],
         _use_new_zipfile_serialization=False,
     )
     _rewrite(path, raw, checkpoint_sha256=sha256_file(Path(raw["checkpoint"])))
@@ -327,8 +334,12 @@ def test_legacy_tensor_checkpoint_keeps_weights_only_behavior(external):
 
 def test_defom_does_not_accept_foundation_metadata(external):
     path, raw, _ = external
-    torch.save({"model": {"weight": torch.tensor(8.0)}, "metric": np.float64(0.1)}, raw["checkpoint"])
-    _rewrite(path, raw, model="defom_stereo", checkpoint_sha256=sha256_file(Path(raw["checkpoint"])))
+    torch.save(
+        {"model": {"weight": torch.tensor(8.0)}, "metric": np.float64(0.1)}, raw["checkpoint"]
+    )
+    _rewrite(
+        path, raw, model="defom_stereo", checkpoint_sha256=sha256_file(Path(raw["checkpoint"]))
+    )
     before = set(torch.serialization.get_safe_globals())
     with pytest.raises(TeacherUnavailableError, match="Weights only load failed"):
         build_defom_stereo(path).load()

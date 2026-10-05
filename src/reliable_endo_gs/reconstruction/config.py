@@ -473,7 +473,8 @@ class ReferenceConfig:
             latency_optimization=bool(raw.get("latency_optimization", False)),
             data_role=_string(raw.get("data_role", "final_train"), "data_role"),
             split_identity=_string(
-                raw.get("split_identity", "a01-scared-final-train-1-7-test-8-9-v1"), "split_identity"
+                raw.get("split_identity", "a01-scared-final-train-1-7-test-8-9-v1"),
+                "split_identity",
             ),
             active_dataset_ids=tuple(
                 _string(item, "active_dataset_ids[]")

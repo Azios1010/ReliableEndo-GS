@@ -25,6 +25,7 @@ from reliable_endo_gs.data.scared_a00_identity import (
     CALIBRATION_CORRESPONDENCE_PROCESSOR_PAIR,
     EMPTY_GT_PROCESSOR_PAIR,
     POSITIVE_GT_PROCESSOR_PAIR,
+    TYPED_FORMATTED_PROCESSOR_PAIR,
     a00_processor_compatibility,
 )
 from reliable_endo_gs.data.scared_a00_preprocess import ScaredA00PreprocessError
@@ -69,7 +70,68 @@ def test_compatibility_registry_is_pinned_to_this_exact_remediation() -> None:
         hashlib.sha256((root / name).read_bytes()).hexdigest()
         for name in ("scared_a00_preprocess.py", "scared_a00_batch.py")
     )
-    assert current == CALIBRATION_CORRESPONDENCE_PROCESSOR_PAIR
+    assert current == TYPED_FORMATTED_PROCESSOR_PAIR
+
+
+@pytest.mark.parametrize("count", [0, 12])
+def test_typing_format_review_preserves_correspondence_producer(count: int) -> None:
+    summary = {"valid_pixel_count": count}
+    assert (
+        a00_processor_compatibility(
+            CALIBRATION_CORRESPONDENCE_PROCESSOR_PAIR,
+            TYPED_FORMATTED_PROCESSOR_PAIR,
+            [summary],
+        )
+        == "reviewed_typing_format_compatibility"
+    )
+    assert (
+        a00_processor_compatibility(("a" * 64, "b" * 64), TYPED_FORMATTED_PROCESSOR_PAIR, [summary])
+        is None
+    )
+    assert (
+        a00_processor_compatibility(
+            TYPED_FORMATTED_PROCESSOR_PAIR, CALIBRATION_CORRESPONDENCE_PROCESSOR_PAIR, [summary]
+        )
+        is None
+    )
+
+
+def test_typing_format_review_keeps_historical_metric_gates() -> None:
+    assert (
+        a00_processor_compatibility(
+            POSITIVE_GT_PROCESSOR_PAIR,
+            TYPED_FORMATTED_PROCESSOR_PAIR,
+            [{"valid_pixel_count": 12}],
+        )
+        == "reviewed_positive_gt_compatibility"
+    )
+    for invalid in ([], [{"valid_pixel_count": 0}], [{"valid_pixel_count": True}]):
+        assert (
+            a00_processor_compatibility(
+                POSITIVE_GT_PROCESSOR_PAIR, TYPED_FORMATTED_PROCESSOR_PAIR, invalid
+            )
+            is None
+        )
+    empty = {
+        "valid_pixel_count": 0,
+        "status": "unavailable",
+        "q_vs_a00_abs_error_mm": None,
+        "q_vs_metric_gt_abs_error_mm": None,
+    }
+    assert (
+        a00_processor_compatibility(
+            EMPTY_GT_PROCESSOR_PAIR, TYPED_FORMATTED_PROCESSOR_PAIR, [empty]
+        )
+        == "reviewed_calibration_evidence_compatibility"
+    )
+    assert (
+        a00_processor_compatibility(
+            EMPTY_GT_PROCESSOR_PAIR,
+            TYPED_FORMATTED_PROCESSOR_PAIR,
+            [{"valid_pixel_count": 0}],
+        )
+        is None
+    )
 
 
 def _resume_fixture(tmp_path: Path) -> tuple[dict[str, object], Path, Path]:
@@ -146,21 +208,44 @@ def test_reviewed_resume_rehashes_outputs_without_rewriting_provenance(tmp_path:
         _resume_keyframe_if_complete(**args)
 
 
+def test_typing_format_resume_preserves_historical_provenance(tmp_path: Path) -> None:
+    args, manifest_path, provenance_path = _resume_fixture(tmp_path)
+    args["processor_sha256"], args["batch_code_sha256"] = TYPED_FORMATTED_PROCESSOR_PAIR
+    before = (manifest_path.read_bytes(), provenance_path.read_bytes())
+    assert _resume_keyframe_if_complete(**args) == 1
+    assert before == (manifest_path.read_bytes(), provenance_path.read_bytes())
+
+
 def test_correspondence_review_preserves_empty_gt_but_rejects_unknown_identity() -> None:
     empty = {
-        "valid_pixel_count": 0, "status": "unavailable",
-        "q_vs_a00_abs_error_mm": None, "q_vs_metric_gt_abs_error_mm": None,
+        "valid_pixel_count": 0,
+        "status": "unavailable",
+        "q_vs_a00_abs_error_mm": None,
+        "q_vs_metric_gt_abs_error_mm": None,
     }
-    assert a00_processor_compatibility(
-        EMPTY_GT_PROCESSOR_PAIR, CALIBRATION_CORRESPONDENCE_PROCESSOR_PAIR, [empty]
-    ) == "reviewed_calibration_evidence_compatibility"
-    for invalid in ({"valid_pixel_count": 0}, dict(empty, valid_pixel_count=True), dict(empty, q_vs_a00_abs_error_mm={"max": 0})):
-        assert a00_processor_compatibility(
-            EMPTY_GT_PROCESSOR_PAIR, CALIBRATION_CORRESPONDENCE_PROCESSOR_PAIR, [invalid]
-        ) is None
-    assert a00_processor_compatibility(
-        ("a" * 64, "b" * 64), CALIBRATION_CORRESPONDENCE_PROCESSOR_PAIR, [empty]
-    ) is None
+    assert (
+        a00_processor_compatibility(
+            EMPTY_GT_PROCESSOR_PAIR, CALIBRATION_CORRESPONDENCE_PROCESSOR_PAIR, [empty]
+        )
+        == "reviewed_calibration_evidence_compatibility"
+    )
+    for invalid in (
+        {"valid_pixel_count": 0},
+        dict(empty, valid_pixel_count=True),
+        dict(empty, q_vs_a00_abs_error_mm={"max": 0}),
+    ):
+        assert (
+            a00_processor_compatibility(
+                EMPTY_GT_PROCESSOR_PAIR, CALIBRATION_CORRESPONDENCE_PROCESSOR_PAIR, [invalid]
+            )
+            is None
+        )
+    assert (
+        a00_processor_compatibility(
+            ("a" * 64, "b" * 64), CALIBRATION_CORRESPONDENCE_PROCESSOR_PAIR, [empty]
+        )
+        is None
+    )
 
 
 def test_resume_rejects_sample_metric_or_processor_mismatch(tmp_path: Path) -> None:
@@ -229,7 +314,9 @@ def test_synthetic_batch_retains_empty_gt_and_resumes_all_roles(
                 points = np.zeros((32, 20, 3), dtype=np.float32)
                 for point_index in range(4):
                     points[0, point_index] = [
-                        (0.0 if index == 0 else 1000.0) + point_index * 10.0, 0.0, 200.0
+                        (0.0 if index == 0 else 1000.0) + point_index * 10.0,
+                        0.0,
+                        200.0,
                     ]
                     points[16, point_index] = points[0, point_index] + [-10.0, 0.0, 0.0]
                 buffer = io.BytesIO()

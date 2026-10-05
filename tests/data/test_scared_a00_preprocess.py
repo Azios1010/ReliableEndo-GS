@@ -18,6 +18,7 @@ from reliable_endo_gs.data.scared_a00 import ScaredA00ProtocolError, ScaredA00Sa
 from reliable_endo_gs.data.scared_a00_identity import (
     CALIBRATION_CORRESPONDENCE_PROCESSOR_PAIR,
     POSITIVE_GT_PROCESSOR_PAIR,
+    TYPED_FORMATTED_PROCESSOR_PAIR,
 )
 from reliable_endo_gs.data.scared_a00_preprocess import (
     ScaredA00PreprocessError,
@@ -180,7 +181,13 @@ def _processed_fixture(root: Path, config_path: Path) -> tuple[Path, str]:
     )
     config_bytes = config_path.read_bytes()
     config_hash = hashlib.sha256(config_bytes).hexdigest()
-    code_path = Path(__file__).resolve().parents[2] / "src" / "reliable_endo_gs" / "data" / "scared_a00_preprocess.py"
+    code_path = (
+        Path(__file__).resolve().parents[2]
+        / "src"
+        / "reliable_endo_gs"
+        / "data"
+        / "scared_a00_preprocess.py"
+    )
     code_hash = hashlib.sha256(code_path.read_bytes()).hexdigest()
     evidence_path = root.parent / "evidence.json"
     evidence_path.parent.mkdir(parents=True, exist_ok=True)
@@ -251,7 +258,9 @@ def _processed_fixture(root: Path, config_path: Path) -> tuple[Path, str]:
         q_path,
         protocol_path,
     ):
-        outputs[path.relative_to(data_dir).as_posix()] = hashlib.sha256(path.read_bytes()).hexdigest()
+        outputs[path.relative_to(data_dir).as_posix()] = hashlib.sha256(
+            path.read_bytes()
+        ).hexdigest()
     provenance = {
         "schema_version": 1,
         "sample_id": sample_id,
@@ -283,9 +292,16 @@ def _processed_fixture(root: Path, config_path: Path) -> tuple[Path, str]:
     return root, sample_id
 
 
-@pytest.mark.parametrize("legacy", [False, True])
+@pytest.mark.parametrize(
+    ("pair", "compatibility"),
+    [
+        (TYPED_FORMATTED_PROCESSOR_PAIR, "exact_code_identity"),
+        (CALIBRATION_CORRESPONDENCE_PROCESSOR_PAIR, "reviewed_typing_format_compatibility"),
+        (POSITIVE_GT_PROCESSOR_PAIR, "reviewed_positive_gt_compatibility"),
+    ],
+)
 def test_batch_preflight_reports_exact_or_reviewed_producer_identity(
-    tmp_path: Path, legacy: bool
+    tmp_path: Path, pair: tuple[str, str], compatibility: str
 ) -> None:
     config_path = tmp_path / "processed/_provenance/configs/a00.yaml"
     config_path.parent.mkdir(parents=True)
@@ -294,7 +310,6 @@ def test_batch_preflight_reports_exact_or_reviewed_producer_identity(
     data = root / "dataset_1/keyframe_1/data"
     path = data / "a00_provenance.json"
     provenance = json.loads(path.read_text())
-    pair = POSITIVE_GT_PROCESSOR_PAIR if legacy else CALIBRATION_CORRESPONDENCE_PROCESSOR_PAIR
     provenance["metric_validation"] = {"valid_pixel_count": 20}
     preprocessing = provenance["preprocessing"]
     preprocessing.update(
@@ -315,14 +330,12 @@ def test_batch_preflight_reports_exact_or_reviewed_producer_identity(
         config_path=config_path,
         print_smoke_command=False,
     )
-    assert result["processor_compatibility"] == (
-        "reviewed_positive_gt_compatibility" if legacy else "exact_code_identity"
-    )
+    assert result["processor_compatibility"] == compatibility
     assert result["producer_code_sha256"] == pair[0]
     assert result["ground_truth_loaded"] is False
     assert result["metric_gt_status"] == "available"
     # Provenance cannot be relabelled as an unknown processor or a legacy empty target.
-    if legacy:
+    if pair == POSITIVE_GT_PROCESSOR_PAIR:
         provenance["metric_validation"] = {"valid_pixel_count": 0, "status": "unavailable"}
     else:
         preprocessing["batch_code_sha256"] = "e" * 64
@@ -396,6 +409,7 @@ def test_rectification_builds_metric_a00_geometry_from_synthetic_plane() -> None
     )
     assert result_cm["T_R_from_L_m"][0, 3] == pytest.approx(-0.01, abs=1e-8)
     assert result_cm["metric_validation"]["q_vs_metric_gt_abs_error_mm"]["max"] <= 0.05
+
 
 @pytest.mark.parametrize("empty_kind", ["outside_grid", "missing_xyz", "rounds_outside_grid"])
 def test_batch_empty_gt_is_explicit_and_single_sample_remains_strict(empty_kind: str) -> None:
@@ -686,7 +700,9 @@ def test_invocation_record_pins_resolved_paths_and_python_process(tmp_path: Path
     assert invocation["resolved_paths"]["config"] == paths[2].resolve().as_posix()
 
 
-def test_gt_free_a00_preflight_reports_runnable_smoke_command_without_loading(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_gt_free_a00_preflight_reports_runnable_smoke_command_without_loading(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     config = _config()
     config_path = tmp_path / "a00.yaml"
     config_path.write_text(yaml.safe_dump(config, sort_keys=True), encoding="utf-8")
@@ -720,9 +736,7 @@ def test_a00_preflight_rejects_nonhex_provenance_digest(tmp_path: Path) -> None:
     config_path = tmp_path / "a00.yaml"
     config_path.write_text(yaml.safe_dump(config, sort_keys=True), encoding="utf-8")
     data_root, sample_id = _processed_fixture(tmp_path / "processed", config_path)
-    provenance_path = (
-        data_root / "dataset_1" / "keyframe_1" / "data" / "a00_provenance.json"
-    )
+    provenance_path = data_root / "dataset_1" / "keyframe_1" / "data" / "a00_provenance.json"
     provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
     provenance["calibration_evidence_sha256"] = "g" * 64
     provenance_path.write_text(json.dumps(provenance), encoding="utf-8")

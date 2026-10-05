@@ -16,7 +16,7 @@ import tempfile
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from itertools import zip_longest
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from reliable_endo_gs.data.scared_a00_identity import a00_processor_compatibility
 from reliable_endo_gs.data.scared_a00_preprocess import (
@@ -56,7 +56,9 @@ def _archive_payloads(archive_path: Path, suffix: str) -> Iterator[tuple[str, by
                     )
                 yield Path(member.name).name, extracted.read()
     except (OSError, tarfile.TarError) as error:
-        raise ScaredA00PreprocessError(f"unable to stream archive {archive_path}: {error}") from error
+        raise ScaredA00PreprocessError(
+            f"unable to stream archive {archive_path}: {error}"
+        ) from error
 
 
 def _paired_archive_payloads(
@@ -65,16 +67,14 @@ def _paired_archive_payloads(
     """Require exact ordered frame_data/scene_points ID correspondence."""
     frame_members = _archive_payloads(frame_archive, ".json")
     scene_members = _archive_payloads(scene_archive, ".tiff")
-    for index, pair in enumerate(
-        zip_longest(frame_members, scene_members, fillvalue=_SENTINEL)
-    ):
+    for index, pair in enumerate(zip_longest(frame_members, scene_members, fillvalue=_SENTINEL)):
         frame_item, scene_item = pair
         if frame_item is _SENTINEL or scene_item is _SENTINEL:
             raise ScaredA00PreprocessError(
                 f"frame_data and scene_points archive counts differ at index {index}"
             )
-        frame_name, frame_bytes = frame_item
-        scene_name, scene_bytes = scene_item
+        frame_name, frame_bytes = cast(tuple[str, bytes], frame_item)
+        scene_name, scene_bytes = cast(tuple[str, bytes], scene_item)
         expected_frame = f"frame_data{index:06d}.json"
         expected_scene = f"scene_points{index:06d}.tiff"
         if frame_name != expected_frame or scene_name != expected_scene:
@@ -103,15 +103,28 @@ def _video_archive_samples(
         capture.release()
         raise ScaredA00PreprocessError(f"unable to open SCARED video {video_path}")
     try:
-        for frame_id, frame_bytes, scene_id, scene_bytes, frame_hash, scene_hash in (
-            _paired_archive_payloads(frame_archive, scene_archive)
-        ):
+        for (
+            frame_id,
+            frame_bytes,
+            scene_id,
+            scene_bytes,
+            frame_hash,
+            scene_hash,
+        ) in _paired_archive_payloads(frame_archive, scene_archive):
             success, stacked_video = capture.read()
             if not success:
                 raise ScaredA00PreprocessError(
                     f"SCARED video ended before archive sample {frame_id}"
                 )
-            yield frame_id, frame_bytes, scene_id, scene_bytes, frame_hash, scene_hash, stacked_video
+            yield (
+                frame_id,
+                frame_bytes,
+                scene_id,
+                scene_bytes,
+                frame_hash,
+                scene_hash,
+                stacked_video,
+            )
         success, _extra_frame = capture.read()
         if success:
             raise ScaredA00PreprocessError(
@@ -138,10 +151,7 @@ def _config_for_calibration_source(
     variant["calibration"]["trusted_calibration_value_source_sha256"] = calibration_sha256
     config_bytes = yaml.safe_dump(variant, sort_keys=False, allow_unicode=True).encode("utf-8")
     config_path = (
-        output_root
-        / "_provenance"
-        / "configs"
-        / f"a00_scared_{calibration_sha256[:16]}.yaml"
+        output_root / "_provenance" / "configs" / f"a00_scared_{calibration_sha256[:16]}.yaml"
     )
     config_path.parent.mkdir(parents=True, exist_ok=True)
     if config_path.exists():
@@ -316,14 +326,21 @@ def _calibration_evidence_for_role_source(
             calibration.get("calibration_value_source"), "evidence calibration value source"
         )
         if source.get("source_sha256") != calibration_sha256:
-            raise ScaredA00PreprocessError("cached calibration evidence numeric source hash changed")
+            raise ScaredA00PreprocessError(
+                "cached calibration evidence numeric source hash changed"
+            )
         evidence_hash = _sha256_file(evidence_path)
         return evidence_path, config_path, config, evidence_value, evidence_hash
 
     attempts: list[dict[str, str]] = []
-    for frame_id, frame_bytes, scene_id, scene_bytes, frame_hash, scene_hash in _paired_archive_payloads(
-        frame_archive, scene_archive
-    ):
+    for (
+        frame_id,
+        frame_bytes,
+        scene_id,
+        scene_bytes,
+        frame_hash,
+        scene_hash,
+    ) in _paired_archive_payloads(frame_archive, scene_archive):
         if scene_id != frame_id.replace("frame_data", "scene_points"):
             raise ScaredA00PreprocessError(
                 f"frame/scene correspondence mismatch while resolving calibration for {dataset_id}/{keyframe_id}"
@@ -570,7 +587,7 @@ def prepare_scared_a00_dataset(
     code_sha256 = _sha256_file(Path(__file__).resolve())
     processor_path = Path(__file__).resolve().parent / "scared_a00_preprocess.py"
     processor_sha256 = _sha256_file(processor_path)
-    summary: dict[str, object] = {
+    summary: dict[str, Any] = {
         "schema_version": 1,
         "dataset_name": "scared",
         "data_root": root.as_posix(),
@@ -612,12 +629,14 @@ def prepare_scared_a00_dataset(
             sequence_sources = (video, frame_archive, scene_archive)
             present = tuple(path.is_file() for path in sequence_sources)
             if not any(present):
-                summary["skipped_static_keyframes"].append(
-                    f"{dataset_id}/{keyframe_root.name}"
-                )
+                summary["skipped_static_keyframes"].append(f"{dataset_id}/{keyframe_root.name}")
                 continue
             if not all(present) or not calibration.is_file():
-                missing = [path.as_posix() for path in (*sequence_sources, calibration) if not path.is_file()]
+                missing = [
+                    path.as_posix()
+                    for path in (*sequence_sources, calibration)
+                    if not path.is_file()
+                ]
                 raise ScaredA00PreprocessError(
                     f"incomplete sequence sources for {dataset_id}/{keyframe_root.name}: {missing}"
                 )
@@ -626,10 +645,18 @@ def prepare_scared_a00_dataset(
             )
             fold_count += 1
         if fold_count == 0:
-            raise ScaredA00PreprocessError(f"no video/archive keyframes found for active fold {dataset_id}")
-        summary["folds"][dataset_id] = {"data_role": role, "keyframe_count": fold_count, "sample_count": 0}
+            raise ScaredA00PreprocessError(
+                f"no video/archive keyframes found for active fold {dataset_id}"
+            )
+        summary["folds"][dataset_id] = {
+            "data_role": role,
+            "keyframe_count": fold_count,
+            "sample_count": 0,
+        }
 
-    calibration_evidence_cache: dict[tuple[str, str], tuple[Path, Path, dict[str, object], dict[str, object], str]] = {}
+    calibration_evidence_cache: dict[
+        tuple[str, str], tuple[Path, Path, dict[str, object], dict[str, object], str]
+    ] = {}
     for (
         dataset_id,
         role,
@@ -657,7 +684,9 @@ def prepare_scared_a00_dataset(
                 roles=roles,
             )
             calibration_evidence_cache[cache_key] = evidence_record
-        evidence_path, config_variant_path, config, validated_evidence, evidence_sha256 = evidence_record
+        evidence_path, config_variant_path, config, validated_evidence, evidence_sha256 = (
+            evidence_record
+        )
         _config_mapping, config_sha256 = _read_config(config_variant_path)
         _required_mapping(
             _required_mapping(validated_evidence.get("calibration"), "evidence.calibration").get(
@@ -667,11 +696,15 @@ def prepare_scared_a00_dataset(
         )
         evidence_sample_id = str(validated_evidence.get("sample_id", ""))
         if not evidence_sample_id:
-            raise ScaredA00PreprocessError("validated calibration evidence has no representative sample ID")
+            raise ScaredA00PreprocessError(
+                "validated calibration evidence has no representative sample ID"
+            )
         # Final-test geometry can never establish train calibration semantics,
         # and train evidence is not used to inspect final-test targets.
         if roles.role_for_dataset(evidence_sample_id.split("/", 1)[0]) != role:
-            raise ScaredA00PreprocessError("calibration evidence crosses the active train/test role boundary")
+            raise ScaredA00PreprocessError(
+                "calibration evidence crosses the active train/test role boundary"
+            )
 
         final_keyframe = output / dataset_id / keyframe_id
         source_paths = {
@@ -740,7 +773,9 @@ def prepare_scared_a00_dataset(
         direction_resolution = _required_mapping(
             validated_evidence.get("direction_resolution"), "evidence.direction_resolution"
         )
-        metric_gt = _required_mapping(validated_evidence.get("metric_ground_truth"), "evidence.metric_ground_truth")
+        metric_gt = _required_mapping(
+            validated_evidence.get("metric_ground_truth"), "evidence.metric_ground_truth"
+        )
         translation_unit = "mm"
         scene_points_unit = str(metric_gt.get("xyz_units"))
         if scene_points_unit != "mm":
@@ -774,7 +809,9 @@ def prepare_scared_a00_dataset(
             ) in _video_archive_samples(video_path, frame_archive, scene_archive):
                 sample_id = f"{dataset_id}/{keyframe_id}/{frame_id}"
                 if scene_id != frame_id.replace("frame_data", "scene_points"):
-                    raise ScaredA00PreprocessError(f"ambiguous source correspondence for {sample_id}")
+                    raise ScaredA00PreprocessError(
+                        f"ambiguous source correspondence for {sample_id}"
+                    )
                 frame_data = _read_json_bytes(frame_bytes, f"{frame_id}.json")
                 calibration_obj = _required_mapping(
                     frame_data.get(str(input_config.get("calibration_field"))),
@@ -788,8 +825,12 @@ def prepare_scared_a00_dataset(
                 else:
                     for field_name in ("KL", "KR", "DL", "DR", "R", "T"):
                         current = np.asarray(calibration_obj.get(field_name), dtype=np.float64)
-                        reference = np.asarray(calibration_reference.get(field_name), dtype=np.float64)
-                        if current.shape != reference.shape or not np.array_equal(current, reference):
+                        reference = np.asarray(
+                            calibration_reference.get(field_name), dtype=np.float64
+                        )
+                        if current.shape != reference.shape or not np.array_equal(
+                            current, reference
+                        ):
                             raise ScaredA00PreprocessError(
                                 f"{sample_id} calibration {field_name} differs from the keyframe calibration source"
                             )
@@ -880,7 +921,12 @@ def prepare_scared_a00_dataset(
                     protocol_preprocessing = {
                         key: value
                         for key, value in current_preprocessing.items()
-                        if key not in ("metric_validation", "frame_data_member_sha256", "scene_points_member_sha256")
+                        if key
+                        not in (
+                            "metric_validation",
+                            "frame_data_member_sha256",
+                            "scene_points_member_sha256",
+                        )
                     }
                     protocol_value = {
                         "schema_version": 1,
@@ -916,12 +962,23 @@ def prepare_scared_a00_dataset(
                 right_path = data_dir / "right_finalpass" / f"{frame_id}.png"
                 disparity_path = data_dir / "disparity" / f"{frame_id}.tiff"
                 q_path = data_dir / "reprojection_data" / f"{frame_id}.json"
-                for path in (frame_path, newpram_path, left_path, right_path, disparity_path, q_path):
+                for path in (
+                    frame_path,
+                    newpram_path,
+                    left_path,
+                    right_path,
+                    disparity_path,
+                    q_path,
+                ):
                     path.parent.mkdir(parents=True, exist_ok=True)
                 if not cv2.imwrite(str(left_path), arrays["left_rectified_bgr"]):
-                    raise ScaredA00PreprocessError(f"failed to write rectified left RGB {left_path}")
+                    raise ScaredA00PreprocessError(
+                        f"failed to write rectified left RGB {left_path}"
+                    )
                 if not cv2.imwrite(str(right_path), arrays["right_rectified_bgr"]):
-                    raise ScaredA00PreprocessError(f"failed to write rectified right RGB {right_path}")
+                    raise ScaredA00PreprocessError(
+                        f"failed to write rectified right RGB {right_path}"
+                    )
                 frame_path.write_bytes(frame_bytes)
                 _write_json(newpram_path, newpram)
                 tifffile.imwrite(disparity_path, arrays["disparity"], dtype=np.float32)
@@ -994,7 +1051,9 @@ def prepare_scared_a00_dataset(
                         progress_callback(progress_record)
 
             if not sample_ids or protocol_sha256 is None:
-                raise ScaredA00PreprocessError(f"no matched frames found for {dataset_id}/{keyframe_id}")
+                raise ScaredA00PreprocessError(
+                    f"no matched frames found for {dataset_id}/{keyframe_id}"
+                )
             keyframe_manifest = {
                 "schema_version": 1,
                 "dataset_name": "scared",
@@ -1072,7 +1131,9 @@ def prepare_scared_a00_dataset(
         try:
             previous = json.loads(summary_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as error:
-            raise ScaredA00PreprocessError(f"invalid existing preprocessing summary: {error}") from error
+            raise ScaredA00PreprocessError(
+                f"invalid existing preprocessing summary: {error}"
+            ) from error
         if previous.get("manifest_hash") != manifest.manifest_hash:
             raise ScaredA00PreprocessError("existing summary belongs to a different manifest")
     else:

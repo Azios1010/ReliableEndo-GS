@@ -114,7 +114,7 @@ def _verify_calibration_yaml_matches_frame_data(
         )
 
 
-def _required_mapping(value: object, name: str) -> dict[str, object]:
+def _required_mapping(value: object, name: str) -> dict[str, Any]:
     if not isinstance(value, Mapping) or not all(isinstance(key, str) for key in value):
         raise ScaredA00PreprocessError(f"{name} must be a string-keyed mapping")
     return dict(value)
@@ -124,12 +124,16 @@ def _read_config(path: Path) -> tuple[dict[str, object], str]:
     try:
         import yaml
     except ImportError as error:
-        raise ScaredA00PreprocessError("PyYAML is required to load the A00 preprocessing config") from error
+        raise ScaredA00PreprocessError(
+            "PyYAML is required to load the A00 preprocessing config"
+        ) from error
     try:
         contents = path.read_bytes()
         parsed: object = yaml.safe_load(contents)
     except (OSError, UnicodeDecodeError, yaml.YAMLError) as error:
-        raise ScaredA00PreprocessError(f"unable to load preprocessing config {path}: {error}") from error
+        raise ScaredA00PreprocessError(
+            f"unable to load preprocessing config {path}: {error}"
+        ) from error
     config = _required_mapping(parsed, "preprocessing config")
     if config.get("schema_version") != 1:
         raise ScaredA00PreprocessError("preprocessing config schema_version must be 1")
@@ -484,7 +488,7 @@ def _verify_cross_view_evidence(
     declared_unit: str,
     declared_direction: str,
     tolerance_mm: float,
-    acceptance: Mapping[str, object],
+    acceptance: Mapping[str, Any],
 ) -> None:
     import math
 
@@ -742,9 +746,7 @@ def rectify_scared_sample_arrays(
     import numpy as np
 
     input_config = _required_mapping(config.get("input"), "config.input")
-    rectification_config = _required_mapping(
-        config.get("rectification"), "config.rectification"
-    )
+    rectification_config = _required_mapping(config.get("rectification"), "config.rectification")
     validation_config = _required_mapping(config.get("validation"), "config.validation")
     left_image = np.asarray(left_bgr)
     right_image = np.asarray(right_bgr)
@@ -773,7 +775,9 @@ def rectify_scared_sample_arrays(
     if calibration_field != "camera-calibration":
         raise ScaredA00PreprocessError("unsupported calibration field in pinned config")
     if input_config.get("stacked_video_layout") != "top_left_bottom_right":
-        raise ScaredA00PreprocessError("v1 supports only top-half left / bottom-half right video layout")
+        raise ScaredA00PreprocessError(
+            "v1 supports only top-half left / bottom-half right video layout"
+        )
     if input_config.get("stacked_scene_points_layout") != "top_left_bottom_right_xyz":
         raise ScaredA00PreprocessError(
             "v1 supports only top-half left / bottom-half right stacked XYZ layout"
@@ -1083,11 +1087,17 @@ def _assert_safe_output_destination(
     resolved_raw = raw_root.resolve(strict=True)
     resolved_repo = repo_root.resolve(strict=True)
     if resolved_output == resolved_raw or resolved_raw in resolved_output.parents:
-        raise ScaredA00PreprocessError("processed output must not be written inside the raw SCARED root")
+        raise ScaredA00PreprocessError(
+            "processed output must not be written inside the raw SCARED root"
+        )
     if resolved_output == resolved_repo or resolved_repo in resolved_output.parents:
-        raise ScaredA00PreprocessError("processed SCARED data must be written outside the repository")
+        raise ScaredA00PreprocessError(
+            "processed SCARED data must be written outside the repository"
+        )
     if resolved_output in resolved_raw.parents:
-        raise ScaredA00PreprocessError("output_root must not contain or replace the raw SCARED root")
+        raise ScaredA00PreprocessError(
+            "output_root must not contain or replace the raw SCARED root"
+        )
     if require_existing_parent:
         resolved_parent = final_keyframe.parent.resolve(strict=True)
         if resolved_parent != resolved_output and resolved_output not in resolved_parent.parents:
@@ -1111,20 +1121,24 @@ def _build_invocation_record(
     evidence_path: Path,
     invocation_argv: Sequence[str] | None,
 ) -> dict[str, object]:
-    arguments = list(invocation_argv) if invocation_argv is not None else [
-        "a00",
-        "prepare",
-        "--data-root",
-        data_root.as_posix(),
-        "--sample-id",
-        sample_id,
-        "--output-root",
-        output_root.as_posix(),
-        "--config",
-        config_path.as_posix(),
-        "--calibration-evidence",
-        evidence_path.as_posix(),
-    ]
+    arguments = (
+        list(invocation_argv)
+        if invocation_argv is not None
+        else [
+            "a00",
+            "prepare",
+            "--data-root",
+            data_root.as_posix(),
+            "--sample-id",
+            sample_id,
+            "--output-root",
+            output_root.as_posix(),
+            "--config",
+            config_path.as_posix(),
+            "--calibration-evidence",
+            evidence_path.as_posix(),
+        ]
+    )
     return {
         "executable": sys.executable,
         "module": "reliable_endo_gs.cli.main",
@@ -1224,13 +1238,9 @@ def prepare_scared_a00_sample(
     for source in (video_path, frame_archive, scene_archive, calibration_value_path):
         if not source.is_file():
             raise ScaredA00PreprocessError(f"required original SCARED source is missing: {source}")
-    frame_bytes, frame_member_sha256 = _read_archive_member(
-        frame_archive, f"{frame_id}.json"
-    )
+    frame_bytes, frame_member_sha256 = _read_archive_member(frame_archive, f"{frame_id}.json")
     scene_id = frame_id.replace("frame_data", "scene_points")
-    scene_bytes, scene_member_sha256 = _read_archive_member(
-        scene_archive, f"{scene_id}.tiff"
-    )
+    scene_bytes, scene_member_sha256 = _read_archive_member(scene_archive, f"{scene_id}.tiff")
     member_hashes = _required_mapping(evidence["source_member_sha256"], "source_member_sha256")
     if member_hashes.get("frame_data") != frame_member_sha256:
         raise ScaredA00PreprocessError(
@@ -1255,7 +1265,9 @@ def prepare_scared_a00_sample(
     try:
         scene_points_stacked = tifffile.imread(io.BytesIO(scene_bytes))
     except (OSError, ValueError) as error:
-        raise ScaredA00PreprocessError(f"unable to decode selected scene_points TIFF: {error}") from error
+        raise ScaredA00PreprocessError(
+            f"unable to decode selected scene_points TIFF: {error}"
+        ) from error
 
     measured_cross_view = _cross_view_nearest_neighbor_metrics(
         scene_points_stacked,
@@ -1266,7 +1278,8 @@ def prepare_scared_a00_sample(
             "mutual"
             if _required_mapping(evidence["independent_validation"], "independent_validation").get(
                 "valid_point_policy"
-            ) == "finite_nonzero_xyz_positive_z_mutual_nearest_neighbor"
+            )
+            == "finite_nonzero_xyz_positive_z_mutual_nearest_neighbor"
             else "all_valid"
         ),
     )
@@ -1459,9 +1472,20 @@ def prepare_scared_a00_sample(
                 "scene_points_member_sha256": scene_member_sha256,
             },
             "source_files": {
-                "rgb_video": {"relative_path": str(input_config.get("video_file")), "sha256": _sha256_file(video_path)},
-                "frame_data_archive": {"relative_path": str(input_config.get("frame_data_archive")), "member": f"{frame_id}.json", "member_sha256": frame_member_sha256},
-                "scene_points_archive": {"relative_path": str(input_config.get("scene_points_archive")), "member": f"{scene_id}.tiff", "member_sha256": scene_member_sha256},
+                "rgb_video": {
+                    "relative_path": str(input_config.get("video_file")),
+                    "sha256": _sha256_file(video_path),
+                },
+                "frame_data_archive": {
+                    "relative_path": str(input_config.get("frame_data_archive")),
+                    "member": f"{frame_id}.json",
+                    "member_sha256": frame_member_sha256,
+                },
+                "scene_points_archive": {
+                    "relative_path": str(input_config.get("scene_points_archive")),
+                    "member": f"{scene_id}.tiff",
+                    "member_sha256": scene_member_sha256,
+                },
             },
             "preprocessing": preprocessing_metadata,
             "calibration_evidence_sha256": calibration_evidence_sha256,
@@ -1494,9 +1518,7 @@ def prepare_scared_a00_sample(
     }
 
 
-def a00_smoke_command(
-    data_root: Path, sample_id: str, roles_path: Path, config_path: Path
-) -> str:
+def a00_smoke_command(data_root: Path, sample_id: str, roles_path: Path, config_path: Path) -> str:
     """Return a shell-escaped exact one-sample deployment-only smoke command."""
     import shlex
 

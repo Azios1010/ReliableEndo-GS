@@ -156,7 +156,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     for name, description in (
-        ("preflight", "Check one sample's paths, hashes, protocol, and provenance without loading images or GT"),
+        (
+            "preflight",
+            "Check one sample's paths, hashes, protocol, and provenance without loading images or GT",
+        ),
         ("smoke", "Load one GT-free A00 DeploymentStereoBatch"),
     ):
         a00_check_parser = a00_subparsers.add_parser(name, description=description)
@@ -288,7 +291,9 @@ def build_parser() -> argparse.ArgumentParser:
     preflight_parser = a04_subparsers.choices["preflight"]
     preflight_parser.add_argument("--workers", type=int, default=4)
     preflight_parser.add_argument(
-        "--report", type=Path, required=True,
+        "--report",
+        type=Path,
+        required=True,
         help="New JSON report outside the data/source files",
     )
     benchmark_parser = subparsers.add_parser("benchmark", description="Frozen benchmark harness")
@@ -297,14 +302,25 @@ def build_parser() -> argparse.ArgumentParser:
     benchmark_a04.add_argument("--checkpoint", type=Path, required=True)
     benchmark_a04.add_argument("--data-root", type=Path, required=True)
     benchmark_a04.add_argument("--manifest", type=Path, required=True)
-    benchmark_a04.add_argument("--roles", type=Path, default=Path("configs/teachers/a01_scared.yaml"))
-    benchmark_a04.add_argument("--protocol", type=Path,
-                               default=Path("configs/evaluation/a04_benchmark.yaml"))
+    benchmark_a04.add_argument(
+        "--roles", type=Path, default=Path("configs/teachers/a01_scared.yaml")
+    )
+    benchmark_a04.add_argument(
+        "--protocol", type=Path, default=Path("configs/evaluation/a04_benchmark.yaml")
+    )
     benchmark_a04.add_argument("--output-dir", type=Path, required=True)
-    benchmark_a04.add_argument("--lpips-backbone", type=Path, required=True,
-                               help="Existing local torchvision AlexNet state_dict")
-    benchmark_a04.add_argument("--lpips-calibration", type=Path, required=True,
-                               help="Existing official LPIPS v0.1 alex.pth")
+    benchmark_a04.add_argument(
+        "--lpips-backbone",
+        type=Path,
+        required=True,
+        help="Existing local torchvision AlexNet state_dict",
+    )
+    benchmark_a04.add_argument(
+        "--lpips-calibration",
+        type=Path,
+        required=True,
+        help="Existing official LPIPS v0.1 alex.pth",
+    )
     benchmark_a04.add_argument("--sample-id", action="append", default=[])
     benchmark_a04.add_argument("--max-samples", type=int)
     benchmark_a04.add_argument("--resume", action="store_true")
@@ -440,7 +456,9 @@ def run_a00_preflight(
         raise ScaredA00SampleError("A00 provenance data role differs from the active role config")
     evidence_sha256 = provenance_value.get("calibration_evidence_sha256")
     if not isinstance(evidence_sha256, str) or _SHA256_HEX.fullmatch(evidence_sha256) is None:
-        raise ScaredA00SampleError("A00 provenance calibration-evidence identity must be a SHA-256 hex digest")
+        raise ScaredA00SampleError(
+            "A00 provenance calibration-evidence identity must be a SHA-256 hex digest"
+        )
     outputs = provenance_value.get("output_files_sha256")
     if not isinstance(outputs, dict) or not outputs:
         raise ScaredA00SampleError("A00 provenance must list hashes for processed output files")
@@ -469,7 +487,9 @@ def run_a00_preflight(
             )
         path = (data_root_resolved / relative_name).resolve(strict=True)
         if data_root_resolved not in path.parents or not path.is_file():
-            raise ScaredA00SampleError("A00 provenance output path escapes the sample data directory")
+            raise ScaredA00SampleError(
+                "A00 provenance output path escapes the sample data directory"
+            )
         digest = _sha256_file(path)
         if digest != expected_hash:
             raise ScaredA00SampleError(f"processed output hash mismatch: {relative_name}")
@@ -511,13 +531,20 @@ def run_a00_preflight(
         if not isinstance(recorded_config, str) or not Path(recorded_config).is_absolute():
             raise ScaredA00ProtocolError("batch A00 provenance must record an absolute config path")
         resolved_config = Path(recorded_config).resolve(strict=True)
-        resolved_provenance_root = (resolved_data_root / "_provenance" / "configs").resolve(strict=True)
+        resolved_provenance_root = (resolved_data_root / "_provenance" / "configs").resolve(
+            strict=True
+        )
         if resolved_provenance_root not in resolved_config.parents:
-            raise ScaredA00ProtocolError("batch A00 config path escapes its external provenance directory")
+            raise ScaredA00ProtocolError(
+                "batch A00 config path escapes its external provenance directory"
+            )
         # The checked-in sample config is the batch command's template. The
         # output-specific variant is pinned by provenance and is used for the
         # exact single-sample smoke command.
-        if requested_config != resolved_config and requested_config.name != "a00_scared_sample_v1.yaml":
+        if (
+            requested_config != resolved_config
+            and requested_config.name != "a00_scared_sample_v1.yaml"
+        ):
             raise ScaredA00ProtocolError(
                 "supplied config is neither the sample template nor the output-pinned batch config"
             )
@@ -599,21 +626,29 @@ def run_a00_preflight(
         raise ScaredA00SampleError("A00 provenance must record original source-file identities")
     for key, expected_member, expected_hash in (
         ("frame_data_archive", f"{expected_frame}.json", evidence_member_hashes.get("frame_data")),
-        ("scene_points_archive", f"{expected_scene}.tiff", evidence_member_hashes.get("scene_points")),
+        (
+            "scene_points_archive",
+            f"{expected_scene}.tiff",
+            evidence_member_hashes.get("scene_points"),
+        ),
     ):
         source_record = source_files.get(key)
         if not isinstance(source_record, dict) or source_record.get("member") != expected_member:
             raise ScaredA00SampleError(f"A00 provenance {key} member differs from the sample ID")
         source_hash = source_record.get("member_sha256")
         recorded_frame_hash = frame_correspondence.get(
-            "frame_data_member_sha256" if key == "frame_data_archive" else "scene_points_member_sha256"
+            "frame_data_member_sha256"
+            if key == "frame_data_archive"
+            else "scene_points_member_sha256"
         )
         if (
             not isinstance(source_hash, str)
             or _SHA256_HEX.fullmatch(source_hash) is None
             or source_hash != recorded_frame_hash
         ):
-            raise ScaredA00SampleError(f"A00 provenance {key} member hash correspondence is inconsistent")
+            raise ScaredA00SampleError(
+                f"A00 provenance {key} member hash correspondence is inconsistent"
+            )
         if evidence_sample_id == normalized and source_hash != expected_hash:
             raise ScaredA00SampleError(
                 f"calibration evidence member identity differs from provenance {key}"
@@ -626,7 +661,9 @@ def run_a00_preflight(
     processor_compatibility = "exact_code_identity"
     if batch_code_digest is None:
         if preprocessing.get("code_sha256") != code_sha256:
-            raise ScaredA00ProtocolError("A00 protocol processor SHA-256 differs from this checkout")
+            raise ScaredA00ProtocolError(
+                "A00 protocol processor SHA-256 differs from this checkout"
+            )
     else:
         from reliable_endo_gs.data.scared_a00_identity import a00_processor_compatibility
 
@@ -635,17 +672,23 @@ def run_a00_preflight(
         batch_processor_path = Path(__file__).resolve().parents[1] / "data" / "scared_a00_batch.py"
         metric_summary = provenance_value.get("metric_validation")
         if not isinstance(metric_summary, dict):
-            raise ScaredA00ProtocolError("batch A00 provenance must include metric support metadata")
+            raise ScaredA00ProtocolError(
+                "batch A00 provenance must include metric support metadata"
+            )
         compatibility = a00_processor_compatibility(
             (preprocessing.get("code_sha256"), batch_code_digest),
             (code_sha256, _sha256_file(batch_processor_path)),
             [metric_summary],
         )
         if compatibility is None:
-            raise ScaredA00ProtocolError("A00 batch processor SHA-256 belongs to an unreviewed code identity")
+            raise ScaredA00ProtocolError(
+                "A00 batch processor SHA-256 belongs to an unreviewed code identity"
+            )
         processor_compatibility = compatibility
     if preprocessing.get("calibration_value_source_sha256") != trusted_value_source:
-        raise ScaredA00ProtocolError("A00 protocol calibration value-source identity differs from config")
+        raise ScaredA00ProtocolError(
+            "A00 protocol calibration value-source identity differs from config"
+        )
     if preprocessing.get("calibration_evidence_sha256") != evidence_sha256:
         raise ScaredA00ProtocolError("A00 protocol/evidence manifest identity mismatch")
     if protocol_value.get("metric_geometry_evidence_sha256") != evidence_sha256:
@@ -695,7 +738,9 @@ def run_a00_preflight(
         or not Path(working_directory).is_absolute()
         or not isinstance(invocation.get("pythonpath"), str)
     ):
-        raise ScaredA00SampleError("A00 provenance invocation must identify its executable and environment")
+        raise ScaredA00SampleError(
+            "A00 provenance invocation must identify its executable and environment"
+        )
     for path_name in ("data_root", "output_root", "config", "calibration_evidence"):
         path_value = invocation_paths.get(path_name)
         if not isinstance(path_value, str) or not Path(path_value).is_absolute():
@@ -706,9 +751,13 @@ def run_a00_preflight(
         invocation_paths.get("output_root") != resolved_data_root.as_posix()
         or invocation_paths.get("config") != resolved_config.as_posix()
     ):
-        raise ScaredA00SampleError("A00 provenance resolved output/config paths do not match this preflight")
+        raise ScaredA00SampleError(
+            "A00 provenance resolved output/config paths do not match this preflight"
+        )
     invocation_argv = invocation.get("argv")
-    if not isinstance(invocation_argv, list) or not all(isinstance(value, str) for value in invocation_argv):
+    if not isinstance(invocation_argv, list) or not all(
+        isinstance(value, str) for value in invocation_argv
+    ):
         raise ScaredA00SampleError("A00 provenance invocation argv must be a string list")
     if provenance_preprocessing.get("invocation") != invocation:
         raise ScaredA00SampleError("A00 protocol/provenance invocation records differ")
@@ -730,8 +779,12 @@ def run_a00_preflight(
     if print_smoke_command:
         result["a00_smoke_command"] = command
     if batch_code_digest is not None:
-        result["metric_gt_valid_pixel_count"] = provenance_value["metric_validation"]["valid_pixel_count"]
-        result["metric_gt_status"] = provenance_value["metric_validation"].get("status", "available")
+        result["metric_gt_valid_pixel_count"] = provenance_value["metric_validation"][
+            "valid_pixel_count"
+        ]
+        result["metric_gt_status"] = provenance_value["metric_validation"].get(
+            "status", "available"
+        )
     return result
 
 
@@ -1009,7 +1062,9 @@ def _run_a04(arguments: argparse.Namespace) -> dict[str, object]:
             "log_every": arguments.log_every,
             "checkpoint_every": arguments.checkpoint_every,
             "max_consecutive_skips": arguments.max_consecutive_skips,
-            "resume_checkpoint": None if arguments.checkpoint is None else str(arguments.checkpoint),
+            "resume_checkpoint": None
+            if arguments.checkpoint is None
+            else str(arguments.checkpoint),
         }
         log_path = arguments.log_file or destination.with_suffix(".jsonl")
         with TrainingLog(log_path) as log, TrainingSignals() as signals:
@@ -1046,13 +1101,19 @@ def _run_a04(arguments: argparse.Namespace) -> dict[str, object]:
                     recovery = trainer.save_recovery(checkpoint_dir, error)
                 except Exception as recovery_error:
                     log.emit(
-                        {"event": "recovery_checkpoint_unavailable",
-                         "error": str(recovery_error), **trainer.training_progress}
+                        {
+                            "event": "recovery_checkpoint_unavailable",
+                            "error": str(recovery_error),
+                            **trainer.training_progress,
+                        }
                     )
                 else:
                     log.emit(
-                        {"event": "recovery_checkpoint_saved", "checkpoint": str(recovery),
-                         **trainer.training_progress}
+                        {
+                            "event": "recovery_checkpoint_saved",
+                            "checkpoint": str(recovery),
+                            **trainer.training_progress,
+                        }
                     )
                 raise
         return {
@@ -1129,11 +1190,17 @@ def main(argv: Sequence[str] | None = None) -> int:
             from reliable_endo_gs.evaluation.a04_benchmark import _safe, run_a04_benchmark
 
             result = run_a04_benchmark(
-                checkpoint=arguments.checkpoint, data_root=arguments.data_root,
-                manifest=arguments.manifest, roles_path=arguments.roles,
-                protocol_path=arguments.protocol, output_dir=arguments.output_dir,
-                lpips_backbone=arguments.lpips_backbone, lpips_calibration=arguments.lpips_calibration,
-                sample_ids=arguments.sample_id, max_samples=arguments.max_samples, resume=arguments.resume,
+                checkpoint=arguments.checkpoint,
+                data_root=arguments.data_root,
+                manifest=arguments.manifest,
+                roles_path=arguments.roles,
+                protocol_path=arguments.protocol,
+                output_dir=arguments.output_dir,
+                lpips_backbone=arguments.lpips_backbone,
+                lpips_calibration=arguments.lpips_calibration,
+                sample_ids=arguments.sample_id,
+                max_samples=arguments.max_samples,
+                resume=arguments.resume,
             )
             print(json.dumps(_safe(result), ensure_ascii=False, indent=2, sort_keys=True))
             return 0

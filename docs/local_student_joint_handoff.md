@@ -194,3 +194,36 @@ separate worktree so the current running checkout keeps its HEAD and source.
 > gradients and checkpoint recovery, and report implemented/tested/planned
 > separately. Do not launch long training, download data or replace the
 > running server experiment as part of implementation.
+
+## CPU CI follow-up
+
+The handoff branch required full-repository validation beyond the earlier
+focused checks. Repairs include Ruff formatting, preprocessing JSON typing,
+scoped SciPy stub handling, an explicit OmegaConf development dependency for
+serialized checkpoint-metadata tests, and `PYTHONDONTWRITEBYTECODE=1` in CI to
+keep the pinned upstream clean when its CPU helpers are imported.
+
+The A00 processors have a newly pinned typing/formatting hash pair. A review
+of the before/after executable AST, excluding annotations, typing imports and
+identity `typing.cast` calls, found identical runtime logic. Compatibility
+accepts only the exact reviewed pairs, retains historical metric gates and
+never rewrites dataset provenance. Synthetic resume/preflight tests cover it.
+
+Local full-suite validation: 635 passed, 18 skipped (16 unavailable optional
+upstream diagnostics and two unavailable historical real-data fixtures). Lint,
+formatting, mypy over 159 source files, infrastructure smoke, Phase II CLI help
+and compilation passed. No real training/inference or dependency installation
+was performed in this repair. The existing development tools were used; the
+full test command also exposed the already installed teacher environment's
+site-packages to obtain OmegaConf. An initial test attempt with no visible GPU
+aborted inside this server's CUDA PyTorch CPU backward; the successful run
+kept GPU 0 visible while exercising CPU synthetic tests. Hosted CI was not
+retrieved because the GitHub connector was disconnected and the repository
+was unavailable through the anonymous API.
+
+Formatting also changes the external-teacher wrapper's file hash and therefore
+its recorded API identity. Existing A04/cache/Phase II artifacts remain tied
+to their original identities; do not relabel them or disable compatibility
+checks. Running the old frozen artifact on this new source requires an explicit
+validated migration policy, which this CI repair does not implement. The
+original server checkout and running experiment keep their original source.

@@ -147,7 +147,9 @@ class A01ScaredDataRoles:
         normalized = sample_id.strip().replace("\\", "/")
         dataset_id = normalized.split("/", maxsplit=1)[0]
         if dataset_id not in self.dataset_ids:
-            raise A01RoleError("sample_id must begin with original SCARED dataset_1 through dataset_9")
+            raise A01RoleError(
+                "sample_id must begin with original SCARED dataset_1 through dataset_9"
+            )
         if "/" not in normalized or any(part in {"", ".", ".."} for part in normalized.split("/")):
             raise A01RoleError("sample_id must be a portable relative identifier")
         if cache:
