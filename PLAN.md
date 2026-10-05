@@ -31,8 +31,12 @@ reference: first keep that artifact frozen and learn Phase II repair heads plus
 a small action selector with an intervention harness; subsequently implement
 a student and jointly train the two phases. The first step is described in
 [Frozen A04 action learning](docs/frozen_a04_action_learning.md) and configured
-by `configs/routing/frozen_a04.yaml`. The subsequent student/joint step remains
-planned, not implemented or constrained to a permanently frozen student.
+by `configs/routing/frozen_a04.yaml`. The subsequent student/joint mechanisms
+are implemented as a separate experiment in
+[Student and joint learning](docs/student_joint_learning.md), with student-only
+deployment and explicit optimizer/checkpoint boundaries. Full student/joint
+training and scientific acceptance remain unrun; the student is not permanently
+frozen during joint learning.
 
 This explicit approval permits the isolated experimental implementation before
 the historical gate sequence below. It does not mark Gate I or Gate II passed,

@@ -9,6 +9,7 @@ import torch
 
 from reliable_endo_gs.actions.repair import Action, RepairActions, RepairState, eligible
 from reliable_endo_gs.reconstruction.model import ReferenceReconstructionModel
+from reliable_endo_gs.reconstruction.student import StudentReconstructionModel
 from reliable_endo_gs.regions.grid import Region, grid_regions
 from reliable_endo_gs.routing.config import RoutingConfig
 from reliable_endo_gs.routing.selector import ActionSelector, region_features, select_action
@@ -23,6 +24,10 @@ class ActionLearner:
     """Own ONLY Phase II optimizers; reference/teacher remain in eval mode."""
 
     def __init__(self, reference: ReferenceReconstructionModel, config: RoutingConfig) -> None:
+        if isinstance(reference, StudentReconstructionModel):
+            raise ValueError(
+                "use StudentLearner for student/joint mode; frozen A04 mode requires a reference"
+            )
         self.reference = reference.eval().requires_grad_(False)
         self.config = config
         if config.halo < reference.config.prior_policy.surface.neighborhood_radius:

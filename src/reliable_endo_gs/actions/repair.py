@@ -30,6 +30,7 @@ from reliable_endo_gs.reconstruction.model import (
     ReferenceReconstructionModel,
     ReferenceReconstructionResult,
 )
+from reliable_endo_gs.reconstruction.student import StudentReconstructionModel
 from reliable_endo_gs.regions.grid import Region
 from reliable_endo_gs.rendering.field import FieldRenderer, FieldRenderRequest
 
@@ -151,7 +152,9 @@ class RepairActions(nn.Module):
             )
         if not eligible(state, region):
             raise ValueError("repair requested on an ineligible region")
-        if any(parameter.requires_grad for parameter in reference.parameters()):
+        if not isinstance(reference, StudentReconstructionModel) and any(
+            parameter.requires_grad for parameter in reference.parameters()
+        ):
             raise ValueError("reference parameters must be frozen before repair")
         if base.gaussians.cov_center is not None or base.gaussians.cov_effective is not None:
             raise ValueError("A04 repair does not implement uncertainty covariance updates")
@@ -209,7 +212,10 @@ class RepairActions(nn.Module):
             with torch.autocast(
                 device_type=batch.left.device.type,
                 dtype=amp_dtype,
-                enabled=batch.left.device.type == "cuda",
+                enabled=(
+                    batch.left.device.type == "cuda"
+                    and reference.config.runtime.precision in ("fp16", "bf16")
+                ),
             ):
                 residuals = reference.head(context, prior.valid_mask)
             changed = compose_gaussian_field(

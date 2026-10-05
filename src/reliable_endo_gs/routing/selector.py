@@ -38,6 +38,7 @@ FEATURE_NAMES = (
 )
 
 
+@torch.no_grad()
 def region_features(state: RepairState, regions: tuple[Region, ...]) -> torch.Tensor:
     """Detached [R,18] deployment-only, pre-action summaries."""
     if state.base.render_right is None:

@@ -1,5 +1,10 @@
 # Local implementation handoff: student and joint learning
 
+This file retains the handoff snapshot and its historical evidence. The next
+local student/joint implementation is now documented in
+[Student and joint learning](student_joint_learning.md); statements below about
+the student being unimplemented describe the handoff snapshot, not current code.
+
 ## Authority and task boundary
 
 Read this file first, then `AGENTS.md` and the active sections of `PLAN.md`.

@@ -293,7 +293,7 @@ class A04ReferenceTrainer:
     def _autocast_context(self) -> AbstractContextManager[None]:
         """Use AMP only on CUDA, where the declared precision policy applies."""
 
-        if self.device.type != "cuda":
+        if self.device.type != "cuda" or self.config.runtime.precision == "fp32":
             return nullcontext()
         dtype = torch.float16 if self.config.runtime.precision == "fp16" else torch.bfloat16
         return torch.autocast(device_type="cuda", dtype=dtype)

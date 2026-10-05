@@ -107,7 +107,11 @@ class TrainingSignals:
         self._previous: dict[signal.Signals, Any] = {}
 
     def __enter__(self) -> TrainingSignals:
-        for signum in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
+        supported = [signal.SIGINT, signal.SIGTERM]
+        hangup = getattr(signal, "SIGHUP", None)
+        if hangup is not None:
+            supported.append(hangup)
+        for signum in supported:
             self._previous[signum] = signal.signal(signum, self._request_stop)
         return self
 
