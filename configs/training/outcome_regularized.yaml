@@ -1,0 +1,9 @@
+# Opt-in training-only controls. Physical thresholds/utility remain unchanged.
+schema: outcome_training.v1
+max_steps: 1000
+min_steps: 100
+validate_every: 25
+patience: 6
+min_delta: 0.001
+weight_decay: 0.01
+dropout: 0.1

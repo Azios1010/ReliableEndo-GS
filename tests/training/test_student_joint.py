@@ -207,10 +207,42 @@ def test_config_validation(tmp_path):
         {"width": True},
         {"learning_rate": float("nan")},
         {"joint_epochs": -1},
+        {"student_epochs": -1},
+        {"student_epochs": 0, "joint_epochs": 0},
         {"schema": "frozen_a04_action_selector.v1"},
     ):
         with pytest.raises(ValueError):
             StudentLearningConfig(**kwargs)
+
+
+def test_joint_from_first_sample_and_resume(setup, tmp_path):
+    learner, sample, _ = setup
+    learner.config = replace(
+        learner.config, student_epochs=0, joint_epochs=2, kd_weight=0, checkpoint_every=1
+    )
+    first = run_student_training([sample], learner, {}, tmp_path / "first", max_steps=1)
+    assert learner.cost_observations == 1
+    for optimizer in (
+        learner.model_optimizer,
+        learner.action_optimizer,
+        learner.selector_optimizer,
+    ):
+        assert all(float(state["step"]) == 1 for state in optimizer.state.values())
+    load_student_checkpoint(Path(first["checkpoint"]), learner, {}, 1)
+    result = run_student_training(
+        [sample], learner, {}, tmp_path / "resumed", resume=Path(first["checkpoint"])
+    )
+    assert result["schedule_complete"]
+    assert learner.cost_observations == 2
+    import json
+
+    event = json.loads((tmp_path / "resumed" / "train.jsonl").read_text())
+    assert event["stage"] == "joint"
+    assert event["elapsed_seconds"] > 0
+    for component in ("student", "head", "stereo_repair", "gaussian_repair", "selector"):
+        assert event[f"grad_norm_{component}"] > 0
+    for action in ("stop", "stereo", "gaussian"):
+        assert f"utility_{action}" in event
 
 
 def test_save_load_resume_exact_student_schedule(setup, tmp_path):

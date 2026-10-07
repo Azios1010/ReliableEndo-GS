@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Protocol
@@ -65,6 +66,7 @@ def run_student_training(
     save_student_checkpoint(latest, learner, identity, cursor)
     total = learner.config.student_epochs + learner.config.joint_epochs
     consumed = 0
+    started = time.perf_counter()
     with TrainingLog(output_dir / "train.jsonl") as log, TrainingSignals() as signals:
         try:
             while cursor["epoch"] < total and (max_steps is None or consumed < max_steps):
@@ -99,6 +101,7 @@ def run_student_training(
                         "event": "sample_progress",
                         "sample_id": sample.sample_id,
                         "stage": "joint" if joint else "student",
+                        "elapsed_seconds": time.perf_counter() - started,
                         "cursor": dict(cursor),
                         **losses,
                     }

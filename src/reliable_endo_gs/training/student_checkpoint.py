@@ -11,10 +11,26 @@ from typing import Any
 import torch
 
 from reliable_endo_gs.reconstruction.checkpoint import _atomic_torch_save, _cpu_tree
+from reliable_endo_gs.routing.balanced import BalancedSelector
 from reliable_endo_gs.training.harness import capture_rng, checkpoint_rng, restore_rng
 from reliable_endo_gs.training.student_learning import StudentLearner
 
 SCHEMA = "student_joint_checkpoint.v1"
+SELECTION_SCHEMA = "student_joint_intervention_checkpoint.v1"
+BALANCED_SCHEMA = "student_joint_intervention_checkpoint.v2"
+MASK_SCHEMA = "student_joint_mask_intervention_checkpoint.v1"
+
+
+def _schema(learner: StudentLearner) -> str:
+    return (
+        MASK_SCHEMA
+        if learner.mask_config is not None
+        else BALANCED_SCHEMA
+        if isinstance(learner.selector, BalancedSelector)
+        else SCHEMA
+        if learner.intervention_config is None
+        else SELECTION_SCHEMA
+    )
 
 
 def save_student_checkpoint(
@@ -27,7 +43,20 @@ def save_student_checkpoint(
         path,
         _cpu_tree(
             {
-                "schema": SCHEMA,
+                "schema": _schema(learner),
+                "mask_config": None if learner.mask_config is None else asdict(learner.mask_config),
+                "target_mask_index_sha256": None
+                if learner.target_masks is None
+                else learner.target_masks.identity,
+                "intervention_config": None
+                if learner.intervention_config is None
+                else learner.intervention_config.to_dict(),
+                "model_gradient_balance": None
+                if learner.objective_balancer is None
+                else learner.objective_balancer.state_dict(),
+                "selector_gradient_balance": None
+                if learner.selector_balancer is None
+                else learner.selector_balancer.state_dict(),
                 "identity": dict(identity),
                 "cursor": dict(cursor),
                 "student_config": asdict(learner.config),
@@ -57,9 +86,106 @@ def save_student_checkpoint(
 def read_student_checkpoint(path: Path) -> dict[str, Any]:
     """Weights-only deserialization; frozen-reference checkpoints are incompatible."""
     raw: Any = torch.load(path, map_location="cpu", weights_only=True)
-    if not isinstance(raw, dict) or raw.get("schema") != SCHEMA:
+    if not isinstance(raw, dict) or raw.get("schema") not in (
+        SCHEMA,
+        SELECTION_SCHEMA,
+        BALANCED_SCHEMA,
+        MASK_SCHEMA,
+    ):
         raise ValueError("unsupported student checkpoint schema")
     return raw
+
+
+def initialize_student_model(path: Path, learner: StudentLearner) -> dict[str, str]:
+    """Explicit weights-only warm start; new repairs, selector, RNG and Adam.
+
+    It is a new experiment, never a resume. Scientific construction and model
+    tensor shapes must match. Historical source identity is recorded separately.
+    """
+    import hashlib
+
+    raw = read_student_checkpoint(path)
+    if raw.get("construction_config") != learner.model.config.to_dict():
+        raise ValueError("warm-start scientific construction mismatch")
+    architecture = raw.get("student_config")
+    if not isinstance(architecture, dict) or any(
+        architecture.get(name) != getattr(learner.config, name)
+        for name in ("width", "bins", "minimum_effective_px")
+    ):
+        raise ValueError("warm-start student architecture mismatch")
+    if (
+        raw.get("teacher_in_checkpoint") is not False
+        or raw.get("reference_in_checkpoint") is not False
+    ):
+        raise ValueError("warm-start checkpoint ownership mismatch")
+    state = raw.get("model")
+    expected = learner.model.state_dict()
+    if not isinstance(state, dict) or set(state) != set(expected):
+        raise ValueError("warm-start student parameter keys mismatch")
+    for key, value in state.items():
+        if (
+            not isinstance(value, torch.Tensor)
+            or value.shape != expected[key].shape
+            or value.dtype != expected[key].dtype
+            or not bool(torch.isfinite(value).all())
+        ):
+            raise ValueError("warm-start student tensor mismatch")
+    learner.model.load_state_dict(state, strict=True)
+    return {
+        "checkpoint_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+        "source_sha256": str(raw["identity"]["source_sha256"]),
+    }
+
+
+def import_frozen_student_actions(
+    path: Path, learner: StudentLearner, *, expected_sha256: str
+) -> dict[str, object]:
+    """Pinned historical weights for a NEW frozen intervention experiment.
+
+    This is not resume or production deployment. Model/action construction is
+    exact; no selector, optimizer, RNG, normalizer or cost states are imported.
+    The evaluator must record BOTH the historical and current source identities.
+    Normal checkpoint source-compatibility checks remain unchanged.
+    """
+    import hashlib
+
+    if hashlib.sha256(path.read_bytes()).hexdigest() != expected_sha256:
+        raise ValueError("frozen intervention checkpoint SHA-256 mismatch")
+    raw = read_student_checkpoint(path)
+    protocol = (
+        None if learner.intervention_config is None else learner.intervention_config.to_dict()
+    )
+    if (
+        raw.get("student_config") != asdict(learner.config)
+        or raw.get("routing_config") != asdict(learner.routing)
+        or raw.get("intervention_config") != protocol
+        or raw.get("identity", {}).get("run_kind") == "bounded_smoke"
+    ):
+        raise ValueError("frozen intervention config/protocol mismatch")
+    state = raw.get("actions")
+    expected = learner.actions.state_dict()
+    if (
+        not isinstance(state, dict)
+        or set(state) != set(expected)
+        or any(
+            not isinstance(v, torch.Tensor)
+            or v.shape != expected[k].shape
+            or v.dtype != expected[k].dtype
+            or not bool(torch.isfinite(v).all())
+            for k, v in state.items()
+        )
+    ):
+        raise ValueError("invalid frozen action weights")
+    imported = initialize_student_model(path, learner)
+    learner.actions.load_state_dict(state, strict=True)
+    for module in (learner.model, learner.actions):
+        module.eval().requires_grad_(False)
+    return {
+        **imported,
+        "mode": "new_frozen_intervention_experiment",
+        "selector_imported": False,
+        "optimizer_imported": False,
+    }
 
 
 def load_student_checkpoint(
@@ -77,6 +203,22 @@ def load_student_checkpoint(
     during deployment load. No external teacher/reference checkpoint is loaded.
     """
     raw = read_student_checkpoint(path)
+    expected_schema = _schema(learner)
+    expected_intervention = (
+        None if learner.intervention_config is None else learner.intervention_config.to_dict()
+    )
+    if (
+        raw.get("schema") != expected_schema
+        or raw.get("intervention_config") != expected_intervention
+        or raw.get("mask_config")
+        != (None if learner.mask_config is None else asdict(learner.mask_config))
+        or (
+            resume
+            and raw.get("target_mask_index_sha256")
+            != (None if learner.target_masks is None else learner.target_masks.identity)
+        )
+    ):
+        raise ValueError("intervention checkpoint protocol/architecture mismatch")
     hashes = [
         learner.config.config_hash,
         learner.routing.config_hash,
@@ -139,6 +281,33 @@ def load_student_checkpoint(
     ):
         raise ValueError("invalid student cost calibration")
     modules = (learner.model, learner.actions, learner.selector)
+    for name, balancer in (
+        ("model_gradient_balance", learner.objective_balancer),
+        ("selector_gradient_balance", learner.selector_balancer),
+    ):
+        payload = raw.get(name)
+        if balancer is None:
+            if payload is not None:
+                raise ValueError("unexpected gradient balance state")
+        else:
+            expected = balancer.state_dict()
+            if (
+                not isinstance(payload, dict)
+                or set(payload) != set(expected)
+                or any(
+                    not isinstance(v, torch.Tensor)
+                    or v.shape != expected[k].shape
+                    or v.dtype != expected[k].dtype
+                    or not bool(torch.isfinite(v).all())
+                    for k, v in payload.items()
+                )
+            ):
+                raise ValueError("invalid gradient balance checkpoint state")
+            probe = copy.deepcopy(balancer)
+            probe.load_state_dict(payload, strict=True)
+            probe.validate_state()
+            if int(probe.observations) > cursor["optimizer_steps"]:
+                raise ValueError("gradient balance cursor mismatch")
     for name, module in zip(("model", "actions", "selector"), modules, strict=True):
         state = raw.get(name)
         expected = module.state_dict()
@@ -154,6 +323,14 @@ def load_student_checkpoint(
             )
         ):
             raise ValueError(f"invalid student checkpoint weights: {name}")
+    if isinstance(learner.selector, BalancedSelector):
+        probe_selector = copy.deepcopy(learner.selector)
+        probe_selector.load_state_dict(raw["selector"], strict=True)
+        probe_selector.validate_state()
+        if int(probe_selector.normalization.counts[2]) > observations:
+            raise ValueError("normalization cursor mismatch")
+        if not resume and not bool(probe_selector.normalization.fitted):
+            raise ValueError("deployment requires fitted training normalization")
     optimizers = (learner.model_optimizer, learner.action_optimizer, learner.selector_optimizer)
     # Loading into a temporary optimizer detects group/ownership incompatibility
     # before any live weight has changed. Tensor states must match each parameter.
@@ -209,6 +386,12 @@ def load_student_checkpoint(
             restore_rng(previous, device)
     for name, module in zip(("model", "actions", "selector"), modules, strict=True):
         module.load_state_dict(raw[name], strict=True)
+    for name, balancer in (
+        ("model_gradient_balance", learner.objective_balancer),
+        ("selector_gradient_balance", learner.selector_balancer),
+    ):
+        if balancer is not None:
+            balancer.load_state_dict(raw[name], strict=True)
     if resume:
         for name, optimizer in zip(
             ("model_optimizer", "action_optimizer", "selector_optimizer"), optimizers, strict=True

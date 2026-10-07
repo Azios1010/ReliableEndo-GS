@@ -31,12 +31,19 @@ reference: first keep that artifact frozen and learn Phase II repair heads plus
 a small action selector with an intervention harness; subsequently implement
 a student and jointly train the two phases. The first step is described in
 [Frozen A04 action learning](docs/frozen_a04_action_learning.md) and configured
-by `configs/routing/frozen_a04.yaml`. The subsequent student/joint mechanisms
-are implemented as a separate experiment in
-[Student and joint learning](docs/student_joint_learning.md), with student-only
-deployment and explicit optimizer/checkpoint boundaries. Full student/joint
-training and scientific acceptance remain unrun; the student is not permanently
-frozen during joint learning.
+by `configs/routing/frozen_a04.yaml`. The student/joint experiment is implemented
+separately in `docs/student_joint_learning.md`. The user subsequently approved
+the opt-in gain/harm/budget intervention experiment described in
+`docs/intervention_selection.md`: screened KD, correspondence-aware stereo
+repair, a guiding harness and joint updates of all three parameter owners.
+Historical artifacts and gate failures remain evidence; implementation does
+not demonstrate useful multi-action routing or calibrated uncertainty.
+
+The 2026-10-06 user-approved loss/supervision/feature remediation is a separate
+opt-in v2 experiment described in
+[Balanced local/global action learning](docs/intervention_balanced_learning.md).
+It preserves prior artifacts and requires a bounded native smoke/pilot before
+any claim of improved selection or metric geometry.
 
 This explicit approval permits the isolated experimental implementation before
 the historical gate sequence below. It does not mark Gate I or Gate II passed,

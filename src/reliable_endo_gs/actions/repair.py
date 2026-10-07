@@ -15,6 +15,7 @@ from typing import Any, cast
 import torch
 from torch import nn
 
+from reliable_endo_gs.actions.stereo_matching import MatchingStereoRepair
 from reliable_endo_gs.contracts.deployment import DeploymentStereoBatch
 from reliable_endo_gs.contracts.gaussians import GaussianField
 from reliable_endo_gs.contracts.rendering import RenderOutput
@@ -32,6 +33,7 @@ from reliable_endo_gs.reconstruction.model import (
 )
 from reliable_endo_gs.reconstruction.student import StudentReconstructionModel
 from reliable_endo_gs.regions.grid import Region
+from reliable_endo_gs.regions.masks import MaskRegion
 from reliable_endo_gs.rendering.field import FieldRenderer, FieldRenderRequest
 
 
@@ -94,6 +96,39 @@ def merge_field(base: GaussianField, changed: GaussianField, mask: torch.Tensor)
     return replace(base, **values)
 
 
+def preserve_zero_gaussian_residual(
+    base: GaussianField, changed: GaussianField, residuals: AttributeResiduals
+) -> GaussianField:
+    """Exact identity at zero [B,N,7] residual, with composition derivatives.
+
+    Quaternion -> matrix -> quaternion is not bitwise identity in FP32. At
+    exactly zero residual only, anchor the forward value to the actual base
+    field. ``base.detach() + (changed - changed.detach())`` retains the canonical
+    composition Jacobian, including its upstream base derivatives; directly
+    returning base would suppress repair gradients. Nonzero interventions use
+    canonical composition unchanged. No nonzero tolerance/threshold is used.
+    """
+    zero = (
+        (residuals.delta_rotation == 0).all(-1)
+        & (residuals.delta_log_scale == 0).all(-1)
+        & (residuals.delta_alpha_logit == 0).all(-1)
+    )
+    values: dict[str, Any] = {}
+    for item in fields(base):
+        before, after = getattr(base, item.name), getattr(changed, item.name)
+        if before is None or after is None:
+            if before is not None or after is not None:
+                raise ValueError(f"zero residual changed optional field availability: {item.name}")
+            values[item.name] = None
+        else:
+            mask = zero.reshape(*zero.shape, *([1] * (after.ndim - 2)))
+            identity = (
+                before.detach() + (after - after.detach()) if after.is_floating_point() else before
+            )
+            values[item.name] = torch.where(mask, identity, after)
+    return replace(changed, **values)
+
+
 class RepairActions(nn.Module):
     """Trainable local disparity head and 13-channel Gaussian residual MLP."""
 
@@ -104,26 +139,34 @@ class RepairActions(nn.Module):
         width: int = 32,
         max_disparity_px: float = 4.0,
         composition_alpha_epsilon: float = 0.0000001,
+        matching_head: MatchingStereoRepair | None = None,
+        effective_fraction: float = 0.25,
     ) -> None:
         super().__init__()
         if width < 1 or not 0 < max_disparity_px < float("inf"):
             raise ValueError("repair width and disparity bound must be positive")
         self.max_disparity_px = max_disparity_px
+        if not 0 < effective_fraction < 1:
+            raise ValueError("effective correction fraction must be in (0,1)")
+        self.effective_fraction = effective_fraction
+        # Opt-in numerical identity fix; historical repair semantics are retained.
+        self.exact_zero_identity = matching_head is not None
         self.gaussian_bounds = replace(
             reference.config.residual_bounds, alpha_logit_epsilon=composition_alpha_epsilon
         )
-        self.stereo = nn.Sequential(
+        legacy_stereo = nn.Sequential(
             nn.Conv2d(10, width, 1),
             nn.ReLU(),
             nn.Conv2d(width, width, 1),
             nn.ReLU(),
             nn.Conv2d(width, 1, 1),
         )
-        stereo_output = self.stereo[-1]
+        stereo_output = legacy_stereo[-1]
         if not isinstance(stereo_output, nn.Conv2d) or stereo_output.bias is None:
             raise TypeError("stereo output must be a Conv2d with bias")
         nn.init.zeros_(stereo_output.weight)
         nn.init.zeros_(stereo_output.bias)
+        self.stereo: nn.Module = legacy_stereo if matching_head is None else matching_head
         self.gaussian = ReferenceAttributeHead(
             hidden_dims=(width, width), bounds=reference.config.residual_bounds
         )
@@ -174,7 +217,19 @@ class RepairActions(nn.Module):
                 ),
                 dim=1,
             ).float()
-            prediction = self.stereo(inputs[..., y0:y1, x0:x1])
+            if isinstance(self.stereo, MatchingStereoRepair):
+                prediction = self.stereo.forward_pair(
+                    batch.left,
+                    batch.right,
+                    disparity,
+                    base.render_left.image.detach() - batch.left,
+                    region.halo,
+                    batch.support,
+                    (batch.camera.K_L[:, 0, 2] - batch.camera.K_R[:, 0, 2])[:, None, None, None],
+                    roi_features=isinstance(region, MaskRegion),
+                )
+            else:
+                prediction = self.stereo(inputs[..., y0:y1, x0:x1])
             delta = torch.nn.functional.pad(
                 prediction, (x0, batch.left.shape[-1] - x1, y0, batch.left.shape[-2] - y1)
             )
@@ -183,7 +238,7 @@ class RepairActions(nn.Module):
             # effective disparity to preserve the base support/sample ordering.
             offset = (batch.camera.K_L[:, 0, 2] - batch.camera.K_R[:, 0, 2])[:, None, None, None]
             limit = torch.minimum(
-                (disparity - offset).detach().clamp_min(0) * 0.25,
+                (disparity - offset).detach().clamp_min(0) * self.effective_fraction,
                 disparity.new_tensor(self.max_disparity_px),
             )
             disparity = disparity + torch.where(
@@ -191,37 +246,7 @@ class RepairActions(nn.Module):
                 delta.tanh().to(disparity.dtype) * limit,
                 torch.zeros_like(disparity),
             )
-            prior = build_geometry_prior(
-                disparity,
-                batch.camera,
-                state.support,
-                batch.left,
-                policy=reference.config.prior_policy,
-            )
-            if not torch.equal(prior.source_index, base.prior.source_index):
-                raise ValueError("stereo repair changed source sampling correspondence")
-            context = context_from_geometry_prior(
-                prior, context_scale_m=reference.config.context_scale_m
-            )
-            # Match the frozen base head's AMP policy. Re-evaluating it in
-            # FP32 would make a zero stereo correction change the reference
-            # attributes and contaminate counterfactual utility labels.
-            amp_dtype = (
-                torch.float16 if reference.config.runtime.precision == "fp16" else torch.bfloat16
-            )
-            with torch.autocast(
-                device_type=batch.left.device.type,
-                dtype=amp_dtype,
-                enabled=(
-                    batch.left.device.type == "cuda"
-                    and reference.config.runtime.precision in ("fp16", "bf16")
-                ),
-            ):
-                residuals = reference.head(context, prior.valid_mask)
-            changed = compose_gaussian_field(
-                prior, residuals, bounds=reference.config.residual_bounds
-            )
-            names = ("disparity", "centres", "surface_frame", "scale", "opacity", "cov_surface")
+            return geometry_repair_outcome(state, region, disparity, reference)
         elif action == Action.GAUSSIAN:
             field = base.gaussians
             # Compose against actual A04 attributes, rather than replacing the
@@ -238,7 +263,11 @@ class RepairActions(nn.Module):
             context = context_from_geometry_prior(
                 prior, context_scale_m=reference.config.context_scale_m
             )
-            residuals = self.gaussian(context, core)
+            residuals = (
+                self.gaussian.forward_selected(context, core)
+                if isinstance(region, MaskRegion)
+                else self.gaussian(context, core)
+            )
             changed = compose_gaussian_field(
                 prior,
                 AttributeResiduals(
@@ -246,15 +275,84 @@ class RepairActions(nn.Module):
                 ),
                 bounds=self.gaussian_bounds,
             )
+            if self.exact_zero_identity:
+                changed = preserve_zero_gaussian_residual(field, changed, residuals)
             names = ("rotation", "scale", "opacity", "cov_surface")
         else:
             raise ValueError(f"unsupported repair action: {action}")
-        field = merge_field(base.gaussians, changed, core)
-        render_field = replace(field, cov_surface=None)
-        hw = (int(batch.left.shape[-2]), int(batch.left.shape[-1]))
-        if reference.renderer is None:
-            raise ValueError("reference renderer is unavailable")
-        renderer = cast(FieldRenderer, reference.renderer)
-        left = renderer.render(FieldRenderRequest(render_field, batch.camera, hw, "left"))
-        right = renderer.render(FieldRenderRequest(render_field, batch.camera, hw, "right"))
-        return ActionResult(action, field, disparity, left, right, names)
+        return _render_outcome(
+            state, merge_field(base.gaussians, changed, core), disparity, reference, action, names
+        )
+
+
+def geometry_repair_outcome(
+    state: RepairState,
+    region: Region,
+    disparity: torch.Tensor,
+    reference: ReferenceReconstructionModel,
+) -> ActionResult:
+    """Shared A03/head/render path for learned and deterministic geometry actions.
+
+    Disparity is raw [1,1,H,W] pixels. Only core values may differ from base;
+    Gaussian source indices and every out-of-core slot must remain unchanged.
+    The canonical A03 functions own triangulation/surface construction.
+    """
+    base, batch = state.base, state.batch
+    if disparity.shape != base.target.disparity.shape or disparity.device != batch.left.device:
+        raise ValueError("geometry repair disparity grid/device mismatch")
+    if not eligible(state, region) or batch.left.shape[0] != 1:
+        raise ValueError("ineligible geometry repair")
+    if base.gaussians.cov_center is not None or base.gaussians.cov_effective is not None:
+        raise ValueError("A04 repair does not implement uncertainty covariance updates")
+    outside = ~region.mask(batch.left)
+    if not torch.equal(disparity[outside], base.target.disparity[outside]):
+        raise ValueError("geometry repair changed disparity outside core")
+    prior = build_geometry_prior(
+        disparity, batch.camera, state.support, batch.left, policy=reference.config.prior_policy
+    )
+    if not torch.equal(prior.source_index, base.prior.source_index):
+        raise ValueError("stereo repair changed source sampling correspondence")
+    context = context_from_geometry_prior(prior, context_scale_m=reference.config.context_scale_m)
+    # Preserve the established head AMP policy and canonical composition.
+    amp_dtype = torch.float16 if reference.config.runtime.precision == "fp16" else torch.bfloat16
+    with torch.autocast(
+        device_type=batch.left.device.type,
+        dtype=amp_dtype,
+        enabled=(
+            batch.left.device.type == "cuda"
+            and reference.config.runtime.precision in ("fp16", "bf16")
+        ),
+    ):
+        residuals = (
+            reference.head.forward_selected(context, primitive_core(state, region))
+            if isinstance(region, MaskRegion) and isinstance(reference.head, ReferenceAttributeHead)
+            else reference.head(context, prior.valid_mask)
+        )
+    changed = compose_gaussian_field(prior, residuals, bounds=reference.config.residual_bounds)
+    names = ("disparity", "centres", "surface_frame", "scale", "opacity", "cov_surface")
+    return _render_outcome(
+        state,
+        merge_field(base.gaussians, changed, primitive_core(state, region)),
+        disparity,
+        reference,
+        Action.STEREO,
+        names,
+    )
+
+
+def _render_outcome(
+    state: RepairState,
+    field: GaussianField,
+    disparity: torch.Tensor,
+    reference: ReferenceReconstructionModel,
+    action: Action,
+    names: tuple[str, ...],
+) -> ActionResult:
+    render_field = replace(field, cov_surface=None)
+    hw = (int(state.batch.left.shape[-2]), int(state.batch.left.shape[-1]))
+    if reference.renderer is None:
+        raise ValueError("reference renderer is unavailable")
+    renderer = cast(FieldRenderer, reference.renderer)
+    left = renderer.render(FieldRenderRequest(render_field, state.batch.camera, hw, "left"))
+    right = renderer.render(FieldRenderRequest(render_field, state.batch.camera, hw, "right"))
+    return ActionResult(action, field, disparity, left, right, names)

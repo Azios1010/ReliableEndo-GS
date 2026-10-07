@@ -14,12 +14,28 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("command", choices=("smoke", "train", "infer"))
     parser.add_argument("--config", type=Path)
     parser.add_argument("--routing-config", type=Path)
+    parser.add_argument(
+        "--intervention-config",
+        type=Path,
+        help="Opt-in gain/harm selection protocol; legacy mode otherwise",
+    )
     parser.add_argument("--construction-config", type=Path)
+    parser.add_argument(
+        "--mask-config", type=Path, help="Opt-in sparse target-mask proposal protocol"
+    )
+    parser.add_argument(
+        "--target-mask-index", type=Path, help="External deployment ROI index; never GT masks"
+    )
     parser.add_argument("--roles", type=Path, default=Path("configs/teachers/a01_scared.yaml"))
     parser.add_argument("--data-root", type=Path, required=True)
     parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--checkpoint", type=Path, help="Strict resume or deployment checkpoint")
+    parser.add_argument(
+        "--initialize-model-from",
+        type=Path,
+        help="New run with model-only weights; repairs/selector/Adam start fresh",
+    )
     parser.add_argument("--max-steps", type=int, help="Bound consumed training samples")
     parser.add_argument("--sample-id")
     parser.add_argument("--data-role", choices=("final_train", "final_test"), default="final_train")
@@ -31,6 +47,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--cache-root", type=Path, help="Read existing pinned KD cache; missing items fail"
+    )
+    parser.add_argument(
+        "--populate-cache",
+        action="store_true",
+        help="Explicitly generate missing frozen KD targets into --cache-root during training",
     )
     return parser
 

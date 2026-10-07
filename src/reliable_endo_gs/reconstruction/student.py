@@ -8,8 +8,9 @@ No teacher object, package, weights, or cache is needed for forward/inference.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, fields, replace
+from dataclasses import dataclass, field, fields, replace
 from math import isfinite
+from types import MappingProxyType
 
 import torch
 from torch import nn
@@ -61,6 +62,25 @@ class StereoStudent(nn.Module):
 
     def forward(self, batch: DeploymentStereoBatch) -> torch.Tensor:
         """Predict without GT/teacher inputs; discrete support is not differentiated."""
+        return self.predict_with_evidence(batch, include_evidence=False)[0]
+
+    def predict_with_evidence(
+        self, batch: DeploymentStereoBatch, *, include_evidence: bool = True
+    ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+        """Return disparity and detached B1HW evidence from one matching pass."""
+        coarse, probabilities, features = self._matching(batch)
+        residual = self.decoder(
+            torch.cat((batch.left.float(), batch.right.float(), coarse / batch.left.shape[-1]), 1)
+        )
+        offset = (batch.camera.K_L[:, 0, 2] - batch.camera.K_R[:, 0, 2])[:, None, None, None]
+        effective = self.minimum_effective_px + F.softplus(coarse + residual - offset)
+        evidence = self._evidence(batch, probabilities, features) if include_evidence else {}
+        return offset + effective, evidence
+
+    def _matching(
+        self, batch: DeploymentStereoBatch
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Canonical matching computation; also serves detached routing evidence."""
         left = self.features(batch.left.float())
         right = self.features(batch.right.float())
         width = left.shape[-1]
@@ -74,12 +94,40 @@ class StereoStudent(nn.Module):
         candidates = torch.arange(len(costs), device=left.device, dtype=left.dtype)
         coarse = (probabilities * candidates[None, :, None, None]).sum(1, keepdim=True) * 4
         coarse = F.interpolate(coarse, batch.left.shape[-2:], mode="bilinear", align_corners=False)
-        residual = self.decoder(
-            torch.cat((batch.left.float(), batch.right.float(), coarse / batch.left.shape[-1]), 1)
-        )
-        offset = (batch.camera.K_L[:, 0, 2] - batch.camera.K_R[:, 0, 2])[:, None, None, None]
-        effective = self.minimum_effective_px + F.softplus(coarse + residual - offset)
-        return offset + effective
+        return coarse, probabilities, left
+
+    @torch.no_grad()
+    def matching_evidence(self, batch: DeploymentStereoBatch) -> dict[str, torch.Tensor]:
+        """Detached B1HW cost/feature proxies; not calibrated sigma or confidence.
+
+        Standalone diagnostics perform matching; model forward instead shares
+        its existing computation through predict_with_evidence.
+        """
+        _, probabilities, features = self._matching(batch)
+        return self._evidence(batch, probabilities, features)
+
+    @torch.no_grad()
+    def _evidence(
+        self, batch: DeploymentStereoBatch, probabilities: torch.Tensor, features: torch.Tensor
+    ) -> dict[str, torch.Tensor]:
+        """Summarize existing matching tensors, without retaining their graph."""
+        peaks = probabilities.topk(min(2, probabilities.shape[1]), dim=1).values
+        margin = peaks[:, :1] - peaks[:, 1:2] if peaks.shape[1] > 1 else torch.zeros_like(peaks)
+        entropy = -(probabilities * probabilities.clamp_min(1e-8).log()).sum(1, keepdim=True)
+        import math
+
+        entropy = entropy / max(1.0, math.log(probabilities.shape[1]))
+        energy = features.square().mean(1, keepdim=True).sqrt()
+        return {
+            name: F.interpolate(
+                value, batch.left.shape[-2:], mode="bilinear", align_corners=False
+            ).detach()
+            for name, value in {
+                "cost_margin": margin,
+                "cost_entropy": entropy,
+                "feature_energy": energy,
+            }.items()
+        }
 
 
 @dataclass(frozen=True, slots=True)
@@ -124,10 +172,32 @@ class StudentProvenance(ReferenceProvenance):
 class StudentReconstructionResult(ReferenceReconstructionResult):
     """Student output: disparity, prior, Gaussian field, two renders, provenance."""
 
+    matching_evidence: Mapping[str, torch.Tensor] = field(default_factory=dict)
+
     def __post_init__(self) -> None:
         ReferenceReconstructionResult.__post_init__(self)
         if not isinstance(self.provenance_record, StudentProvenance):
             raise TypeError("student result requires StudentProvenance")
+        if self.matching_evidence and set(self.matching_evidence) != {
+            "cost_margin",
+            "cost_entropy",
+            "feature_energy",
+        }:
+            raise ValueError("unsupported student matching evidence schema")
+        for value in self.matching_evidence.values():
+            if (
+                not isinstance(value, torch.Tensor)
+                or value.shape != self.target.disparity.shape
+                or value.device != self.target.disparity.device
+                or value.requires_grad
+                or not bool(torch.isfinite(value).all())
+            ):
+                raise ValueError(
+                    "matching evidence must be detached finite B1HW on prediction device"
+                )
+        object.__setattr__(
+            self, "matching_evidence", MappingProxyType(dict(self.matching_evidence))
+        )
 
 
 class StudentReconstructionModel(ReferenceReconstructionModel):
@@ -163,12 +233,20 @@ class StudentReconstructionModel(ReferenceReconstructionModel):
         calibration_metadata: Mapping[str, object] | None = None,
         sample_ids: Sequence[str] | None = None,
         data_role: str | None = None,
+        include_matching_evidence: bool = False,
     ) -> StudentReconstructionResult:
         """Run canonical reconstruction with explicit student output provenance."""
-        base = super().forward(
+        if not isinstance(batch, DeploymentStereoBatch):
+            raise TypeError("student forward requires DeploymentStereoBatch")
+        if target is not None or alignment is not None:
+            raise ValueError("student forward does not accept teacher targets/alignment")
+        disparity, evidence = self.stereo_student.predict_with_evidence(
+            batch, include_evidence=include_matching_evidence
+        )
+        base = self._reconstruct_prediction(
             batch,
-            target=target,
-            alignment=alignment,
+            self._prediction_adapter(batch, disparity, calibration_metadata),
+            "trainable_student_prediction",
             calibration_metadata=calibration_metadata,
             sample_ids=sample_ids,
             data_role=data_role,
@@ -186,6 +264,8 @@ class StudentReconstructionModel(ReferenceReconstructionModel):
         diagnostics["student_valid_count"] = diagnostics.pop("teacher_valid_count")
         diagnostics["provenance_hash"] = record.provenance_hash
         values["diagnostics"] = diagnostics
+        if include_matching_evidence:
+            values["matching_evidence"] = evidence
         return StudentReconstructionResult(**values)
 
     def _infer_target(
@@ -199,7 +279,18 @@ class StudentReconstructionModel(ReferenceReconstructionModel):
         if target is not None or alignment is not None:
             raise ValueError("student forward does not accept teacher targets/alignment")
         disparity = self.stereo_student(batch)
-        adapter = AlignedTeacherTarget(
+        return self._prediction_adapter(
+            batch, disparity, calibration_metadata
+        ), "trainable_student_prediction"
+
+    def _prediction_adapter(
+        self,
+        batch: DeploymentStereoBatch,
+        disparity: torch.Tensor,
+        calibration_metadata: Mapping[str, object] | None,
+    ) -> AlignedTeacherTarget:
+        """Internal prediction wrapper; external teacher supervision is excluded."""
+        return AlignedTeacherTarget(
             disparity,
             torch.isfinite(disparity),
             batch.support,
@@ -214,4 +305,3 @@ class StudentReconstructionModel(ReferenceReconstructionModel):
                 ),
             },
         )
-        return adapter, "trainable_student_prediction"

@@ -1,0 +1,13 @@
+# One student + two joint updates so gain and harm heads can both receive labels.
+schema: student_joint_learning.v1
+width: 32
+bins: 32
+minimum_effective_px: 0.25
+student_epochs: 1
+joint_epochs: 2
+learning_rate: 0.001
+reconstruction_weight: 1.0
+kd_weight: 1.0
+repair_weight: 1.0
+checkpoint_every: 1
+seed: 20261006

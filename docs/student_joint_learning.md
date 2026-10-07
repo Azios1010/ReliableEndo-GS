@@ -7,6 +7,12 @@ student reconstruction learning followed by joint student/head/repair learning
 and supervised utility selection. It does not certify Gate I or Gate II,
 establish calibrated uncertainty, or replace the frozen A04 experiment.
 
+This document describes the legacy utility experiment. The user-approved
+opt-in gain/harm selector, correspondence-aware repair, screened KD and
+model-only initialization are specified in
+[Intervention selection](intervention_selection.md). Without
+`--intervention-config`, the legacy objective below remains active.
+
 The active data contract remains original SCARED: final_train is dataset_1–7;
 final_test is dataset_8–9. No split, preprocessing, baseline, teacher weights,
 existing external artifacts or running server job is changed by this code.
@@ -156,6 +162,32 @@ frozen experiment. No artifact relabeling, compatibility bypass or migration
 policy is implemented here.
 
 ## Exact commands
+
+An explicitly configured `student_epochs: 0` with positive `joint_epochs`
+updates student/head, both repair heads, and selector from the first sample.
+The historical warmup configuration remains available. Progress records include
+elapsed time, gradient norms for each of the five components before clipping,
+and the measured STOP/stereo/Gaussian utility labels. These diagnostics show
+learning activity; they do not establish Gate I/II or held-out quality.
+Runtime identity records the concrete renderer's identity rather than the
+construction configuration's injection placeholder.
+
+The native zero-repair smoke comparison bounds absolute RGB error by 2e-4
+and mean absolute RGB error by 1e-7 on 0..1 images, while retaining the original
+Gaussian field tolerances. Independent GPU 0 diagnosis found repeat rendering
+and zero stereo repair bit-identical, but zero Gaussian repair's quaternion
+matrix roundtrip changed components by at most one FP32 ULP (1.1921e-7).
+On the inspected sample this caused maximum right RGB error 1.1468e-4 and mean
+error 1.6285e-8. The smoke report retains per-action/per-view errors. These
+tolerances affect only the smoke assertion, not composition or training.
+
+Training may explicitly request `--cache-root "$CACHE_ROOT" --populate-cache`.
+This generates a missing frozen-teacher target once through canonical A01
+collection, restores the training RNG around teacher loading/inference, and
+uses checksum-verified cache hits thereafter. Target mode is pinned in resume
+identity. Without this flag, cache misses still fail without inference. The
+flag requires training with positive KD and a cache root; smoke and inference
+cannot populate caches. No GT is loaded or written.
 
 These commands assume an existing authorized runtime. No dependency install
 was performed. Native commands below are **not run** in this implementation.

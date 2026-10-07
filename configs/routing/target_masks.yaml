@@ -1,0 +1,14 @@
+# Experimental proposal thresholds, not calibrated confidence/risk or FPS claims.
+# Require external deployment ROI index and fresh intervention/selector training.
+schema: target_mask_proposals.v1
+evidence: combined
+feature_evidence: combined
+warp_scale: 0.1
+render_scale: 0.1
+ambiguity_weight: 0.25
+threshold: 0.75
+cell_size: 8
+max_regions: 4
+max_pixels: 4096
+max_primitives: 1024
+max_read_pixels: 65536

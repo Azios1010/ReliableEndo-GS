@@ -1,0 +1,14 @@
+schema: geometry_repair_candidate.v1
+mode: correspondence
+radius_px: 4
+window: 5
+max_delta_px: 4.0
+effective_fraction: 0.25
+minimum_effective_px: 0.25
+minimum_improvement: 0.02
+uniqueness_margin: 0.02
+reverse_tolerance_px: 1.0
+color_distance: 0.05
+minimum_neighbors: 5
+outlier_px: 1.0
+mad_multiplier: 2.5

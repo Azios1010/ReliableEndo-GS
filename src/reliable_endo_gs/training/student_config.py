@@ -29,12 +29,14 @@ class StudentLearningConfig:
     def __post_init__(self) -> None:
         if self.schema != "student_joint_learning.v1":
             raise ValueError("unsupported student schema")
-        for name in ("width", "bins", "student_epochs", "checkpoint_every"):
+        for name in ("width", "bins", "checkpoint_every"):
             if type(getattr(self, name)) is not int or getattr(self, name) < 1:
                 raise ValueError(f"{name} must be a positive integer")
-        for name in ("joint_epochs", "seed"):
+        for name in ("student_epochs", "joint_epochs", "seed"):
             if type(getattr(self, name)) is not int or getattr(self, name) < 0:
                 raise ValueError(f"{name} must be a nonnegative integer")
+        if self.student_epochs + self.joint_epochs < 1:
+            raise ValueError("at least one student or joint epoch is required")
         for name in (
             "minimum_effective_px",
             "learning_rate",

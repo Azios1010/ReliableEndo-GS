@@ -93,6 +93,29 @@ def target_cache_key(
 ) -> TargetCacheKey:
     """Build the complete cache identity for one A00 sample."""
 
+    return sample_cache_key(
+        sample,
+        teacher_identity_hash=_teacher_identity_hash(teacher),
+        split_identity=split_identity,
+        roles=roles,
+    )
+
+
+def sample_cache_key(
+    sample: ScaredA00Sample,
+    *,
+    teacher_identity_hash: str,
+    split_identity: str,
+    roles: A01ScaredDataRoles = DEFAULT_A01_SCARED_ROLES,
+) -> TargetCacheKey:
+    """Bind cached teacher identity to actual image/calibration provenance.
+
+    Read-only consumers can validate input identity without constructing a
+    teacher. The same canonical identity is used when producing the cache.
+    """
+    if len(teacher_identity_hash) != 64:
+        raise A01WorkflowError("teacher identity must be a SHA-256 digest")
+
     alignment = _alignment(sample)
     image_hash = _hash_mapping(
         {
@@ -103,14 +126,13 @@ def target_cache_key(
         }
     )
     calibration_hash = _hash_mapping(dict(sample.calibration_metadata))
-    identity_hash = _teacher_identity_hash(teacher)
     return TargetCacheKey(
         sample_id=sample.sample_id,
         split_identity=split_identity,
         data_role=sample.data_role,
         image_transform_hash=image_hash,
         calibration_transform_hash=calibration_hash,
-        teacher_identity_hash=identity_hash,
+        teacher_identity_hash=teacher_identity_hash,
         target_schema_hash=DEFAULT_TARGET_SCHEMA.schema_hash,
         role_contract_hash=roles.role_hash,
     )

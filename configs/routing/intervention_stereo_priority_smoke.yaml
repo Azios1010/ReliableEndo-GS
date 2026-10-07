@@ -1,0 +1,36 @@
+# Opt-in matched-start ablation: proxy utility x3; post-balance base warp priority x3.
+# Bounded smoke only; training normalization uses 32 snapshots.
+schema: intervention_selection.v2
+matching_width: 8
+search_radius_px: 16
+search_step_px: 2
+matching_temperature: 0.05
+max_effective_fraction: 0.5
+kd_min_depth_m: 0.01
+kd_max_photometric_error: null
+kd_scale_px: 16.0
+rgb_scale: 0.07
+stereo_scale: 0.1
+stereo_weight: 3.0
+collateral_weight: 1.0
+ranking_weight: 1.0
+harm_weight: 1.0
+ranking_margin: 0.02
+harm_tolerance: 0.001
+maximum_harm_probability: 0.5
+minimum_gain: 0.0
+total_budget_ms: 1000.0
+normalization_frames: 1
+normalization_rows: 256
+feature_clip: 5.0
+normalization_floor: 1.0e-06
+initial_gain_scale: 0.05
+minimum_gain_scale: 0.01
+gradient_ema_decay: 0.9
+balance_minimum: 0.05
+balance_maximum: 20.0
+local_auxiliary_weight: 1.0
+local_repair_weight: 1.0
+global_repair_weight: 1.0
+gradient_diagnostics_every: 25
+stereo_training_priority: 3.0

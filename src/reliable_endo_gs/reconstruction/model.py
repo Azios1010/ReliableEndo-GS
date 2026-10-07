@@ -595,6 +595,26 @@ class ReferenceReconstructionModel(nn.Module):
             alignment=alignment,
             calibration_metadata=calibration_metadata,
         )
+        return self._reconstruct_prediction(
+            batch,
+            target,
+            target_source,
+            calibration_metadata=calibration_metadata,
+            sample_ids=sample_ids,
+            data_role=data_role,
+        )
+
+    def _reconstruct_prediction(
+        self,
+        batch: DeploymentStereoBatch,
+        target: AlignedTeacherTarget,
+        target_source: str,
+        *,
+        calibration_metadata: Mapping[str, object] | None,
+        sample_ids: Sequence[str] | None,
+        data_role: str | None,
+    ) -> ReferenceReconstructionResult:
+        """Canonical A03/head/render path after explicit prediction acquisition."""
         self._validate_target_metadata(target, calibration_metadata=calibration_metadata)
         self._validate_target_shape(target, batch)
         role = self.config.data_role if data_role is None else data_role

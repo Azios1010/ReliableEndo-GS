@@ -15,6 +15,12 @@ class Region:
     core: tuple[int, int, int, int]
     halo: tuple[int, int, int, int]
 
+    @property
+    def pixel_count(self) -> int:
+        """Number of writable pixels, independent of the read halo."""
+        y0, x0, y1, x1 = self.core
+        return (y1 - y0) * (x1 - x0)
+
     def mask(self, image: torch.Tensor) -> torch.Tensor:
         """Return a bool [1,1,H,W] core write mask for batch-size one."""
         if image.ndim != 4 or image.shape[0] != 1:
