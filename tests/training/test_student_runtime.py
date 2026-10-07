@@ -23,6 +23,41 @@ from tests.architecture.test_a04_reference_reconstruction import _batch, _FakeTe
 from tests.routing.test_frozen_a04 import AnalyticRenderer
 
 
+@pytest.fixture
+def cpu_native_runtime(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Fake the CLI GPU gate while keeping real CPU optimizers off accelerators."""
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(torch.cuda, "is_current_stream_capturing", lambda: False)
+    monkeypatch.setattr(torch.cuda, "device_count", lambda: 1)
+    # Recent PyTorch optimizers also query the generic accelerator API. The
+    # model and Adam tensors in these tests stay on CPU, despite the fake gate.
+    accelerator = getattr(torch, "accelerator", None)
+    if accelerator is not None:
+        monkeypatch.setattr(accelerator, "is_available", lambda: False)
+
+    def forbidden_cuda_init() -> None:
+        raise AssertionError("CPU runtime substitutes must never initialize CUDA")
+
+    monkeypatch.setattr(torch.cuda, "_lazy_init", forbidden_cuda_init)
+
+
+def test_cpu_native_runtime_keeps_accelerator_probe_on_cpu(cpu_native_runtime):
+    # CUDA availability is faked only to reach CLI orchestration. A generic
+    # availability/synchronize probe must not reach the real driver.
+    accelerator = getattr(torch, "accelerator", None)
+    if accelerator is not None:
+        available = accelerator.is_available()
+        if available:
+            accelerator.synchronize()
+        assert not available
+    parameter = torch.nn.Parameter(torch.tensor(1.0))
+    optimizer = torch.optim.Adam([parameter], lr=0.1)
+    parameter.square().backward()
+    optimizer.step()
+    assert parameter.device.type == "cpu"
+    assert parameter.item() < 1.0
+
+
 def test_native_zero_repair_error_bounds():
     original = torch.zeros(1, 3, 100, 100)
     repaired = original.clone()
@@ -49,7 +84,7 @@ def test_fp32_runtime_roundtrip_and_frozen_default():
 
 
 @pytest.mark.parametrize("command", ["train", "smoke"])
-def test_cli_fp32_startup_reaches_data_boundary(command, tmp_path, monkeypatch):
+def test_cli_fp32_startup_reaches_data_boundary(command, tmp_path, monkeypatch, cpu_native_runtime):
     argv = [
         command,
         "--config",
@@ -63,9 +98,6 @@ def test_cli_fp32_startup_reaches_data_boundary(command, tmp_path, monkeypatch):
     ]
     if command == "smoke":
         argv += ["--sample-id", "dataset_1/keyframe_1/frame_data000000"]
-    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
-    monkeypatch.setattr(torch.cuda, "is_current_stream_capturing", lambda: False)
-    monkeypatch.setattr(torch.cuda, "device_count", lambda: 1)
 
     def data_boundary(_):
         raise LookupError("data boundary reached after FP32 config validation")
@@ -89,7 +121,7 @@ def test_cli_fp32_startup_reaches_data_boundary(command, tmp_path, monkeypatch):
     ],
 )
 def test_cached_cli_updates_without_loading_teacher(
-    tmp_path, monkeypatch, command, cache_hit, populate, balanced
+    tmp_path, monkeypatch, command, cache_hit, populate, balanced, cpu_native_runtime
 ):
     import reliable_endo_gs.teachers.workflow as workflow
     from reliable_endo_gs.training.harness import capture_rng, restore_rng
@@ -98,9 +130,6 @@ def test_cached_cli_updates_without_loading_teacher(
     sample = ScaredA00Sample("dataset_1/keyframe_1/frame_data000000", "final_train", batch, {})
     target = _target(batch)
     target = replace(target, disparity=target.disparity.float())
-    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
-    monkeypatch.setattr(torch.cuda, "is_current_stream_capturing", lambda: False)
-    monkeypatch.setattr(torch.cuda, "device_count", lambda: 1)
     monkeypatch.setattr(torch.cuda, "get_device_name", lambda _: "CPU native substitute")
     monkeypatch.setattr(torch.cuda, "get_device_properties", lambda _: SimpleNamespace(uuid="test"))
     for name in ("synchronize", "reset_peak_memory_stats"):
