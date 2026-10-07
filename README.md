@@ -2,6 +2,11 @@
 
 Research repository for reliable feed-forward stereo endoscopic Gaussian Splatting.
 
+The user-authorized original-SCARED student/joint experiment now has separate
+smoke/train/infer entrypoints and preserves the frozen A04 mode. See
+[student architecture, schedules, validation and run commands](docs/student_joint_learning.md).
+This implementation does not certify research gates or report full-run results.
+
 The project is planned as a two-stage research program:
 
 1. ProbStereo-EndoGS
