@@ -27,7 +27,7 @@ def test_existing_directory_requires_a00_processed_layout(tmp_path: Path) -> Non
     assert report.valid is False
     assert report.layout_checked is True
     assert report.status == "INVALID"
-    assert "found 0/7 active folds and 0 frame records" in report.messages
+    assert "found 0/9 active folds and 0 frame records" in report.messages
     assert "no processed frame_data/*.json samples found" in report.messages
 
 

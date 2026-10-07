@@ -35,8 +35,10 @@ class DeploymentRuntimeProfile:
             value = getattr(self, name)
             if type(value) is not int or value < (0 if name == "warmup" else 1):
                 raise ValueError(f"invalid {name}")
-        if self.precision not in ("fp16", "bf16") or self.geometry_precision != "fp32":
-            raise ValueError("deployment target fp16/bf16 with explicit fp32 geometry")
+        # FP32 is an explicit full-precision experiment mode. The historical
+        # FP16 deployment default and mandatory FP32 geometry are unchanged.
+        if self.precision not in ("fp16", "bf16", "fp32") or self.geometry_precision != "fp32":
+            raise ValueError("runtime precision must be fp16/bf16/fp32 with explicit fp32 geometry")
         if self.synchronize is not True:
             raise ValueError("synchronized timing required")
         if self.resolution_hw is not None:

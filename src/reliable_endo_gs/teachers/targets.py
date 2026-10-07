@@ -176,8 +176,12 @@ class AlignedTeacherTarget:
 def _resize_map(value: torch.Tensor, size: tuple[int, int], *, mode: str) -> torch.Tensor:
     source = value.to(dtype=torch.float32) if not value.is_floating_point() else value
     if mode == "nearest":
-        return functional.interpolate(source, size=size, mode=mode)
-    return functional.interpolate(source, size=size, mode=mode, align_corners=False)
+        resized = functional.interpolate(source, size=size, mode=mode)
+    else:
+        resized = functional.interpolate(source, size=size, mode=mode, align_corners=False)
+    if not isinstance(resized, torch.Tensor):
+        raise TeacherContractError("interpolation must return a Tensor")
+    return resized
 
 
 def _embed(

@@ -71,6 +71,10 @@ module = "yaml"
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
+module = "scipy.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
 module = "tifffile"
 follow_imports = "skip"
 ignore_missing_imports = true

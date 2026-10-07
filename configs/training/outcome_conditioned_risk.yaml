@@ -1,0 +1,15 @@
+# Gain-selected model is fixed before refitting the tiny conditional risk head.
+# All inputs are pre-action features/predictions, never metric GT at inference.
+schema: outcome_training.v2
+max_steps: 1000
+min_steps: 100
+validate_every: 25
+patience: 6
+min_delta: 0.001
+weight_decay: 0.01
+dropout: 0.1
+risk_ranking_weight: 0.25
+independent_encoder_stopping: true
+calibration_method: platt
+calibration_regularization: 0.01
+risk_feature_mode: predicted_margins

@@ -3,8 +3,17 @@
 ## Scope
 This document specifies the pipeline boundaries, file layout, and tensor contracts for the ReliableEndo-GS multi-sequence SCARED expansion.
 
-## Controlled Five-Keyframe Split (v3 Revision)
-The current canonical split is the frozen five-keyframe v3 benchmark. It retains the v2 train groups and adds `dataset_4/keyframe_4` as a second held-out validation keyframe:
+The active original-SCARED role contract trains on `dataset_1`–`dataset_7`
+and reserves `dataset_8`–`dataset_9` for final evaluation. The older A01
+development split and the controlled five-keyframe split below are historical
+protocols only; see `PLAN.md` and `configs/teachers/a01_scared.yaml`.
+
+## Historical Controlled Five-Keyframe Split (v3 Revision)
+
+This section records the legacy tensor-pipeline split and is not the active
+ReliableEndo-GS role policy.
+The historical five-keyframe split retained the v2 train groups and added
+`dataset_4/keyframe_4` as a second held-out validation keyframe:
 
 - **TRAIN**:
   - `dataset_1/keyframe_1`
@@ -32,7 +41,7 @@ dataset_X/keyframe_Y/
     |-- left_finalpass/      # Rectified 8-bit RGB left PNG images
     |-- right_finalpass/     # Rectified 8-bit RGB right PNG images
     |-- disparity/           # Single-channel float32 disparity TIFFs
-    |-- newpram_data/        # Rectified intrinsics and extrinsics JSONs
+    |-- newpram_data/        # Rectified intrinsics and named transforms JSONs
     `-- reprojection_data/   # 4x4 reprojection Q-matrix JSONs
 ```
 
@@ -48,7 +57,8 @@ dataset_X/keyframe_Y/
 4. **`newpram_data/{frame_id}.json`**:
    - `intr0`: 3x3 float matrix of rectified left camera intrinsics.
    - `intr1`: 3x3 float matrix of rectified right camera intrinsics.
-   - `extr0`: 3x4 float matrix `[R | T]` of left camera extrinsics.
+   - `T_R_from_L`: 4x4 transform from rectified left-camera coordinates to rectified right-camera coordinates, with units declared by `a00_protocol.json`.
+   - `extr0`, when present in a historical processed dataset, remains the legacy left-camera/world extrinsic `[R | T]`. It is not the stereo transform and must never be reinterpreted as `T_R_from_L`.
 5. **`reprojection_data/{frame_id}.json`**:
    - `reprojection-matrix`: 4x4 float matrix `Q` satisfying standard OpenCV stereo reprojection.
 

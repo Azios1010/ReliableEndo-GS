@@ -159,6 +159,7 @@ class TargetCache:
         *,
         target_schema: TargetSchema = DEFAULT_TARGET_SCHEMA,
         roles: A01ScaredDataRoles = DEFAULT_A01_SCARED_ROLES,
+        read_only: bool = False,
     ) -> None:
         if not isinstance(target_schema, TargetSchema):
             raise TargetCacheError("target_schema must be a TargetSchema")
@@ -167,9 +168,14 @@ class TargetCache:
         self.root = Path(root)
         self.target_schema = target_schema
         self.roles = roles
+        self.read_only = read_only
         self.manifest_path = self.root / "manifest.json"
         self._entries: dict[str, dict[str, object]] = {}
-        self.root.mkdir(parents=True, exist_ok=True)
+        if read_only:
+            if not self.root.is_dir() or not self.manifest_path.is_file():
+                raise TargetCacheError("read-only target cache requires an existing manifest")
+        else:
+            self.root.mkdir(parents=True, exist_ok=True)
         self._load_manifest()
 
     def _load_manifest(self) -> None:
@@ -309,7 +315,8 @@ class TargetCache:
 
     def put(self, key: TargetCacheKey, target: AlignedTeacherTarget) -> None:
         """Atomically store one target and update its checksummed manifest."""
-
+        if self.read_only:
+            raise TargetCacheError("cannot write a read-only target cache")
         self._validate_key(key)
         disparity, validity, support = self._target_tensors(target)
         try:
@@ -421,6 +428,8 @@ class TargetCache:
         cached = self.get(key)
         if cached is not None:
             return TargetCacheResult(cached, cache_hit=True)
+        if self.read_only:
+            raise TargetCacheError("read-only cache miss; producer will not be called")
         target = producer()
         self.put(key, target)
         return TargetCacheResult(target, cache_hit=False)

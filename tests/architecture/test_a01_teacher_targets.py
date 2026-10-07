@@ -169,8 +169,8 @@ def test_cache_resume_checksum_manifest_and_key_invalidation(tmp_path: Path) -> 
     cache = TargetCache(cache_root)
     key = TargetCacheKey(
         sample_id="dataset_1/keyframe_1/frame_000",
-        split_identity="a01-dev-v1",
-        data_role="teacher_fit",
+        split_identity="a01-scared-final-train-1-7-test-8-9-v1",
+        data_role="final_train",
         image_transform_hash="image-v1",
         calibration_transform_hash="calib-v1",
         teacher_identity_hash="teacher-v1",
@@ -208,8 +208,8 @@ def test_cache_manifest_and_item_integrity_fail_closed(tmp_path: Path) -> None:
     cache = TargetCache(cache_root)
     key = TargetCacheKey(
         sample_id="dataset_1/keyframe_1/frame_000",
-        split_identity="a01-dev-v1",
-        data_role="teacher_fit",
+        split_identity="a01-scared-final-train-1-7-test-8-9-v1",
+        data_role="final_train",
         image_transform_hash="image-v1",
         calibration_transform_hash="calib-v1",
         teacher_identity_hash="teacher-v1",
@@ -250,36 +250,49 @@ def test_cache_manifest_and_item_integrity_fail_closed(tmp_path: Path) -> None:
         TargetCache(valid_cache_root)
 
 
-def test_role_config_is_scared_only_and_uses_all_seven_development_folds(
+def test_role_config_uses_dataset_1_to_7_for_training_and_protects_8_to_9(
     tmp_path: Path,
 ) -> None:
     roles = load_a01_roles(Path("configs/teachers/a01_scared.yaml"))
-    assert roles.dataset_ids == tuple(f"dataset_{index}" for index in range(1, 8))
-    assert roles.final_dataset_ids == A01_FINAL_DATASET_IDS == ()
-    assert roles.datasets_for_role("teacher_fit") == ("dataset_1", "dataset_2", "dataset_3")
-    assert roles.datasets_for_role("qualification") == (
-        "dataset_4",
-        "dataset_5",
-        "dataset_6",
-        "dataset_7",
+    assert roles.dataset_ids == tuple(f"dataset_{index}" for index in range(1, 10))
+    assert roles.final_dataset_ids == A01_FINAL_DATASET_IDS == ("dataset_8", "dataset_9")
+    assert roles.datasets_for_role("final_train") == tuple(
+        f"dataset_{index}" for index in range(1, 8)
     )
+    assert roles.datasets_for_role("final_test") == ("dataset_8", "dataset_9")
+    assert roles.final_roles == ("final_test",)
+    assert roles.cache_roles == ("final_train",)
     assert (
-        roles.validate_sample_id("dataset_1/keyframe_1/frame_000", role="teacher_fit", cache=True)
+        roles.validate_sample_id("dataset_1/keyframe_1/frame_000", role="final_train", cache=True)
         == "dataset_1/keyframe_1/frame_000"
     )
     dataset_six_key = TargetCacheKey(
         sample_id="dataset_6/keyframe_1/frame_000",
-        split_identity="a01-dev-v1",
-        data_role="qualification",
+        split_identity="a01-scared-final-train-1-7-test-8-9-v1",
+        data_role="final_train",
         image_transform_hash="image-v1",
         calibration_transform_hash="calib-v1",
         teacher_identity_hash="teacher-v1",
     )
     TargetCache(tmp_path / "dataset-six-cache", roles=roles).put(dataset_six_key, _target())
 
+    assert (
+        roles.validate_sample_id("dataset_8/keyframe_1/frame_000", role="final_test", cache=False)
+        == "dataset_8/keyframe_1/frame_000"
+    )
+    final_test_key = TargetCacheKey(
+        sample_id="dataset_8/keyframe_1/frame_000",
+        split_identity="a01-scared-final-train-1-7-test-8-9-v1",
+        data_role="final_test",
+        image_transform_hash="image-v1",
+        calibration_transform_hash="calib-v1",
+        teacher_identity_hash="teacher-v1",
+    )
+    with pytest.raises(TargetCacheError, match="not approved for A01 target caching"):
+        TargetCache(tmp_path / "final-test-cache", roles=roles).put(final_test_key, _target())
+
     for sample_id in (
-        "dataset_8/keyframe_1/frame_000",
-        "dataset_9/keyframe_1/frame_000",
+        "dataset_10/keyframe_1/frame_000",
         "SCARED-C/sequence/frame_000",
         "arbitrary/keyframe/frame_000",
     ):
@@ -287,8 +300,8 @@ def test_role_config_is_scared_only_and_uses_all_seven_development_folds(
             TargetCache(tmp_path / "invalid-cache", roles=roles).put(
                 TargetCacheKey(
                     sample_id=sample_id,
-                    split_identity="a01-dev-v1",
-                    data_role="qualification",
+                    split_identity="a01-scared-final-train-1-7-test-8-9-v1",
+                    data_role="final_test",
                     image_transform_hash="image-v1",
                     calibration_transform_hash="calib-v1",
                     teacher_identity_hash="teacher-v1",
@@ -303,8 +316,8 @@ def test_cache_rejects_unvalidated_roles_and_identity_mismatches(tmp_path: Path)
 
     key = TargetCacheKey(
         sample_id="dataset_1/keyframe_1/frame_000",
-        split_identity="a01-dev-v1",
-        data_role="teacher_fit",
+        split_identity="a01-scared-final-train-1-7-test-8-9-v1",
+        data_role="final_train",
         image_transform_hash="image-v1",
         calibration_transform_hash="calib-v1",
         teacher_identity_hash="teacher-v1",

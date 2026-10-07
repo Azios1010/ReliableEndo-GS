@@ -217,6 +217,35 @@ class BoundedAttributeResidualHead(nn.Module):
         nn.init.zeros_(self.output.weight)
         nn.init.zeros_(self.output.bias)
 
+    def forward_selected(self, context: torch.Tensor, selected: torch.Tensor) -> AttributeResiduals:
+        """Evaluate only selected pointwise contexts and scatter BxNx{3,3,1}.
+
+        This head has no cross-primitive operations, so gathering preserves its
+        semantics. Geometry construction and field composition are separate.
+        """
+        if (
+            context.ndim != 3
+            or selected.shape != context.shape[:2]
+            or selected.dtype != torch.bool
+            or selected.device != context.device
+        ):
+            raise ValueError("selected head requires context BNC and on-device bool BN")
+        indices = selected.reshape(-1).nonzero().flatten()
+        if not indices.numel():
+            raise ValueError("selected head requires at least one primitive")
+        compact = context.reshape(-1, context.shape[-1])[indices][None]
+        residuals = self(compact, torch.ones_like(indices, dtype=torch.bool)[None])
+
+        def scatter(value: torch.Tensor) -> torch.Tensor:
+            flat = value.new_zeros((selected.numel(), value.shape[-1]))
+            return flat.index_copy(0, indices, value[0]).reshape(*selected.shape, value.shape[-1])
+
+        return AttributeResiduals(
+            scatter(residuals.delta_rotation),
+            scatter(residuals.delta_log_scale),
+            scatter(residuals.delta_alpha_logit),
+        )
+
     def forward(
         self,
         context: torch.Tensor | object,

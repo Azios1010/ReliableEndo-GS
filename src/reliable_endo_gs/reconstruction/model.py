@@ -215,7 +215,7 @@ class ReferenceProvenance:
             raise ReferenceModelError("A04 reference provenance is restricted to SCARED")
         if tuple(self.active_dataset_ids) != A01_DATASET_IDS:
             raise ReferenceModelError(
-                "provenance must enumerate active SCARED dataset_1 through dataset_7"
+                "provenance must enumerate active original SCARED dataset_1 through dataset_9"
             )
         if "SCARED-C" not in self.excluded_dataset_names:
             raise ReferenceModelError("provenance must record SCARED-C as excluded")
@@ -595,6 +595,26 @@ class ReferenceReconstructionModel(nn.Module):
             alignment=alignment,
             calibration_metadata=calibration_metadata,
         )
+        return self._reconstruct_prediction(
+            batch,
+            target,
+            target_source,
+            calibration_metadata=calibration_metadata,
+            sample_ids=sample_ids,
+            data_role=data_role,
+        )
+
+    def _reconstruct_prediction(
+        self,
+        batch: DeploymentStereoBatch,
+        target: AlignedTeacherTarget,
+        target_source: str,
+        *,
+        calibration_metadata: Mapping[str, object] | None,
+        sample_ids: Sequence[str] | None,
+        data_role: str | None,
+    ) -> ReferenceReconstructionResult:
+        """Canonical A03/head/render path after explicit prediction acquisition."""
         self._validate_target_metadata(target, calibration_metadata=calibration_metadata)
         self._validate_target_shape(target, batch)
         role = self.config.data_role if data_role is None else data_role
@@ -619,16 +639,19 @@ class ReferenceReconstructionModel(nn.Module):
         support = target.support & target.validity & batch.support
         from reliable_endo_gs.gaussians import build_geometry_prior
 
-        geometry_prior = build_geometry_prior(
-            target.disparity,
-            batch.camera,
-            support,
-            rgb=batch.left,
-            policy=self.config.prior_policy,
-        )
-        context = context_from_geometry_prior(
-            geometry_prior, context_scale_m=self.config.context_scale_m
-        )
+        # Preserve calibrated geometry precision under the trainer's AMP scope.
+        # FP32 operands alone do not prevent covariance matmuls being autocast.
+        with torch.autocast(device_type=batch.left.device.type, enabled=False):
+            geometry_prior = build_geometry_prior(
+                target.disparity,
+                batch.camera,
+                support,
+                rgb=batch.left,
+                policy=self.config.prior_policy,
+            )
+            context = context_from_geometry_prior(
+                geometry_prior, context_scale_m=self.config.context_scale_m
+            )
         residuals = self.head(context, geometry_prior.valid_mask)
         # The default/reference head exposes the residual semantics directly;
         # custom injected heads must return the same first-party value.
@@ -636,18 +659,21 @@ class ReferenceReconstructionModel(nn.Module):
 
         if not isinstance(residuals, AttributeResiduals):
             raise TypeError("reference head must return AttributeResiduals")
-        field = compose_gaussian_field(
-            geometry_prior,
-            residuals,
-            bounds=self.config.residual_bounds,
-        )
-        image_hw = (int(batch.left.shape[2]), int(batch.left.shape[3]))
-        render_left = self._render(field, batch.camera, image_hw, "left")
-        render_right = (
-            self._render(field, batch.camera, image_hw, "right")
-            if "right" in self.config.assessment_views
-            else None
-        )
+        # Rotation/covariance composition and native camera projection must
+        # retain geometry precision too. Only the head uses the caller's AMP.
+        with torch.autocast(device_type=batch.left.device.type, enabled=False):
+            field = compose_gaussian_field(
+                geometry_prior,
+                residuals,
+                bounds=self.config.residual_bounds,
+            )
+            image_hw = (int(batch.left.shape[2]), int(batch.left.shape[3]))
+            render_left = self._render(field, batch.camera, image_hw, "left")
+            render_right = (
+                self._render(field, batch.camera, image_hw, "right")
+                if "right" in self.config.assessment_views
+                else None
+            )
 
         teacher_identity = self._teacher_identity()
         target_metadata = target.cache_metadata()

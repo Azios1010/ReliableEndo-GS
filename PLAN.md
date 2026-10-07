@@ -13,7 +13,50 @@ ProbStereo-EndoGS
 
 Phase I must establish a reliable representation independently. Phase II may consume the frozen Phase I evidence, but must not redefine its uncertainty semantics to make routing easier. The program succeeds only if the final system improves the reconstruction quality-cost frontier at matched measured compute; adding capacity alone is insufficient.
 
-## Current execution checkpoint (2026-09-20)
+## Active data and role contract (2026-09-30)
+
+The active ReliableEndo-GS pipeline uses original SCARED only:
+`dataset_1`–`dataset_7` are the final training pool and `dataset_8`–`dataset_9`
+are reserved for final evaluation. SCARED-C and folders beyond `dataset_9` are
+excluded. The role contract in
+[`configs/teachers/a01_scared.yaml`](configs/teachers/a01_scared.yaml) is the
+source of truth. This policy supersedes the earlier A01 development split
+(`teacher_fit` 1–3 / `qualification` 4–7) and the historical SCARED-C / dataset_6
+holdout protocol below; those remain archived evidence only.
+
+## Active user-approved action-learning experiment (2026-10-05)
+
+The user approved a separate experiment on the current teacher-backed A04
+reference: first keep that artifact frozen and learn Phase II repair heads plus
+a small action selector with an intervention harness; subsequently implement
+a student and jointly train the two phases. The first step is described in
+[Frozen A04 action learning](docs/frozen_a04_action_learning.md) and configured
+by `configs/routing/frozen_a04.yaml`. The student/joint experiment is implemented
+separately in `docs/student_joint_learning.md`. The user subsequently approved
+the opt-in gain/harm/budget intervention experiment described in
+`docs/intervention_selection.md`: screened KD, correspondence-aware stereo
+repair, a guiding harness and joint updates of all three parameter owners.
+Historical artifacts and gate failures remain evidence; implementation does
+not demonstrate useful multi-action routing or calibrated uncertainty.
+
+The 2026-10-06 user-approved loss/supervision/feature remediation is a separate
+opt-in v2 experiment described in
+[Balanced local/global action learning](docs/intervention_balanced_learning.md).
+It preserves prior artifacts and requires a bounded native smoke/pilot before
+any claim of improved selection or metric geometry.
+
+This explicit approval permits the isolated experimental implementation before
+the historical gate sequence below. It does not mark Gate I or Gate II passed,
+establish calibrated uncertainty in A04, or replace historical negative evidence.
+The original baseline and Phase I remain independent of actions/routing.
+Active data roles stay original SCARED train 1–7 / final test 8–9. No full Phase II
+training or final held-out experiment is implied by implementing its mechanisms.
+
+## Historical execution checkpoint (recorded 2026-09-20)
+
+The following baseline/Phase-I checkpoint is retained as historical research
+context. Its SCARED-C development and dataset_6 holdout policy is superseded by
+the active original-SCARED role contract above.
 
 ### Deterministic foundation
 
@@ -42,11 +85,9 @@ evidence. Details are in [Plan 03](plans/03_baseline_reproduction.md).
 
 ### Phase I order and decision
 
-After patched Stage2 fixed-10k is validated and the deterministic foundation is
-accepted, audit, repair, and harden the existing Phase I reliability/uncertainty
-implementation. Then run the current Phase I once more on the full SCARED-C
-development protocol. Do not move directly to probabilistic fallback methods
-before this run. `dataset_6` remains completely untouched as the final holdout.
+The historical checkpoint above proposed another Phase-I run on SCARED-C and
+reserved `dataset_6` as a final holdout. That dataset policy is archived only;
+active work follows the original-SCARED role mapping in the section above.
 
 - **PASS:** continue the current Phase I direction and evaluate downstream reliability utility.
 - **FAIL:** stop further heuristic uncertainty-proxy search, freeze the strongest deterministic Stage1 mean predictor, and move to explicit predictive uncertainty in this order:
@@ -68,7 +109,7 @@ a PASS here does not itself authorize Phase II or establish downstream utility.
 - Correlation with error is not calibrated uncertainty; evaluate distribution fit, calibration, and transfer separately from ranking.
 - Do not equate positional uncertainty covariance with Gaussian surface/support covariance.
 - Do not claim that diffusion sample variance is total uncertainty.
-- Do not use `dataset_6` for architecture, loss, calibration, threshold, or checkpoint selection; access it only for final evaluation after choices are frozen.
+- The historical SCARED-C protocol reserved `dataset_6` as a final holdout. It is not an active split rule; current roles are defined above.
 - Do not change upstream disparity/depth/point-cloud geometry semantics, including `disp2depth` and `depth2pc`, merely to improve metrics.
 
 ### Immediate execution checklist
@@ -78,15 +119,15 @@ a PASS here does not itself authorize Phase II or establish downstream utility.
 - [ ] evaluate matched 422-frame validation
 - [ ] freeze deterministic foundation only if Stage2 is acceptable
 - [ ] audit/fix current Phase I
-- [ ] run current Phase I on full SCARED-C development set
+- [x] retain the previous SCARED-C / dataset_6 policy as historical protocol evidence
 - [ ] decide PASS → continue / FAIL → Gaussian-Laplace fallback
 
 ## Dependency graph
 
-The graph describes milestone dependencies. Execution follows the current
-checkpoint above: its failed full-development Phase I branch supersedes the
-older proxy fallback options. An existing calibrated-proxy path remains eligible
-only if the current full-development Phase I decision passes.
+The graph describes milestone dependencies. Its older SCARED-C checkpoint
+references are retained as historical context; active data roles follow the
+original-SCARED contract above. Existing research gates and their evidence
+requirements remain unchanged.
 
 ```mermaid
 flowchart TD

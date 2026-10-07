@@ -1,0 +1,12 @@
+schema: student_joint_learning.v1
+width: 32
+bins: 32
+minimum_effective_px: 0.25
+student_epochs: 0
+joint_epochs: 3
+learning_rate: 0.001
+reconstruction_weight: 1.0
+kd_weight: 1.0
+repair_weight: 1.0
+checkpoint_every: 25
+seed: 20261006

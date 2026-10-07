@@ -1,0 +1,17 @@
+schema_version: 1
+model: defom_stereo
+source_root: ${RELIABLE_ENDO_DEFOM_ROOT}
+source_revision: null
+source_sha256: null
+checkpoint: ${RELIABLE_ENDO_DEFOM_CHECKPOINT}
+checkpoint_sha256: null
+license_file: ${RELIABLE_ENDO_DEFOM_ROOT}/LICENSE
+license_sha256: null
+architecture: defom_stereo_architecture.yaml
+architecture_sha256: null
+checkpoint_format: model  # use state_dict only for a verified raw state-dict artifact
+precision: float32
+valid_iters: 32
+mode: regular
+small_ratio: 0.5         # unused by DEFOM-Stereo, retained in config identity
+scale_iters: 8

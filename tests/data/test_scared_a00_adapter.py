@@ -84,6 +84,26 @@ def test_a00_adapter_emits_deployment_and_separate_supervision(tmp_path: Path) -
     assert not hasattr(sample.batch, "gt_disparity")
 
 
+@pytest.mark.parametrize("right_crop_x", [0, 1])
+def test_empty_supervision_keeps_deployment_rgb_and_sensor_support(
+    tmp_path: Path, right_crop_x: int
+) -> None:
+    root = _fixture(tmp_path)
+    path = root / "dataset_1/keyframe_1/data/disparity/frame_data000000.tiff"
+    tifffile.imwrite(path, np.zeros((4, 5), dtype=np.float32))
+    manifest = build_a01_manifest(root, tmp_path / "a01.json", require_all_folds=False)
+    adapter = ScaredA00Adapter(root, manifest)
+    kwargs = dict(crop_xy_right=(right_crop_x, 0), crop_hw=(4, 4), output_hw=(2, 2))
+    sample = adapter.load(manifest.entries[0].sample_id, include_supervision=True, **kwargs)
+    assert sample.supervision is not None
+    assert not sample.supervision.valid_mask.any()
+    assert sample.batch.support.all()
+    deployment = adapter.load(manifest.entries[0].sample_id, include_supervision=False, **kwargs)
+    assert deployment.supervision is None
+    assert torch.equal(deployment.batch.left, sample.batch.left)
+    assert not hasattr(deployment.batch, "gt_disparity")
+
+
 def test_a00_adapter_applies_crop_resize_and_disparity_scaling(tmp_path: Path) -> None:
     root = _fixture(tmp_path)
     manifest = build_a01_manifest(root, tmp_path / "a01.json", require_all_folds=False)
@@ -127,7 +147,22 @@ def test_a00_protocol_missing_fails_closed(tmp_path: Path) -> None:
         ScaredA00Adapter(root, manifest).load(manifest.entries[0].sample_id)
 
 
-def test_active_manifest_rejects_dataset_9(tmp_path: Path) -> None:
+def test_active_manifest_assigns_dataset_9_to_final_test(tmp_path: Path) -> None:
     root = _fixture(tmp_path, dataset_id="dataset_9")
-    with pytest.raises(ScaredA00SampleError, match="dataset_1"):
-        build_a01_manifest(root, tmp_path / "a01.json")
+    manifest = build_a01_manifest(root, tmp_path / "a01.json", require_all_folds=False)
+    assert len(manifest.entries) == 1
+    assert manifest.entries[0].sample_id == "dataset_9/keyframe_1/frame_data000000"
+    assert manifest.entries[0].data_role == "final_test"
+    sample = ScaredA00Adapter(root, manifest).load(
+        manifest.entries[0].sample_id, include_supervision=False
+    )
+    assert sample.data_role == "final_test"
+
+
+def test_active_adapter_rejects_dataset_10(tmp_path: Path) -> None:
+    root = _fixture(tmp_path)
+    manifest = build_a01_manifest(root, tmp_path / "a01.json", require_all_folds=False)
+    with pytest.raises(ScaredA00SampleError, match="dataset_1 through dataset_9"):
+        ScaredA00Adapter(root, manifest).load(
+            "dataset_10/keyframe_1/frame_data000000", include_supervision=False
+        )
