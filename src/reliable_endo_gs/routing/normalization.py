@@ -72,19 +72,27 @@ class TrainingNormalization(nn.Module):
             raise ValueError("normalizer may only observe original SCARED training inputs")
         if bool(self.fitted):
             return
+        if features.ndim != 2 or features.shape[1] != self.center.numel() or features.shape[0] == 0:
+            raise ValueError("normalizer observations require nonempty [R,F] features")
+        feature_count, utility_count = int(self.counts[0]), int(self.counts[1])
         if global_gain.shape != (features.shape[0], 3) or local_gain.shape != global_gain.shape:
             raise ValueError("normalizer utility labels must be [R,3]")
+        if not bool((global_gain[:, 0] == 0).all() & (local_gain[:, 0] == 0).all()):
+            raise ValueError("normalizer STOP gains must be exactly zero")
+        if feature_count + features.shape[0] > self.feature_rows.shape[0]:
+            raise ValueError("normalizer feature capacity exceeded")
         if not bool(
             torch.isfinite(features).all()
             & torch.isfinite(global_gain).all()
             & torch.isfinite(local_gain).all()
         ):
             raise ValueError("normalizer observations must be finite")
-        feature_count, utility_count = int(self.counts[0]), int(self.counts[1])
         n = min(features.shape[0], self.feature_rows.shape[0] - feature_count)
         self.feature_rows[feature_count : feature_count + n].copy_(features[:n].detach())
         utilities = torch.stack((global_gain[:, 1:], local_gain[:, 1:]), -1).reshape(-1, 2).detach()
-        m = min(utilities.shape[0], self.utility_rows.shape[0] - utility_count)
+        if utility_count + utilities.shape[0] > self.utility_rows.shape[0]:
+            raise ValueError("normalizer utility capacity exceeded")
+        m = utilities.shape[0]
         self.utility_rows[utility_count : utility_count + m].copy_(utilities[:m])
         self.counts.add_(self.counts.new_tensor([n, m, 1]))
         chain = hashlib.sha256(
@@ -107,7 +115,18 @@ class TrainingNormalization(nn.Module):
         spread = (quantiles[2] - quantiles[0]) / 1.349  # normal-distribution IQR conversion
         varying = values.amax(0) - values.amin(0) > self.config.normalization_floor
         self.center.copy_(quantiles[1])
-        self.scale.copy_(spread.clamp_min(self.config.normalization_floor))
+        # A feature can vary while its empirical IQR is zero (for example a
+        # sparse availability/event column).  A tiny floor would saturate
+        # those future values at +/-clip and erase the variation.  Keep unit
+        # scale for that case; truly constant columns are masked inactive.
+        scale = spread.clamp_min(self.config.normalization_floor)
+        scale = torch.where(
+            varying & (spread <= self.config.normalization_floor),
+            scale.new_ones(()),
+            scale,
+        )
+        scale = torch.where(varying, scale, scale.new_ones(()))
+        self.scale.copy_(scale)
         self.active.copy_(varying)
         # Availability indicators retain their declared binary semantics.
         for index in self.flags:

@@ -28,7 +28,9 @@ from reliable_endo_gs.rendering.production import ProductionFieldRenderer
 from reliable_endo_gs.routing.balanced import BalancedSelector
 from reliable_endo_gs.routing.config import RoutingConfig, load_routing_config
 from reliable_endo_gs.routing.context import BALANCED_FEATURE_NAMES
+from reliable_endo_gs.routing.cost import load_cost_calibration
 from reliable_endo_gs.routing.masks import MaskProposalConfig, load_mask_config
+from reliable_endo_gs.routing.tradeoff import load_tradeoff_config
 from reliable_endo_gs.runtime.git import get_git_commit, is_git_dirty
 from reliable_endo_gs.teachers import AlignedTeacherTarget, TargetCache, load_a01_roles
 from reliable_endo_gs.training.harness import capture_rng, restore_rng
@@ -66,6 +68,31 @@ def run_student_command(arguments: argparse.Namespace) -> dict[str, object]:
     infer = arguments.command == "infer"
     smoke = arguments.command == "smoke"
     initialize_from = getattr(arguments, "initialize_model_from", None)
+    metric_selector_path = getattr(arguments, "metric_selector", None)
+    metric_config_path = getattr(arguments, "metric_config", None)
+    metric_candidate_hash = getattr(arguments, "metric_candidate_hash", None)
+    cost_calibration_path = getattr(arguments, "cost_calibration", None)
+    deployment_artifacts = (
+        metric_selector_path,
+        metric_config_path,
+        metric_candidate_hash,
+        cost_calibration_path,
+    )
+    if not infer and any(value is not None for value in deployment_artifacts):
+        raise ValueError("metric selector/cost calibration inputs are inference-only")
+    metric_selector_inputs = (
+        metric_selector_path,
+        metric_config_path,
+        metric_candidate_hash,
+    )
+    if any(value is not None for value in metric_selector_inputs) and not all(
+        value is not None for value in metric_selector_inputs
+    ):
+        raise ValueError(
+            "--metric-selector requires --metric-config and --metric-candidate-hash"
+        )
+    if metric_candidate_hash is not None and not str(metric_candidate_hash).strip():
+        raise ValueError("--metric-candidate-hash must be nonempty")
     if initialize_from is not None and (infer or arguments.checkpoint is not None):
         raise ValueError("model initialization is a new run, incompatible with inference/resume")
     if infer and (arguments.checkpoint is None or arguments.sample_id is None):
@@ -253,6 +280,17 @@ def run_student_command(arguments: argparse.Namespace) -> dict[str, object]:
     if infer:
         assert arguments.checkpoint is not None
         load_student_checkpoint(arguments.checkpoint, learner, identity, len(dataset), resume=False)
+        if cost_calibration_path is not None:
+            calibration = load_cost_calibration(cost_calibration_path)
+            learner.attach_cost_calibration(calibration)
+        if metric_selector_path is not None:
+            assert metric_config_path is not None and metric_candidate_hash is not None
+            metric_config = load_tradeoff_config(metric_config_path)
+            learner.load_metric_selector(
+                metric_selector_path,
+                metric_config,
+                str(metric_candidate_hash),
+            )
         sample = adapter.load(
             arguments.sample_id,
             data_role=arguments.data_role,

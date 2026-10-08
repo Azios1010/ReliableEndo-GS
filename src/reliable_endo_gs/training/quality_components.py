@@ -70,7 +70,14 @@ def measure_quality(state: RepairState, outcome: ActionResult, region: Region) -
 def component_targets(
     before: dict[str, float], after: dict[str, float], config: InterventionConfig
 ) -> tuple[float, float, bool]:
-    """Global utility drives decisions; local utility is auxiliary, not counted twice."""
+    """Return ``(global_decision_gain, local_auxiliary_gain, harm)``.
+
+    The two gains intentionally have separate owners.  ``global_decision_gain``
+    is the only value passed to allocation/oracle ranking; ``local_auxiliary_gain``
+    supervises the local branch and is never added to the global value.  This
+    prevents a small region's reward from being counted once through its local
+    mean and again through the full-frame mean.
+    """
     if set(before) != set(QualityComponents.__dataclass_fields__) or set(after) != set(before):
         raise ValueError("quality component schema mismatch")
     if not all(math.isfinite(v) for d in (before, after) for v in d.values()):

@@ -163,9 +163,19 @@ def candidate_scores(state: RepairState, config: MaskProposalConfig) -> torch.Te
     )
     stereo = (warp_error / config.warp_scale).clamp(0, 1)
     evidence = getattr(state.base, "matching_evidence", {})
+    # Ambiguity is meaningful only where the matcher supplied at least one
+    # finite candidate.  An all-invalid row is an unknown/abstain signal; a
+    # zero probability vector must never be interpreted as high certainty.
     if "cost_entropy" in evidence and "cost_margin" in evidence:
-        ambiguity = torch.maximum(evidence["cost_entropy"], 1 - evidence["cost_margin"])
-        stereo = torch.maximum(stereo, config.ambiguity_weight * ambiguity.clamp(0, 1))
+        entropy = evidence["cost_entropy"]
+        margin = evidence["cost_margin"]
+        evidence_valid = (
+            entropy.shape == warp_valid.shape
+            and margin.shape == warp_valid.shape
+        )
+        if evidence_valid and bool(torch.isfinite(entropy).all() & torch.isfinite(margin).all()):
+            ambiguity = torch.maximum(entropy, 1 - margin)
+            stereo = torch.maximum(stereo, config.ambiguity_weight * ambiguity.clamp(0, 1))
     stereo = torch.where(warp_valid, stereo, torch.zeros_like(stereo))
     left_error = (state.base.render_left.image - state.batch.left).abs().mean(1, keepdim=True)
     right_error = (state.base.render_right.image - state.batch.right).abs().mean(1, keepdim=True)

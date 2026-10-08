@@ -30,7 +30,11 @@ class InterventionConfig:
     collateral_weight: float = 1.0
     ranking_weight: float = 1.0
     harm_weight: float = 1.0
+    # Ranking margins are versioned because changing their units changes the
+    # selector objective.  ``raw`` preserves historical v1/v2 behaviour;
+    # ``train_scale`` is an opt-in remediation using the fitted gain scale.
     ranking_margin: float = 0.02
+    ranking_margin_units: str = "raw"
     harm_tolerance: float = 0.001
     maximum_harm_probability: float = 0.5
     minimum_gain: float = 0.0
@@ -38,6 +42,10 @@ class InterventionConfig:
     # v2 optimization settings; v1 config hashes omit these fields.
     normalization_frames: int = 32
     normalization_rows: int = 256
+    # Legacy normalization feeds raw features during collection.  ``burn_in``
+    # collects TRAIN statistics first and suppresses selector optimizer steps
+    # until the transform is fitted.
+    normalization_mode: str = "legacy"
     feature_clip: float = 5.0
     normalization_floor: float = 1e-6
     initial_gain_scale: float = 0.05
@@ -55,6 +63,14 @@ class InterventionConfig:
     def __post_init__(self) -> None:
         if self.schema not in ("intervention_selection.v1", "intervention_selection.v2"):
             raise ValueError("unsupported intervention selection schema")
+        if self.ranking_margin_units not in ("raw", "train_scale"):
+            raise ValueError("ranking_margin_units must be raw or train_scale")
+        if self.normalization_mode not in ("legacy", "burn_in"):
+            raise ValueError("normalization_mode must be legacy or burn_in")
+        if self.schema == "intervention_selection.v1" and (
+            self.ranking_margin_units != "raw" or self.normalization_mode != "legacy"
+        ):
+            raise ValueError("v1 requires historical raw ranking and legacy normalization")
         for name in (
             "matching_width",
             "search_radius_px",
@@ -70,7 +86,10 @@ class InterventionConfig:
         if self.schema == "intervention_selection.v2" and self.normalization_rows < 2:
             raise ValueError("balanced normalization requires capacity for at least two regions")
         for name, value in asdict(self).items():
-            if name == "schema" or value is None:
+            if (
+                name in {"schema", "ranking_margin_units", "normalization_mode"}
+                or value is None
+            ):
                 continue
             if (
                 isinstance(value, bool)
@@ -115,6 +134,12 @@ class InterventionConfig:
         elif self.stereo_training_priority == 1.0:
             # Preserve existing v2 config/checkpoint identities at neutral priority.
             data.pop("stereo_training_priority")
+        # Omit neutral defaults so existing v2 config/checkpoint hashes remain
+        # stable.  Explicit remediation settings are serialized and hashed.
+        if self.ranking_margin_units == "raw":
+            data.pop("ranking_margin_units", None)
+        if self.normalization_mode == "legacy":
+            data.pop("normalization_mode", None)
         return data
 
 
@@ -134,6 +159,8 @@ V2_FIELDS = frozenset(
         "global_repair_weight",
         "gradient_diagnostics_every",
         "stereo_training_priority",
+        "ranking_margin_units",
+        "normalization_mode",
     }
 )
 

@@ -76,6 +76,20 @@ def test_v1_hash_serialization_stays_identical():
         InterventionConfig(schema="bad")
 
 
+def test_remediation_units_and_burn_in_are_explicit_without_changing_legacy_hash():
+    legacy = load_intervention_config(Path("configs/routing/intervention_balanced.yaml"))
+    assert legacy.ranking_margin_units == "raw"
+    assert legacy.normalization_mode == "legacy"
+    assert legacy.config_hash == "9abdf5e35f91b62a1bb49efa61c0209b0565476d69ed61542f5c4894b1aa5266"
+    remediation = load_intervention_config(
+        Path("configs/routing/intervention_remediation.yaml")
+    )
+    assert remediation.ranking_margin_units == "train_scale"
+    assert remediation.normalization_mode == "burn_in"
+    assert "ranking_margin_units" in remediation.to_dict()
+    assert "normalization_mode" in remediation.to_dict()
+
+
 def test_stereo_priority_neutral_preserves_v2_identity():
     cfg = load_intervention_config(Path("configs/routing/intervention_balanced.yaml"))
     assert cfg.config_hash == "9abdf5e35f91b62a1bb49efa61c0209b0565476d69ed61542f5c4894b1aa5266"
@@ -157,6 +171,24 @@ def test_normalizer_train_only_freeze_constants_common_gain_and_resume():
         torch.ones(2, 2), labels, labels, sample_id="dataset_1/keyframe_1/a", role="final_train"
     )
     assert torch.equal(constant(torch.ones(2, 2) * 100), torch.zeros(2, 2))
+
+
+def test_normalizer_keeps_unit_scale_for_sparse_varying_zero_iqr_feature():
+    cfg = InterventionConfig(
+        schema="intervention_selection.v2", normalization_frames=1, normalization_rows=8
+    )
+    norm = TrainingNormalization(2, (), cfg)
+    features = torch.tensor([[0.0, 0.0], [0.0, 0.0], [0.0, 0.0], [0.0, 0.0], [0.0, 1.0]])
+    labels = torch.zeros(5, 3)
+    norm.observe(
+        features,
+        labels,
+        labels,
+        sample_id="dataset_1/keyframe_1/sparse",
+        role="final_train",
+    )
+    assert norm.fitted and norm.active[1] and norm.scale[1] == pytest.approx(1.0)
+    assert norm(torch.tensor([[0.0, 1.0]]))[0, 1] == pytest.approx(1.0)
 
 
 def test_balancing_scales_actual_shared_gradient_and_ignores_zero():
@@ -300,6 +332,56 @@ def test_harm_scaling_cannot_change_gain_encoder_gradient(setup):
     reference = torch.autograd.grad(loss["global"], params, retain_graph=True)
     amplified = torch.autograd.grad(loss["global"] + 1000 * loss["harm"], params)
     assert all(torch.equal(a, b) for a, b in zip(reference, amplified, strict=True))
+
+
+def test_ranking_margin_uses_common_train_gain_scale_for_small_proxy_gains():
+    cfg = InterventionConfig(
+        schema="intervention_selection.v2",
+        normalization_frames=1,
+        normalization_rows=8,
+        initial_gain_scale=0.05,
+        ranking_margin_units="train_scale",
+    )
+    selector = BalancedSelector(8, cfg)
+    features = torch.zeros(2, len(BALANCED_FEATURE_NAMES))
+    # Raw gains are much smaller than the historical 0.02 margin, but their
+    # normalized separation is 0.04 and therefore informative in v2.
+    target = torch.tensor([[0.0, 0.002, 0.0005], [0.0, 0.0005, 0.002]])
+    losses, diagnostics = selector.objective(
+        features, target, target, torch.zeros_like(target)
+    )
+    assert diagnostics["selector_ranking_informative_fraction"] > 0
+    assert diagnostics["selector_ranking_margin_units"] == "train_scale"
+    assert diagnostics["selector_ranking_margin"] == pytest.approx(0.02)
+    assert losses["ranking"] > 0
+
+
+def test_balanced_objective_rejects_nonzero_stop_supervision(setup):
+    selector = setup[0].selector
+    features = torch.zeros(1, len(BALANCED_FEATURE_NAMES))
+    target = torch.tensor([[0.1, 0.0, 0.0]])
+    with pytest.raises(ValueError, match="STOP gain"):
+        selector.objective(features, target, target, torch.zeros_like(target))
+
+
+def test_burn_in_collects_normalization_before_selector_updates(setup):
+    learner, sample, target = setup
+    learner.intervention_config = replace(
+        learner.intervention_config, normalization_mode="burn_in"
+    )
+    before = [p.detach().clone() for p in learner.selector.parameters()]
+    first = learner.step(sample, joint=True, teacher_target=target, position=0)
+    assert first["selector_burn_in"] is True
+    assert all(
+        torch.equal(p, old)
+        for p, old in zip(learner.selector.parameters(), before, strict=True)
+    )
+    second = learner.step(sample, joint=True, teacher_target=target, position=1)
+    assert learner.selector.normalization.fitted
+    assert second["selector_burn_in"] is True
+    third = learner.step(sample, joint=True, teacher_target=target, position=2)
+    assert "selector_burn_in" not in third
+    assert third["optimizer_update_norm_selector"] > 0
 
 
 def test_balanced_router_can_fit_two_action_synthetic_labels():

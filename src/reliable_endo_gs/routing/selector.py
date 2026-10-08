@@ -134,18 +134,25 @@ class Decision:
 def select_action(
     utilities: torch.Tensor, costs_ms: torch.Tensor, valid: torch.Tensor, budget_ms: float
 ) -> Decision:
-    """Choose one positive utility/cost intervention, else exact STOP."""
+    """Choose one positive utility/cost intervention, else exact STOP.
+
+    ``valid`` may be row-level ``[R]`` legacy eligibility or action-specific
+    ``[R,3]`` eligibility in STOP/STEREO/GAUSSIAN order. The latter prevents
+    a selector from dispatching an action whose implementation cannot consume
+    the current Gaussian state.
+    """
     if not isfinite(budget_ms) or budget_ms < 0:
         raise ValueError("budget_ms must be finite and nonnegative")
     if utilities.ndim != 2 or utilities.shape[1] != 3 or costs_ms.shape != utilities.shape:
         raise ValueError("utilities and costs must be [R,3]")
-    if valid.shape != utilities.shape[:1] or valid.dtype != torch.bool:
-        raise ValueError("valid must be bool [R]")
+    if valid.dtype != torch.bool or valid.shape not in (utilities.shape[:1], utilities.shape):
+        raise ValueError("valid must be bool [R] or [R,3]")
     if not bool(torch.isfinite(utilities).all() & torch.isfinite(costs_ms).all()):
         raise ValueError("utility/cost must be finite")
     if not bool((costs_ms >= 0).all()) or not bool((utilities[:, 0] == 0).all()):
         raise ValueError("costs cannot be negative and STOP utility must be zero")
-    allowed = valid[:, None] & (costs_ms > 0) & (costs_ms <= budget_ms) & (utilities > 0)
+    eligibility = valid[:, None] if valid.ndim == 1 else valid
+    allowed = eligibility & (costs_ms > 0) & (costs_ms <= budget_ms) & (utilities > 0)
     allowed[:, 0] = False
     if not bool(allowed.any()):
         return Decision(None, Action.STOP, 0.0, 0.0)

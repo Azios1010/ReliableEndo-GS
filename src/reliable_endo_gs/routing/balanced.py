@@ -74,7 +74,7 @@ class BalancedSelector(RepairabilitySelector):
         global_target: torch.Tensor,
         local_target: torch.Tensor,
         harms: torch.Tensor,
-    ) -> tuple[dict[str, torch.Tensor], dict[str, float]]:
+    ) -> tuple[dict[str, torch.Tensor], dict[str, object]]:
         """Return component losses; the training layer owns gradient balancing."""
         global_prediction, local_prediction, risk = self.outputs(features)
         if (
@@ -83,6 +83,16 @@ class BalancedSelector(RepairabilitySelector):
             or harms.shape != global_target.shape
         ):
             raise ValueError("balanced supervision must share [R,3]")
+        if not bool(torch.isfinite(global_target).all() & torch.isfinite(local_target).all()):
+            raise ValueError("balanced gain targets must be finite")
+        if not bool((global_target[:, 0] == 0).all() & (local_target[:, 0] == 0).all()):
+            raise ValueError("STOP gain targets must be exactly zero")
+        if not bool(torch.isfinite(harms).all()):
+            raise ValueError("balanced harm targets must be finite")
+        if not bool(((harms >= 0) & (harms <= 1)).all()):
+            raise ValueError("balanced harm targets must be binary probabilities")
+        if not bool((harms[:, 0] == 0).all()):
+            raise ValueError("STOP harm target must be exactly zero")
         global_scale, local_scale = self.normalization.gain_scales.unbind()
         g = global_prediction / global_scale
         local_normalized = local_prediction / local_scale
@@ -91,16 +101,38 @@ class BalancedSelector(RepairabilitySelector):
         local_loss = F.smooth_l1_loss(
             local_normalized[:, 1:], local_target.detach()[:, 1:] / local_scale
         )
+        # Ranking units are explicit in the config.  Raw units preserve the
+        # historical objective; train_scale compares labels after the common
+        # TRAIN-fitted gain transform.  This avoids changing old checkpoint
+        # semantics while making the remediation experiment deliberate.
         rank_terms = []
+        informative_pairs = []
         for a, b in ((0, 1), (0, 2), (1, 2)):
-            raw_margin = global_target.detach()[:, a] - global_target.detach()[:, b]
-            informative = raw_margin.abs() > self.config.ranking_margin
-            # Normalized margin weights are bounded; raw decision semantics retained.
-            weight = (raw_margin.abs() / global_scale).clamp(max=5)
+            if self.config.ranking_margin_units == "train_scale":
+                margin_values = t[:, a] - t[:, b]
+                margin_scale = global_scale.new_tensor(1.0)
+            else:
+                margin_values = global_target.detach()[:, a] - global_target.detach()[:, b]
+                margin_scale = global_scale
+            informative = margin_values.abs() > (
+                self.config.ranking_margin
+                if self.config.ranking_margin_units == "raw"
+                else self.config.ranking_margin
+            )
+            # Bounded normalized weights keep a few very large proxy labels
+            # from dominating the pair objective while retaining their order.
+            normalized_margin = margin_values / margin_scale
+            weight = normalized_margin.abs().clamp(max=5)
             error = (
-                self.config.ranking_margin / global_scale - raw_margin.sign() * (g[:, a] - g[:, b])
+                (
+                    self.config.ranking_margin / margin_scale
+                    if self.config.ranking_margin_units == "raw"
+                    else self.config.ranking_margin
+                )
+                - normalized_margin.sign() * (g[:, a] - g[:, b])
             ).clamp_min(0)
             rank_terms.append((error * weight * informative).mean())
+            informative_pairs.append(informative.float().mean())
         ranking = torch.stack(rank_terms).mean()
         # Use logits directly rather than probability BCE for numerical stability.
         logits = self.harm_network(self.normalization(features.detach()))
@@ -110,6 +142,16 @@ class BalancedSelector(RepairabilitySelector):
             "selector_local_loss": float(local_loss.detach()),
             "selector_ranking_loss": float(ranking.detach()),
             "selector_harm_loss": float(harm_loss.detach()),
+            "selector_ranking_informative_fraction": float(
+                torch.stack(informative_pairs).mean().detach()
+            ),
+            "selector_ranking_margin_units": self.config.ranking_margin_units,
+            "selector_ranking_margin": float(self.config.ranking_margin),
+            "selector_harm_positive_fraction": float(harms[:, 1:].detach().mean()),
+            # Local gain is deliberately an auxiliary target.  Global gain is
+            # the sole decision utility; local supervision shapes the shared
+            # encoder without counting the same render reward twice.
+            "selector_local_auxiliary_only": 1.0,
         }
         diagnostics.update(
             gain_scale_global=float(global_scale),

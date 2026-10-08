@@ -1,0 +1,14 @@
+# Student/head warmup with the stereo KD term disabled for the KD ablation.
+# Keep all non-KD settings aligned with student.yaml.
+schema: student_joint_learning.v1
+width: 32
+bins: 32
+minimum_effective_px: 0.25
+student_epochs: 1
+joint_epochs: 0
+learning_rate: 0.001
+reconstruction_weight: 1.0
+kd_weight: 0.0
+repair_weight: 1.0
+checkpoint_every: 100
+seed: 0

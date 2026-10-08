@@ -84,6 +84,11 @@ def repairability_features(
     entropy = -(probabilities * probabilities.clamp_min(1e-8).log()).sum(
         1, keepdim=True
     ) / math.log(3)
+    evidence_available = cv.any(1, keepdim=True)
+    # Entropy zero is the algebraic result of an all-invalid row, not a
+    # confident match.  Keep the fixed feature schema and expose the state as
+    # maximal ambiguity; the candidate-support feature remains zero.
+    entropy = torch.where(evidence_available, entropy, torch.ones_like(entropy))
     ordered = candidates.sort(1).values
     margin = (ordered[:, 1:2] - ordered[:, :1]) / config.stereo_scale
     error = errors[1]
@@ -195,6 +200,8 @@ def select_repairability(
     valid: torch.Tensor,
     remaining_ms: float,
     config: InterventionConfig,
+    *,
+    risk_available: torch.Tensor | None = None,
 ) -> Decision:
     """Exact highest gain among feasible safe single interventions; else STOP.
 
@@ -208,8 +215,12 @@ def select_repairability(
         or costs_ms.shape != gains.shape
     ):
         raise ValueError("gain/harm/cost must share [R,3]")
-    if valid.shape != gains.shape[:1] or valid.dtype != torch.bool:
-        raise ValueError("eligibility must be bool [R]")
+    if valid.dtype != torch.bool or valid.shape not in (gains.shape[:1], gains.shape):
+        raise ValueError("eligibility must be bool [R] or action-specific [R,3]")
+    if risk_available is None:
+        risk_available = torch.ones_like(harms, dtype=torch.bool)
+    if risk_available.shape != harms.shape or risk_available.dtype != torch.bool:
+        raise ValueError("risk_available must be bool [R,3]")
     if not math.isfinite(remaining_ms) or remaining_ms < 0:
         raise ValueError("remaining budget must be finite and nonnegative")
     if not bool(
@@ -218,10 +229,12 @@ def select_repairability(
         ((harms >= 0) & (harms <= 1)).all() & (costs_ms >= 0).all() & (gains[:, 0] == 0).all()
     ):
         raise ValueError("invalid gain/harm/cost values")
+    action_valid = valid[:, None] if valid.ndim == 1 else valid
     allowed = (
-        valid[:, None]
+        action_valid
         & (costs_ms > 0)
         & (costs_ms <= remaining_ms)
+        & risk_available
         & (harms <= config.maximum_harm_probability)
         & (gains > config.minimum_gain)
     )

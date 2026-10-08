@@ -66,6 +66,24 @@ class ActionResult:
     changed_fields: tuple[str, ...]
 
 
+def _base_result(
+    state: RepairState, action: Action, disparity: torch.Tensor | None = None
+) -> ActionResult:
+    """Return the borrowed pre-action result without another renderer pass."""
+
+    base = state.base
+    if base.render_right is None:
+        raise ValueError("Phase II requires both base renders")
+    return ActionResult(
+        action,
+        base.gaussians,
+        base.target.disparity if disparity is None else disparity,
+        base.render_left,
+        base.render_right,
+        (),
+    )
+
+
 def primitive_core(state: RepairState, region: Region) -> torch.Tensor:
     """Map core pixels to Gaussian slots using canonical source identities."""
     flat = region.mask(state.batch.left).reshape(1, -1)
@@ -77,6 +95,34 @@ def eligible(state: RepairState, region: Region) -> bool:
     """Empty sensor/teacher support or empty primitive cores are ineligible."""
     return bool(
         (state.support & region.mask(state.batch.left)).any() & primitive_core(state, region).any()
+    )
+
+
+def action_eligible(state: RepairState, region: Region, action: Action) -> bool:
+    """Check action-specific deployment preconditions before executing a repair.
+
+    ``eligible`` is intentionally retained as the shared support/primitive
+    predicate.  Stereo additionally requires a finite disparity map; Gaussian
+    repair additionally requires finite, positive attributes on the selected
+    primitive slots.  These checks prevent a selector prediction from turning
+    missing evidence or padded primitives into a real intervention.
+    """
+
+    if action is Action.STOP:
+        return True
+    if action not in (Action.STEREO, Action.GAUSSIAN) or not eligible(state, region):
+        return False
+    core = primitive_core(state, region)
+    field = state.base.gaussians
+    if action is Action.STEREO:
+        writable = region.mask(state.batch.left) & state.support
+        return bool(torch.isfinite(state.base.target.disparity[writable]).all())
+    return bool(
+        torch.isfinite(field.means3d[core]).all()
+        and torch.isfinite(field.rotations[core]).all()
+        and torch.isfinite(field.scales[core]).all()
+        and torch.isfinite(field.opacities[core]).all()
+        and (field.scales[core] > 0).all()
     )
 
 
@@ -185,22 +231,15 @@ class RepairActions(nn.Module):
         if batch.left.shape[0] != 1:
             raise ValueError("Phase II supports batch-size one")
         if action == Action.STOP:
-            return ActionResult(
-                action,
-                base.gaussians,
-                base.target.disparity,
-                base.render_left,
-                base.render_right,
-                (),
-            )
-        if not eligible(state, region):
-            raise ValueError("repair requested on an ineligible region")
+            return _base_result(state, action)
+        if base.gaussians.cov_center is not None or base.gaussians.cov_effective is not None:
+            raise ValueError("A04 repair does not implement uncertainty covariance updates")
+        if not action_eligible(state, region, action):
+            raise ValueError(f"{action.name.lower()} repair requested on an ineligible region")
         if not isinstance(reference, StudentReconstructionModel) and any(
             parameter.requires_grad for parameter in reference.parameters()
         ):
             raise ValueError("reference parameters must be frozen before repair")
-        if base.gaussians.cov_center is not None or base.gaussians.cov_effective is not None:
-            raise ValueError("A04 repair does not implement uncertainty covariance updates")
         disparity = base.target.disparity
         core = primitive_core(state, region)
         names: tuple[str, ...]
@@ -218,7 +257,7 @@ class RepairActions(nn.Module):
                 dim=1,
             ).float()
             if isinstance(self.stereo, MatchingStereoRepair):
-                prediction = self.stereo.forward_pair(
+                prediction, matching_valid = self.stereo.forward_pair(
                     batch.left,
                     batch.right,
                     disparity,
@@ -227,6 +266,7 @@ class RepairActions(nn.Module):
                     batch.support,
                     (batch.camera.K_L[:, 0, 2] - batch.camera.K_R[:, 0, 2])[:, None, None, None],
                     roi_features=isinstance(region, MaskRegion),
+                    return_validity=True,
                 )
             else:
                 prediction = self.stereo(inputs[..., y0:y1, x0:x1])
@@ -242,10 +282,21 @@ class RepairActions(nn.Module):
                 disparity.new_tensor(self.max_disparity_px),
             )
             disparity = disparity + torch.where(
-                region.mask(batch.left) & state.support,
+                region.mask(batch.left)
+                & state.support
+                & (
+                    torch.nn.functional.pad(
+                        matching_valid,
+                        (x0, batch.left.shape[-1] - x1, y0, batch.left.shape[-2] - y1),
+                    )
+                    if isinstance(self.stereo, MatchingStereoRepair)
+                    else torch.ones_like(state.support)
+                ),
                 delta.tanh().to(disparity.dtype) * limit,
                 torch.zeros_like(disparity),
             )
+            if not torch.is_grad_enabled() and torch.equal(disparity, base.target.disparity):
+                return _base_result(state, action, disparity)
             return geometry_repair_outcome(state, region, disparity, reference)
         elif action == Action.GAUSSIAN:
             field = base.gaussians
@@ -268,6 +319,15 @@ class RepairActions(nn.Module):
                 if isinstance(region, MaskRegion)
                 else self.gaussian(context, core)
             )
+            if not torch.is_grad_enabled() and all(
+                bool(torch.equal(value, torch.zeros_like(value)))
+                for value in (
+                    residuals.delta_rotation,
+                    residuals.delta_log_scale,
+                    residuals.delta_alpha_logit,
+                )
+            ):
+                return _base_result(state, action)
             changed = compose_gaussian_field(
                 prior,
                 AttributeResiduals(
@@ -278,6 +338,12 @@ class RepairActions(nn.Module):
             if self.exact_zero_identity:
                 changed = preserve_zero_gaussian_residual(field, changed, residuals)
             names = ("rotation", "scale", "opacity", "cov_surface")
+            if not torch.is_grad_enabled() and all(
+                torch.equal(getattr(field, item.name), getattr(changed, item.name))
+                for item in fields(field)
+                if getattr(field, item.name) is not None
+            ):
+                return _base_result(state, action)
         else:
             raise ValueError(f"unsupported repair action: {action}")
         return _render_outcome(
@@ -300,10 +366,12 @@ def geometry_repair_outcome(
     base, batch = state.base, state.batch
     if disparity.shape != base.target.disparity.shape or disparity.device != batch.left.device:
         raise ValueError("geometry repair disparity grid/device mismatch")
-    if not eligible(state, region) or batch.left.shape[0] != 1:
-        raise ValueError("ineligible geometry repair")
     if base.gaussians.cov_center is not None or base.gaussians.cov_effective is not None:
         raise ValueError("A04 repair does not implement uncertainty covariance updates")
+    if not action_eligible(state, region, Action.STEREO) or batch.left.shape[0] != 1:
+        raise ValueError("ineligible geometry repair")
+    if not torch.is_grad_enabled() and torch.equal(disparity, base.target.disparity):
+        return _base_result(state, Action.STEREO, disparity)
     outside = ~region.mask(batch.left)
     if not torch.equal(disparity[outside], base.target.disparity[outside]):
         raise ValueError("geometry repair changed disparity outside core")
@@ -348,7 +416,10 @@ def _render_outcome(
     action: Action,
     names: tuple[str, ...],
 ) -> ActionResult:
-    render_field = replace(field, cov_surface=None)
+    # The current renderer consumes only R/S support. Keep optional covariance
+    # on the ActionResult for provenance, but never pass unsupported covariance
+    # tensors across the renderer boundary.
+    render_field = replace(field, cov_surface=None, cov_center=None, cov_effective=None)
     hw = (int(state.batch.left.shape[-2]), int(state.batch.left.shape[-1]))
     if reference.renderer is None:
         raise ValueError("reference renderer is unavailable")

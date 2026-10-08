@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Literal, overload
+
 import torch
 from torch import nn
 
@@ -44,6 +46,7 @@ class MatchingStereoRepair(nn.Module):
         nn.init.zeros_(output.weight)
         nn.init.zeros_(output.bias)
 
+    @overload
     def forward_pair(
         self,
         left: torch.Tensor,
@@ -55,8 +58,46 @@ class MatchingStereoRepair(nn.Module):
         principal_offset: torch.Tensor,
         *,
         roi_features: bool = False,
-    ) -> torch.Tensor:
-        """Full input grids; output B1hw on the supplied halo, with explicit origin."""
+        return_validity: Literal[False] = False,
+    ) -> torch.Tensor: ...
+
+    @overload
+    def forward_pair(
+        self,
+        left: torch.Tensor,
+        right: torch.Tensor,
+        disparity: torch.Tensor,
+        residual: torch.Tensor,
+        halo: tuple[int, int, int, int],
+        support: torch.Tensor,
+        principal_offset: torch.Tensor,
+        *,
+        roi_features: bool = False,
+        return_validity: Literal[True],
+    ) -> tuple[torch.Tensor, torch.Tensor]: ...
+
+    def forward_pair(
+        self,
+        left: torch.Tensor,
+        right: torch.Tensor,
+        disparity: torch.Tensor,
+        residual: torch.Tensor,
+        halo: tuple[int, int, int, int],
+        support: torch.Tensor,
+        principal_offset: torch.Tensor,
+        *,
+        roi_features: bool = False,
+        return_validity: bool = False,
+    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
+        """Full input grids; output B1hw on the supplied halo, with explicit origin.
+
+        When ``return_validity`` is true, return a second ``[B,1,h,w]`` mask
+        indicating that at least one searched disparity candidate has valid
+        right-view support.  A row with no valid candidate is deliberately
+        kept distinct from a low-confidence/ambiguous row: its probability
+        vector is all zeros and callers must abstain from applying a learned
+        correction there.
+        """
         y0, x0, y1, x1 = halo
         if roi_features:
             # Two 3x3 stride-1 convolutions have receptive radius 2. Expand
@@ -82,6 +123,7 @@ class MatchingStereoRepair(nn.Module):
             masks.append(valid)
         valid = torch.cat(masks, dim=1)
         score = torch.cat(scores, dim=1)
+        evidence = valid.any(dim=1, keepdim=True)
         # Finite sentinel prevents all-invalid softmax NaNs; empty rows carry
         # zero candidate probabilities and are covered by sensor masks later.
         probability = score.masked_fill(~valid, -1e4).softmax(1) * valid.to(score.dtype)
@@ -98,4 +140,6 @@ class MatchingStereoRepair(nn.Module):
         output = self.decoder(context)
         if not isinstance(output, torch.Tensor):
             raise TypeError("matching decoder must return a Tensor")
+        if return_validity:
+            return output, evidence
         return output

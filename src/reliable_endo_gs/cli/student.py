@@ -32,6 +32,33 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--checkpoint", type=Path, help="Strict resume or deployment checkpoint")
     parser.add_argument(
+        "--metric-selector",
+        type=Path,
+        help=(
+            "Frozen TRAIN-fitted physical outcome predictor for mask routing "
+            "(infer only; requires --metric-config and --metric-candidate-hash)"
+        ),
+    )
+    parser.add_argument(
+        "--metric-config",
+        type=Path,
+        help="TradeoffConfig used to fit --metric-selector (infer only)",
+    )
+    parser.add_argument(
+        "--metric-candidate-hash",
+        help="Candidate/protocol hash bound to --metric-selector (infer only)",
+    )
+    parser.add_argument(
+        "--cost-calibration",
+        "--deployment-cost-calibration",
+        dest="cost_calibration",
+        type=Path,
+        help=(
+            "Explicit deployment STOP/STEREO/GAUSSIAN timing artifact; "
+            "overrides any checkpoint calibration during infer"
+        ),
+    )
+    parser.add_argument(
         "--initialize-model-from",
         type=Path,
         help="New run with model-only weights; repairs/selector/Adam start fresh",

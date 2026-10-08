@@ -5,7 +5,6 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 import torch
-from torch.nn import functional as F
 
 from reliable_endo_gs.actions.repair import Action, eligible
 from reliable_endo_gs.data.scared_a00 import ScaredA00Sample
@@ -13,8 +12,8 @@ from reliable_endo_gs.regions.grid import grid_regions
 from reliable_endo_gs.regions.masks import MaskRegion
 from reliable_endo_gs.routing.balanced import BalancedSelector
 from reliable_endo_gs.teachers import AlignedTeacherTarget
-from reliable_endo_gs.teachers.quality import screen_target
 from reliable_endo_gs.training.balanced_interventions import BalancedHarness
+from reliable_endo_gs.training.distillation import stereo_distillation
 from reliable_endo_gs.training.interventions import reconstruction_loss
 from reliable_endo_gs.training.quality_components import measure_quality
 from reliable_endo_gs.training.repairability import stereo_consistency_loss
@@ -64,23 +63,19 @@ def balanced_step(
     if learner.config.kd_weight:
         assert teacher_target is not None
         learner.model._validate_target_metadata(teacher_target, calibration_metadata=None)
-        quality = screen_target(state.batch, teacher_target, cfg)
-        target = teacher_target.disparity.detach().to(state.batch.left.device)
-        if quality.accepted_count:
-            kd = (
-                F.smooth_l1_loss(base.disparity[quality.mask], target[quality.mask])
-                / cfg.kd_scale_px
-            )
-        diag.update(
-            kd_declared_pixels=float(quality.declared_count),
-            kd_accepted_pixels=float(quality.accepted_count),
-            kd_below_near_pixels=float(quality.below_near_count),
-            kd_outside_right_pixels=float(quality.outside_right_count),
-            kd_empty=float(quality.accepted_count == 0),
-        )
+        distillation = stereo_distillation(base.disparity, teacher_target, state.batch, cfg)
+        kd = distillation.loss
+        diag.update(distillation.diagnostics)
     repair = rgb.new_zeros(())
     selector_loss = rgb.new_zeros(())
     selector_pending = None
+    # In burn-in mode the selector sees only detached labels while TRAIN
+    # normalization is collected.  Student and action owners continue to
+    # optimize; selector parameters begin updating only on a later snapshot
+    # with the frozen transform.
+    selector_training_ready = (
+        cfg.normalization_mode == "legacy" or bool(learner.selector.normalization.fitted)
+    )
     regions = (
         tuple(r for r in learner.candidate_regions(state, sample.sample_id) if eligible(state, r))
         if joint
@@ -104,33 +99,47 @@ def balanced_step(
             learner.actions.requires_grad_(True)
         global_targets = features.new_tensor([[row.utility for row in table] for table in tables])
         local_targets = features.new_tensor([[row.local_gain for row in table] for table in tables])
+        # Counterfactuals are detached supervision.  STOP is always an exact
+        # zero-risk/zero-gain reference; only repair actions carry risk labels.
         harms = features.new_tensor([[float(row.harmful) for row in table] for table in tables])
-        component_losses, selector_diag = learner.selector.objective(
-            features, global_targets, local_targets, harms
-        )
-        shared = tuple(
-            p
-            for layer in list(learner.selector.gain_network.children())[:-1]
-            for p in layer.parameters()
-        )
-        selector_pending, balance_diag = learner.selector_balancer.measure(
-            tuple(component_losses[k] for k in ("global", "local", "ranking")), shared
-        )
-        selector_loss = (
-            sum(
-                selector_pending[1, i] * weight * component_losses[k]
-                for i, (k, weight) in enumerate(
-                    (
-                        ("global", 1.0),
-                        ("local", cfg.local_auxiliary_weight),
-                        ("ranking", cfg.ranking_weight),
+        if not bool((global_targets[:, 0] == 0).all() & (local_targets[:, 0] == 0).all()):
+            raise ValueError("balanced intervention labels must keep STOP gains at zero")
+        if not bool((harms[:, 0] == 0).all()):
+            raise ValueError("balanced intervention labels must keep STOP harm at zero")
+        if selector_training_ready:
+            component_losses, selector_diag = learner.selector.objective(
+                features, global_targets, local_targets, harms
+            )
+            shared = tuple(
+                p
+                for layer in list(learner.selector.gain_network.children())[:-1]
+                for p in layer.parameters()
+            )
+            selector_pending, balance_diag = learner.selector_balancer.measure(
+                tuple(component_losses[k] for k in ("global", "local", "ranking")), shared
+            )
+            selector_loss = (
+                sum(
+                    selector_pending[1, i] * weight * component_losses[k]
+                    for i, (k, weight) in enumerate(
+                        (
+                            ("global", 1.0),
+                            ("local", cfg.local_auxiliary_weight),
+                            ("ranking", cfg.ranking_weight),
+                        )
                     )
                 )
+                + cfg.harm_weight * component_losses["harm"]
             )
-            + cfg.harm_weight * component_losses["harm"]
-        )
-        selector_diag.update({f"selector_{k}": v for k, v in balance_diag.items()})
-        diag.update(selector_diag)
+            selector_diag.update({f"selector_{k}": v for k, v in balance_diag.items()})
+            diag.update(selector_diag)
+        else:
+            diag.update(
+                selector_burn_in=True,
+                selector_normalization_fitted=False,
+                selector_supervision_collected=True,
+            )
+        diag["selector_supervision_semantics"] = "global_decision_local_auxiliary"
         repair_terms = []
         for region, table in zip(regions, tables, strict=True):
             before = table[0].components_before
@@ -156,7 +165,7 @@ def balanced_step(
                     + cfg.collateral_weight * outside
                 )
         repair = torch.stack(repair_terms).mean()
-        costs = features.new_tensor([[row.cost_ms for row in table] for table in tables]).amax(0)
+        cost_rows = features.new_tensor([[row.cost_ms for row in table] for table in tables])
         # Persist component labels from the same before-update snapshot, not only scalar utility.
         diag["interventions"] = [
             {
@@ -186,12 +195,13 @@ def balanced_step(
         ]
         diag["selector_regions"] = len(regions)
         diag["features_raw"] = features.detach().cpu().tolist()
-        global_predictions, local_predictions, predicted_harms = learner.selector.outputs(features)
-        diag.update(
-            predicted_global_gains=global_predictions.detach().cpu().tolist(),
-            predicted_local_gains=local_predictions.detach().cpu().tolist(),
-            predicted_harms=predicted_harms.detach().cpu().tolist(),
-        )
+        if selector_training_ready:
+            global_predictions, local_predictions, predicted_harms = learner.selector.outputs(features)
+            diag.update(
+                predicted_global_gains=global_predictions.detach().cpu().tolist(),
+                predicted_local_gains=local_predictions.detach().cpu().tolist(),
+                predicted_harms=predicted_harms.detach().cpu().tolist(),
+            )
     terms = (rgb / cfg.rgb_scale, cfg.stereo_weight * warp / cfg.stereo_scale, kd, repair)
     pending = None
     if position % cfg.gradient_diagnostics_every == 0:
@@ -216,14 +226,15 @@ def balanced_step(
     if not bool(torch.isfinite(loss) & torch.isfinite(selector_loss)):
         raise ValueError("nonfinite balanced objective")
     loss.backward()
-    if joint:
+    if joint and selector_training_ready:
         selector_loss.backward()
-    diag.update(learner.commit_gradients(joint))
+    diag.update(learner.commit_gradients(joint, update_selector=selector_training_ready))
     if pending is not None:
         learner.objective_balancer.commit(pending)
     if joint:
-        assert selector_pending is not None
-        learner.selector_balancer.commit(selector_pending)
+        # Statistics are collected after the model/action optimizer step.  In
+        # burn-in mode this is the only selector state mutation; it enables
+        # the next step without backpropagating through the calibration pass.
         learner.selector.normalization.observe(
             features,
             global_targets,
@@ -231,8 +242,10 @@ def balanced_step(
             sample_id=sample.sample_id,
             role=sample.data_role,
         )
-        learner.cost_max_ms = torch.maximum(learner.cost_max_ms, costs)
-        learner.cost_observations += 1
+        learner.record_action_costs(cost_rows)
+    if joint and selector_training_ready:
+        assert selector_pending is not None
+        learner.selector_balancer.commit(selector_pending)
     return {
         "loss": float(loss.detach()),
         "reconstruction": float(rgb.detach()),

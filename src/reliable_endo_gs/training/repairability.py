@@ -8,7 +8,6 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import torch
-from torch.nn import functional as F
 
 from reliable_endo_gs.actions.repair import (
     Action,
@@ -24,7 +23,7 @@ from reliable_endo_gs.reconstruction.model import ReferenceReconstructionModel
 from reliable_endo_gs.regions.grid import Region, grid_regions
 from reliable_endo_gs.routing.repairability import RepairabilitySelector, repairability_features
 from reliable_endo_gs.teachers import AlignedTeacherTarget
-from reliable_endo_gs.teachers.quality import screen_target
+from reliable_endo_gs.training.distillation import stereo_distillation
 from reliable_endo_gs.training.interventions import (
     Intervention,
     InterventionHarness,
@@ -218,20 +217,9 @@ def repairability_step(
     if learner.config.kd_weight:
         assert teacher_target is not None
         learner.model._validate_target_metadata(teacher_target, calibration_metadata=None)
-        quality = screen_target(state.batch, teacher_target, cfg)
-        target = teacher_target.disparity.detach().to(state.batch.left.device)
-        if quality.accepted_count:
-            kd = (
-                F.smooth_l1_loss(base.disparity[quality.mask], target[quality.mask])
-                / cfg.kd_scale_px
-            )
-        diagnostics.update(
-            kd_declared_pixels=float(quality.declared_count),
-            kd_accepted_pixels=float(quality.accepted_count),
-            kd_outside_right_pixels=float(quality.outside_right_count),
-            kd_below_near_pixels=float(quality.below_near_count),
-            kd_empty=float(quality.accepted_count == 0),
-        )
+        distillation = stereo_distillation(base.disparity, teacher_target, state.batch, cfg)
+        kd = distillation.loss
+        diagnostics.update(distillation.diagnostics)
     repair = rgb.new_zeros(())
     selector_loss = rgb.new_zeros(())
     if joint:
@@ -277,8 +265,7 @@ def repairability_step(
         selector_loss.backward()
     diagnostics.update(learner.commit_gradients(joint))
     if joint:
-        learner.cost_max_ms = torch.maximum(learner.cost_max_ms, costs)
-        learner.cost_observations += 1
+        learner.record_action_costs(costs)
     return {
         "loss": float(loss.detach()),
         "reconstruction": float(rgb.detach()),

@@ -12,6 +12,14 @@ from reliable_endo_gs.reconstruction.model import ReferenceReconstructionModel
 from reliable_endo_gs.reconstruction.student import StudentReconstructionModel
 from reliable_endo_gs.regions.grid import Region, grid_regions
 from reliable_endo_gs.routing.config import RoutingConfig
+from reliable_endo_gs.routing.cost import (
+    DeploymentCostCalibration,
+    calibration_metadata,
+    capture_runtime_identity,
+    estimated_costs,
+    new_cost_history,
+    record_costs,
+)
 from reliable_endo_gs.routing.selector import ActionSelector, region_features, select_action
 from reliable_endo_gs.training.interventions import (
     InterventionHarness,
@@ -47,6 +55,48 @@ class ActionLearner:
         self.harness = InterventionHarness(config.cost_weight_per_ms)
         self.cost_max_ms = torch.zeros(3, dtype=torch.float32, device=device)
         self.cost_observations = 0
+        self.cost_history = new_cost_history(device)
+        self.cost_history_observations = 0
+        self.deployment_cost_calibration: DeploymentCostCalibration | None = None
+
+    def attach_cost_calibration(self, calibration: DeploymentCostCalibration) -> None:
+        """Attach an explicit deployment artifact after identity verification upstream."""
+        if calibration.estimated_ms.device.type != "cpu":
+            calibration = DeploymentCostCalibration(
+                binding=calibration.binding,
+                policy=calibration.policy,
+                runtime=calibration.runtime,
+                shape_hw=calibration.shape_hw,
+                timings_ms=calibration.timings_ms.cpu(),
+                estimated_ms=calibration.estimated_ms.cpu(),
+            )
+        self.deployment_cost_calibration = calibration
+
+    def _record_costs(self, costs_ms: torch.Tensor) -> None:
+        """Update max diagnostics and rolling robust allocation calibration."""
+        rows = costs_ms.reshape(-1, 3)
+        vector = rows.detach().amax(0)
+        self.cost_max_ms = torch.maximum(self.cost_max_ms, vector)
+        self.cost_history_observations = record_costs(
+            self.cost_history, vector, self.cost_history_observations
+        )
+        self.cost_observations += 1
+
+    def _estimated_costs(self, state: RepairState) -> torch.Tensor:
+        if self.deployment_cost_calibration is not None:
+            calibration = self.deployment_cost_calibration
+            shape = tuple(int(x) for x in state.batch.left.shape[-2:])
+            runtime = capture_runtime_identity(state.batch.left.device)
+            if tuple(calibration.shape_hw) != shape or dict(calibration.runtime) != runtime:
+                raise ValueError("deployment cost calibration runtime/grid mismatch")
+            return calibration.estimated_ms.to(self.cost_max_ms)
+        return estimated_costs(
+            self.cost_history,
+            self.cost_max_ms,
+            self.cost_observations,
+            history_observations=self.cost_history_observations,
+            calibration=self.deployment_cost_calibration,
+        )
 
     def regions(self, state: RepairState) -> tuple[Region, ...]:
         """Fixed grid on the actual aligned deployment resolution."""
@@ -130,10 +180,7 @@ class ActionLearner:
         loss = torch.nn.functional.mse_loss(prediction[:, 1:], labels[:, 1:])
         loss.backward()
         self._step(self.selector, self.selector_optimizer)
-        self.cost_max_ms = torch.maximum(
-            self.cost_max_ms, features.new_tensor([row.cost_ms for row in rows])
-        )
-        self.cost_observations += 1
+        self._record_costs(features.new_tensor([row.cost_ms for row in rows]))
         return {
             "selector_loss": float(loss.detach()),
             "region": index,
@@ -173,7 +220,7 @@ class ActionLearner:
                 dtype=torch.bool,
                 device=features.device,
             )
-            costs = self.cost_max_ms.expand(len(regions), -1)
+            costs = self._estimated_costs(state).expand(len(regions), -1)
             decision = select_action(utilities, costs, valid, self.config.budget_ms)
             if device.type == "cuda":
                 torch.cuda.synchronize(device)
@@ -189,6 +236,13 @@ class ActionLearner:
             before = self.actions.execute(state, region, Action.STOP, self.reference)
             before_loss = float(reconstruction_loss(state, before))
             after_loss = float(reconstruction_loss(state, outcome))
+            metadata = calibration_metadata(
+                self.cost_history,
+                self.cost_max_ms,
+                self.cost_observations,
+                history_observations=self.cost_history_observations,
+                calibration=self.deployment_cost_calibration,
+            )
             return {
                 "decision": asdict(decision),
                 "base_loss": before_loss,
@@ -196,6 +250,14 @@ class ActionLearner:
                 "selection_ms": selection_ms,
                 "repair_ms": repair_ms,
                 "budget_overrun": repair_ms > self.config.budget_ms,
+                # The frozen-reference API receives an already-computed state,
+                # so base model latency is intentionally unavailable here.
+                "base_ms": None,
+                "routing_ms": selection_ms,
+                "actual_policy_ms": selection_ms + repair_ms,
+                "estimated_action_ms": decision.estimated_ms,
+                "cost_calibration": metadata,
+                "full_frame_action_execution": decision.action != Action.STOP,
                 "measured_utility": utility(
                     before_loss, after_loss, repair_ms, self.config.cost_weight_per_ms
                 ),

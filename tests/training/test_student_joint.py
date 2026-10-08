@@ -422,6 +422,42 @@ def test_cli_inference_rejects_teacher_inputs_before_gpu_loading(extra):
         run_student_command(args)
 
 
+def test_cli_metric_deployment_inputs_are_complete_and_infer_only():
+    base = [
+        "infer",
+        "--data-root",
+        "data",
+        "--manifest",
+        "manifest",
+        "--output-dir",
+        "out",
+        "--checkpoint",
+        "own.pt",
+        "--sample-id",
+        "dataset_1/a",
+    ]
+    parser = build_parser()
+    args = parser.parse_args([*base, "--metric-selector", "predictor.pt"])
+    with pytest.raises(ValueError, match="metric-selector requires"):
+        run_student_command(args)
+
+    args = parser.parse_args(
+        [
+            "train",
+            "--data-root",
+            "data",
+            "--manifest",
+            "manifest",
+            "--output-dir",
+            "out",
+            "--cost-calibration",
+            "timing.pt",
+        ]
+    )
+    with pytest.raises(ValueError, match="inference-only"):
+        run_student_command(args)
+
+
 def test_eval_error_restores_modes_without_mutation(setup):
     learner, sample, _ = setup
     modules = learner.model, learner.actions, learner.selector

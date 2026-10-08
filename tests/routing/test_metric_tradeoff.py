@@ -209,7 +209,7 @@ def test_table_checks_checksum_duplicates_correspondence_invariance_and_final_te
     rows[0]["outcomes"].append(rows[0]["outcomes"][0])
     content = "".join(json.dumps(r) + "\n" for r in rows)
     metadata["outcome_sha256"] = hashlib.sha256(content.encode()).hexdigest()
-    (p / "samples.jsonl").write_text(content)
+    (p / "samples.jsonl").write_bytes(content.encode("utf-8"))
     (p / "result.json").write_text(json.dumps(metadata))
     with pytest.raises(ValueError, match="duplicate"):
         load_outcome_table(p, "train")
@@ -217,7 +217,7 @@ def test_table_checks_checksum_duplicates_correspondence_invariance_and_final_te
     rows[0]["outcomes"][2]["metric_changes"][0] = 1.0
     content = "".join(json.dumps(r) + "\n" for r in rows)
     metadata["outcome_sha256"] = hashlib.sha256(content.encode()).hexdigest()
-    (p / "samples.jsonl").write_text(content)
+    (p / "samples.jsonl").write_bytes(content.encode("utf-8"))
     (p / "result.json").write_text(json.dumps(metadata))
     with pytest.raises(ValueError, match="invariance"):
         load_outcome_table(p, "train")
