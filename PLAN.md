@@ -45,6 +45,54 @@ opt-in v2 experiment described in
 It preserves prior artifacts and requires a bounded native smoke/pilot before
 any claim of improved selection or metric geometry.
 
+On 2026-10-11 the user approved separate stereo/Gaussian selector heads in this
+opt-in experiment, with STOP as a fixed zero reference. The architecture and
+checkpoint boundary are documented in
+[Independent action heads](docs/selector_action_heads.md), configured by
+`configs/routing/intervention_metric_action_heads.yaml`. It preserves the common
+utility and physical harm policy; implementation alone is not quality evidence.
+The subsequent user-approved remediation uses action-local global/local loss
+balancing and diagnostics while retaining common utility and cross-action
+ranking. Its refit selects one whole head snapshot with per-action validation
+guards, as documented in the same file; it does not establish deployed quality.
+
+The 2026-10-12 user-approved controlled comparison is documented in
+[Controlled selector comparison](docs/selector_controlled_comparison.md).
+An opt-in refit checkpoint guard evaluates each action's weighted fitting
+objective, both action risk BCEs and ranking; historical component-minimum
+selection remains available. Fixed-exposure comparisons show all three actions
+can be selected, but guard violations and quality/cost tradeoffs remain.
+This diagnostic does not promote a selector or replace joint training with a
+frozen default research path.
+
+The continued joint-results audit and opt-in TRAIN metric-depth / fresh-context
+selector remediation are documented in
+[Joint geometry and selector audit](docs/joint_geometry_selector_audit_2026-10-13.md).
+The recorded VAL/CAL backbone ancestry overlap limits these comparisons to
+development diagnostics. Geometry improvements and selecting all three actions
+do not establish rendering tradeoff acceptance or calibrated routing safety.
+
+The user further prioritizes joint training and requests an independent frozen-
+student comparison, documented in
+[Joint/frozen student comparison](docs/joint_frozen_student_comparison.md).
+
+The user approved masked student tokens with global context and explicit
+local/global/any risk supervision in the existing guiding intervention harness.
+The opt-in implementation and controlled configurations are described in
+[Mask token selector](docs/mask_token_selector.md). Joint remains primary;
+frozen student remains a separate comparison. Existing utility/physical guards,
+dataset roles and historical artifacts are preserved. Synthetic implementation
+validation does not certify native performance, event calibration or research gates.
+Joint remains the default; the frozen branch fixes student/head learned state
+while repairs and selector learn under the same objective and policy.
+This comparison audits conditional harm and actor drift without waiving gates.
+
+The user approved signed expected gain: probability of positive utility,
+conditional benefit and conditional nonpositive cost. The opt-in joint/frozen
+configs and guiding-harness loss are described in
+[Signed gain selector](docs/signed_gain_selector.md). Original utility/guards
+and roles remain fixed; native effectiveness requires a separate comparison.
+
 This explicit approval permits the isolated experimental implementation before
 the historical gate sequence below. It does not mark Gate I or Gate II passed,
 establish calibrated uncertainty in A04, or replace historical negative evidence.

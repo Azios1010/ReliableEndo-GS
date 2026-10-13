@@ -84,6 +84,52 @@ but must use the same mask configuration and records the new index identity.
 
 ## External ROI index
 
+### Remediation smoke and recovery
+
+The opt-in `configs/routing/intervention_remediation.yaml` retains 32 TRAIN
+snapshots of normalization burn-in. Student/head and eligible repairs update
+during burn-in; selector weights begin updating after the transform is fitted.
+Checkpoints record separate `optimizer_update_counts` for model, actions, and
+selector. Loading checks each count against its Adam state and the burn-in
+snapshot count before changing live weights. Historical non-burn-in checkpoints
+without this field retain their original strict step checks. Burn-in checkpoints
+without the counts are rejected. Selected deployment requires fitted statistics
+and an actually trained selector.
+
+The bounded pair `configs/training/intervention_remediation_smoke.yaml` and
+`configs/routing/intervention_remediation_smoke.yaml` performs one student update
+and three joint updates: up to two normalization snapshots followed by a real
+selector update. This is four updates of one declared training sample, not an
+epoch or a quality claim. Smoke checks named parameters rather than normalization
+buffers when reporting learning. The full 32-snapshot config is deliberately
+rejected by bounded smoke; its scientific configuration is unchanged.
+
+Cost calibration stores the PyTorch version as an ordinary string, so artifacts
+from captured runtime metadata can round-trip through weights-only loading.
+Deployment cost measurements still require the exact frozen action/runtime/grid
+binding. CPU no-op serialization tests do not measure real GPU action costs.
+
+Source identity changes with these fixes. Use explicit model-only initialization
+for a new experiment with an old compatible student checkpoint; strict resume
+and deployment compatibility are unchanged. Do not relabel historical artifacts.
+
+For a configured runtime, external data, manifest, KD cache and deployment ROI:
+
+```bash
+python -m reliable_endo_gs.cli.student smoke \
+  --config configs/training/intervention_remediation_smoke.yaml \
+  --intervention-config configs/routing/intervention_remediation_smoke.yaml \
+  --mask-config configs/routing/target_masks.yaml \
+  --target-mask-index "$DEPLOYMENT_ROI_INDEX" \
+  --initialize-model-from "$INITIAL_CHECKPOINT" \
+  --data-root "$DATA_ROOT" --manifest "$TRAIN_MANIFEST" \
+  --cache-root "$KD_CACHE" --sample-id "$TRAIN_SAMPLE" \
+  --output-dir "$FRESH_OUTPUT_DIR"
+```
+
+The caller explicitly selects the allocated physical GPU before invoking Python.
+This command requires native GPU verification; CPU tests cannot establish it.
+
 Both index and arrays must live outside this repository. Each `.npy` is exactly
 bool `[H,W]` on the **model output grid**, with no implicit resize. Example
 schema below uses placeholders; no real medical mask is provided or fabricated.

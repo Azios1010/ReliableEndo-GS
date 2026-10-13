@@ -17,6 +17,7 @@ from reliable_endo_gs.reconstruction import ReferenceConfig
 from reliable_endo_gs.reconstruction.student import StudentReconstructionModel
 from reliable_endo_gs.rendering.production import ProductionFieldRenderer
 from reliable_endo_gs.routing.config import load_routing_config
+from reliable_endo_gs.routing.cost import CostCalibrationPolicy, save_cost_calibration
 from reliable_endo_gs.routing.masks import load_mask_config
 from reliable_endo_gs.routing.tradeoff import load_tradeoff_config
 from reliable_endo_gs.runtime.git import get_git_commit, is_git_dirty
@@ -24,6 +25,8 @@ from reliable_endo_gs.runtime.identity import source_sha256
 from reliable_endo_gs.teachers import AlignedTeacherTarget, TargetCache, load_a01_roles
 from reliable_endo_gs.teachers.external import build_foundation_stereo
 from reliable_endo_gs.teachers.workflow import target_cache_key
+from reliable_endo_gs.training.deployment_costs import calibrate_student_costs
+from reliable_endo_gs.training.metric_quality import OfflineMetricTruth, metric_action_policy
 from reliable_endo_gs.training.student_checkpoint import (
     initialize_student_model,
     read_student_checkpoint,
@@ -102,7 +105,8 @@ def run_mask_validation(
     """CPU asset checks first; one bounded joint run; read-only native comparisons.
 
     Original cohort manifests remain untouched. KD cache is read-only; misses
-    fail before training. GT is first read by evaluation after deployment steps.
+    fail before training. Physical-mode GT is a separate offline TRAIN label;
+    development GT is read only after deployment decisions.
     Initial baseline and final masks use the same fixed development worklist.
     """
     repo = Path(__file__).resolve().parents[3]
@@ -115,6 +119,10 @@ def run_mask_validation(
     intervention_config = load_intervention_config(intervention_config_path)
     routing_config = load_routing_config(routing_config_path)
     metric_config = load_tradeoff_config(metric_config_path)
+    if intervention_config.metric_quality is not None and (
+        metric_action_policy(intervention_config, 1).config_hash != metric_config.config_hash
+    ):
+        raise ValueError("metric diagnostic policy differs from joint supervision")
     train, dev = (
         load_a01_manifest(p, roles=roles) for p in (training_manifest, development_manifest)
     )
@@ -278,7 +286,13 @@ def run_mask_validation(
         {"epoch": 0, "next_sample_index": 0, "samples_seen": 0, "optimizer_steps": 0},
     )
 
-    def evaluate(path: Path, destination: Path, *, base_only: bool = False) -> dict[str, object]:
+    def evaluate(
+        path: Path,
+        destination: Path,
+        *,
+        base_only: bool = False,
+        cost_path: Path | None = None,
+    ) -> dict[str, object]:
         return evaluate_intervention_selection(
             checkpoint=path,
             output_dir=destination,
@@ -291,6 +305,7 @@ def run_mask_validation(
             sample_ids=dev_ids,
             metric_config_path=metric_config_path,
             base_only=base_only,
+            cost_calibration_path=cost_path,
         )
 
     before = evaluate(initial, output_dir / "base_before_training", base_only=True)
@@ -304,8 +319,24 @@ def run_mask_validation(
             raise ValueError("pinned KD cache disappeared after preflight")
         return target
 
+    def offline_truth(sample: ScaredA00Sample) -> OfflineMetricTruth:
+        truth_sample = adapter.load(
+            sample.sample_id,
+            data_role="final_train",
+            include_supervision=True,
+            output_hw=hw,
+        )
+        return OfflineMetricTruth.from_a00(truth_sample)
+
     trained = run_student_training(
-        samples, learner, identity, output_dir / "training", target_provider=provide
+        samples,
+        learner,
+        identity,
+        output_dir / "training",
+        target_provider=provide,
+        metric_truth_provider=offline_truth
+        if intervention_config.metric_quality is not None
+        else None,
     )
     if not trained["schedule_complete"]:
         report: dict[str, object] = {
@@ -314,7 +345,19 @@ def run_mask_validation(
         }
         write_json_atomic(output_dir / "result.json", report)
         return report
-    evaluated = evaluate(Path(str(trained["checkpoint"])), output_dir / "development")
+    calibration = calibrate_student_costs(
+        learner,
+        samples,
+        identity,
+        CostCalibrationPolicy("quantile", 0.95, warmup_repeats=1, measure_repeats=3),
+    )
+    cost_path = output_dir / "deployment_action_costs.pt"
+    save_cost_calibration(cost_path, calibration)
+    evaluated = evaluate(
+        Path(str(trained["checkpoint"])),
+        output_dir / "development",
+        cost_path=cost_path,
+    )
     before_summary = before["summary"]
     assert isinstance(before_summary, dict)
     report = {
@@ -324,10 +367,16 @@ def run_mask_validation(
         "base_before_training": before_summary["base"],
         "teacher_inference_executed": False,
         "gate_II_passed": False,
+        "deployment_cost_calibration": str(cost_path),
+        "selector_supervision": "physical_metric_outcomes"
+        if intervention_config.metric_quality is not None
+        else "rgb_warp_proxy",
         "limitations": [
             "Manual RGB input ROIs; no automatic foreground model.",
             "Frame-disjoint development shares keyframes with training.",
-            "Proxy-trained selector; independent metric guards are diagnostic, not calibrated risk.",
+            "Joint metric-risk probabilities are uncalibrated; action thresholds require held-out verification."
+            if intervention_config.metric_quality is not None
+            else "Proxy-trained selector; independent metric guards are diagnostic, not calibrated risk.",
             "Bounded pilot cannot establish publication performance or FPS.",
         ],
     }

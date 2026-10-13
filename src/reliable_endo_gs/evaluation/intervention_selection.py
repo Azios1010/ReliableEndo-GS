@@ -17,25 +17,32 @@ from reliable_endo_gs.config.intervention import InterventionConfig
 from reliable_endo_gs.data.scared_a00 import ScaredA00Adapter, load_a01_manifest
 from reliable_endo_gs.data.target_masks import TargetMaskIndex
 from reliable_endo_gs.evaluation.benchmark_geometry import evaluate_geometry
+from reliable_endo_gs.evaluation.gain_events import gain_event_metrics
 from reliable_endo_gs.evaluation.rendering import psnr, windowed_ssim
+from reliable_endo_gs.evaluation.risk_events import risk_event_metrics
 from reliable_endo_gs.reconstruction import ReferenceConfig
 from reliable_endo_gs.reconstruction.student import StudentReconstructionModel
 from reliable_endo_gs.regions.grid import grid_regions
 from reliable_endo_gs.regions.masks import MaskRegion
 from reliable_endo_gs.rendering.production import ProductionFieldRenderer
 from reliable_endo_gs.routing.balanced import BalancedSelector
+from reliable_endo_gs.routing.calibrated_selector import CalibratedSelector
 from reliable_endo_gs.routing.config import RoutingConfig
+from reliable_endo_gs.routing.cost import load_cost_calibration
 from reliable_endo_gs.routing.masks import MaskProposalConfig
+from reliable_endo_gs.routing.metric_selection import module_state_sha256
 from reliable_endo_gs.routing.repairability import (
     RepairabilitySelector,
     select_repairability,
 )
 from reliable_endo_gs.routing.selector import Decision
+from reliable_endo_gs.routing.tokens import selector_feature_names
 from reliable_endo_gs.runtime.git import get_git_commit, is_git_dirty
 from reliable_endo_gs.runtime.identity import source_sha256
 from reliable_endo_gs.teachers import load_a01_roles
 from reliable_endo_gs.training.harness import capture_rng, restore_rng
 from reliable_endo_gs.training.interventions import reconstruction_loss
+from reliable_endo_gs.training.metric_quality import metric_action_policy, metric_targets
 from reliable_endo_gs.training.quality_components import component_targets, measure_quality
 from reliable_endo_gs.training.repairability import (
     outside_loss,
@@ -74,6 +81,9 @@ def evaluate_intervention_selection(
     sample_ids: tuple[str, ...] | None = None,
     metric_config_path: Path | None = None,
     base_only: bool = False,
+    cost_calibration_path: Path | None = None,
+    expected_checkpoint_sha256: str | None = None,
+    selector_refit_path: Path | None = None,
 ) -> dict[str, object]:
     """Read-only deployment evaluation; restore RNG even on evaluation failure."""
     if not torch.cuda.is_available():
@@ -94,6 +104,9 @@ def evaluate_intervention_selection(
             sample_ids=sample_ids,
             metric_config_path=metric_config_path,
             base_only=base_only,
+            cost_calibration_path=cost_calibration_path,
+            expected_checkpoint_sha256=expected_checkpoint_sha256,
+            selector_refit_path=selector_refit_path,
         )
     finally:
         restore_rng(rng, device)
@@ -113,6 +126,9 @@ def _evaluate_intervention_selection(
     sample_ids: tuple[str, ...] | None,
     metric_config_path: Path | None,
     base_only: bool,
+    cost_calibration_path: Path | None = None,
+    expected_checkpoint_sha256: str | None = None,
+    selector_refit_path: Path | None = None,
 ) -> dict[str, object]:
     """Evaluate real shared actions, fixed-mask gain and independent GT metrics.
 
@@ -148,12 +164,18 @@ def _evaluate_intervention_selection(
         ids = list(sample_ids)
     if not ids or train_ids.intersection(ids):
         raise ValueError("evaluation IDs must be disjoint from training")
+    checkpoint_digest = hashlib.sha256(checkpoint.read_bytes()).hexdigest()
+    if expected_checkpoint_sha256 is not None and checkpoint_digest != expected_checkpoint_sha256:
+        raise ValueError("pinned evaluation checkpoint SHA-256 mismatch")
     raw = read_student_checkpoint(checkpoint)
     if raw.get("intervention_config") is None:
         raise ValueError("requires a gain/harm intervention checkpoint")
     cfg = InterventionConfig(**raw["intervention_config"])
     if (
-        raw["identity"]["source_sha256"] != source_sha256(repo)
+        (
+            raw["identity"]["source_sha256"] != source_sha256(repo)
+            and expected_checkpoint_sha256 is None
+        )
         or raw["identity"]["manifest_hash"] != train.manifest_hash
         or raw["identity"]["role_hash"] != roles.role_hash
     ):
@@ -201,7 +223,34 @@ def _evaluate_intervention_selection(
     # resume validator accepts it on this disposable clone; the public wrapper
     # restores process RNG and no action/selector prediction is executed.
     load_student_checkpoint(checkpoint, learner, raw["identity"], size, resume=base_only)
-    if not learner.cost_observations and not base_only:
+    if cost_calibration_path is not None and not base_only:
+        artifact = load_cost_calibration(cost_calibration_path)
+        if artifact.binding.get(
+            "training_manifest_hash"
+        ) != train.manifest_hash or not artifact.matches_training_identity(raw["identity"]):
+            raise ValueError("deployment timing training identity mismatch")
+        learner.attach_cost_calibration(artifact)
+    if selector_refit_path is not None:
+        if base_only:
+            raise ValueError("STOP baseline cannot attach a refit selector")
+        learner.load_refit_selector(selector_refit_path, source_sha256(repo))
+    refit = learner.metric_selector
+    if refit is not None and not isinstance(refit, CalibratedSelector):
+        raise ValueError("intervention evaluator requires the calibrated scalar selector")
+    refit_before = None if refit is None else module_state_sha256(refit)
+    if (
+        cfg.metric_quality is not None
+        and not base_only
+        and learner.deployment_cost_calibration is None
+    ):
+        raise ValueError(
+            "physical metric evaluation requires dedicated TRAIN inference cost calibration"
+        )
+    if (
+        not learner.cost_observations
+        and not base_only
+        and learner.deployment_cost_calibration is None
+    ):
         raise ValueError("evaluation needs measured joint-action costs")
     if (
         isinstance(learner.selector, BalancedSelector)
@@ -218,6 +267,11 @@ def _evaluate_intervention_selection(
         from reliable_endo_gs.routing.tradeoff import load_tradeoff_config
 
         metric_config = load_tradeoff_config(metric_config_path)
+    if cfg.metric_quality is not None:
+        configured_metric = metric_action_policy(cfg, int(Action.STEREO))
+        if metric_config is not None and metric_config.config_hash != configured_metric.config_hash:
+            raise ValueError("diagnostic metric policy differs from joint supervision")
+        metric_config = configured_metric
     adapter = ScaredA00Adapter(data_root, manifest, roles=roles)
     output_dir.mkdir(parents=True, exist_ok=False)
     torch.cuda.reset_peak_memory_stats(device)
@@ -258,9 +312,18 @@ def _evaluate_intervention_selection(
             valid = torch.tensor(
                 [eligible(state, r) for r in regions], device=device, dtype=torch.bool
             )
+            event_predictions = None
+            gain_components = None
             if regions:
                 features = learner.selection_features(state, regions)
-                gains, harms = learner.selector.predict(features)
+                if refit is None and isinstance(learner.selector, BalancedSelector):
+                    gains, _, harms, event_predictions, gain_components = (
+                        learner.selector.outputs_with_components(features)
+                    )
+                else:
+                    gains, harms = (refit if refit is not None else learner.selector).predict(
+                        features
+                    )
             else:
                 features = (
                     state.batch.left.new_empty((0, len(learner.selector.normalization.center)))
@@ -269,11 +332,19 @@ def _evaluate_intervention_selection(
                 )
                 gains = state.batch.left.new_zeros((0, 3))
                 harms = torch.zeros_like(gains)
-            costs = learner.cost_max_ms.expand(len(regions), -1)
+            costs = (
+                state.batch.left.new_zeros(3)
+                if base_only
+                else learner.estimated_action_costs(state)
+            ).expand(len(regions), -1)
             torch.cuda.synchronize(device)
             routing_ms = (time.perf_counter() - t0) * 1000
             remaining = max(0.0, cfg.total_budget_ms - base_ms - routing_ms)
-            decision = select_repairability(gains, harms, costs, valid, remaining, cfg)
+            decision = (
+                refit.select(features, costs, valid, remaining)
+                if refit is not None
+                else select_repairability(gains, harms, costs, valid, remaining, cfg)
+            )
             torch.cuda.synchronize(device)
             routing_ms = (time.perf_counter() - t0) * 1000
             remaining = max(0.0, cfg.total_budget_ms - base_ms - routing_ms)
@@ -291,6 +362,7 @@ def _evaluate_intervention_selection(
             }
             actual_gains = torch.zeros_like(gains)
             actual_harms = torch.zeros_like(harms)
+            actual_available = torch.ones_like(harms, dtype=torch.bool)
             for ri in eligible_ids:
                 region = regions[ri]
                 stereo_before = float(stereo_consistency_loss(state, stop.disparity, region))
@@ -391,10 +463,39 @@ def _evaluate_intervention_selection(
                         regions[key[0]],
                         gt_d,
                         gt_mask,
-                        metric_config,
+                        metric_action_policy(cfg, key[1])
+                        if cfg.metric_quality is not None
+                        else metric_config,
                         metric_cache[(None, 0)],
                         measured,
                     )
+                    if cfg.metric_quality is not None:
+                        changes = metric_outcomes[key]["metric_changes"]
+                        observed[key]["proxy_gain"] = observed[key]["gain"]
+                        observed[key]["proxy_harm"] = observed[key]["harm"]
+                        observed[key]["selector_label_available"] = changes is not None
+                        if changes is None:
+                            actual_available[key[0], key[1]] = False
+                            actual_gains[key[0], key[1]] = 0.0
+                            actual_harms[key[0], key[1]] = 0.0
+                            observed[key].update(gain=0.0, harm=False)
+                        else:
+                            gain, local_gain, harm = metric_targets(changes, cfg, key[1])
+                            actual_gains[key[0], key[1]] = gain
+                            actual_harms[key[0], key[1]] = float(harm)
+                            observed[key].update(gain=gain, local_gain=local_gain, harm=harm)
+            if cfg.metric_quality is not None:
+                oracle = select_repairability(
+                    actual_gains,
+                    actual_harms,
+                    costs,
+                    valid,
+                    remaining,
+                    cfg,
+                    risk_available=actual_available,
+                )
+                oracle_key = (oracle.region_index, int(oracle.action))
+                policies["oracle"] = oracle_key
             policy_rows = {}
             for name, key in policies.items():
                 outcome = outcomes[key]
@@ -420,6 +521,8 @@ def _evaluate_intervention_selection(
                         metrics[view + "_ssim"] = windowed_ssim(render.image, image)
                     metric_cache[key] = {k: v.to_dict() for k, v in metrics.items()}
                 row = dict(observed[key])
+                if not row.get("selector_label_available", True):
+                    row.update(gain=None, local_gain=None, harm=None)
                 actual_ms = (
                     base_ms
                     + row["action_ms"]
@@ -452,10 +555,13 @@ def _evaluate_intervention_selection(
                 "predicted_harms": harms.tolist(),
                 "actual_gains": actual_gains.tolist(),
                 "actual_harms": actual_harms.tolist(),
+                "actual_label_available": actual_available.tolist(),
                 "oracle_agreement": selected_key == oracle_key,
                 "valid_regions": valid.tolist(),
                 "features_raw": features.detach().cpu().tolist(),
-                "safe_gain_regret": observed[oracle_key]["gain"]
+                "safe_gain_regret": None
+                if not observed[selected_key].get("selector_label_available", True)
+                else observed[oracle_key]["gain"]
                 - (
                     min(0.0, observed[selected_key]["gain"])
                     if observed[selected_key]["harm"]
@@ -483,6 +589,24 @@ def _evaluate_intervention_selection(
                     for key, value in metric_outcomes.items()
                 ],
             }
+            if cfg.selector_risk_mode == "local_global":
+                record["predicted_risk_events"] = (
+                    [] if event_predictions is None else event_predictions.cpu().tolist()
+                )
+            if cfg.selector_gain_mode == "signed_expectation":
+                record["predicted_gain_components"] = (
+                    {
+                        name: []
+                        for name in (
+                            "positive_probability",
+                            "positive_gain",
+                            "negative_cost",
+                            "expected_gain",
+                        )
+                    }
+                    if gain_components is None
+                    else gain_components.to_report()
+                )
             records.append(record)
             stream.write(json.dumps(record, allow_nan=False) + "\n")
             stream.flush()
@@ -500,6 +624,8 @@ def _evaluate_intervention_selection(
             del outcomes, state, metric_cache
     if _weights(learner) != before:
         raise ValueError("evaluation mutated model weights")
+    if refit is not None and module_state_sha256(refit) != refit_before:
+        raise ValueError("evaluation mutated calibrated selector")
     summaries = {}
     for policy in records[0]["policies"]:
         rows = [r["policies"][policy] for r in records]
@@ -515,8 +641,10 @@ def _evaluate_intervention_selection(
             }
         summaries[policy] = {
             "actions": dict(Counter(r["action"] for r in rows)),
-            "mean_gain": statistics.mean(r["gain"] for r in rows),
-            "harmful_interventions": sum(r["harm"] for r in rows),
+            "mean_gain": statistics.mean(r["gain"] for r in rows if r["gain"] is not None)
+            if any(r["gain"] is not None for r in rows)
+            else None,
+            "harmful_interventions": sum(r["harm"] is True for r in rows),
             "budget_overruns": sum(r["overrun_ms"] > 0 for r in rows),
             "metrics": macro_metrics,
             "metric_violations": sum(row.get("metric_feasible") is False for row in rows),
@@ -527,16 +655,22 @@ def _evaluate_intervention_selection(
     probabilities = [
         p
         for r in records
-        for region, valid_region in zip(r["predicted_harms"], r["valid_regions"], strict=True)
+        for region, valid_region, known in zip(
+            r["predicted_harms"], r["valid_regions"], r["actual_label_available"], strict=True
+        )
         if valid_region
-        for p in region[1:]
+        for p, available in zip(region[1:], known[1:], strict=True)
+        if available
     ]
     labels = [
         y
         for r in records
-        for region, valid_region in zip(r["actual_harms"], r["valid_regions"], strict=True)
+        for region, valid_region, known in zip(
+            r["actual_harms"], r["valid_regions"], r["actual_label_available"], strict=True
+        )
         if valid_region
-        for y in region[1:]
+        for y, available in zip(region[1:], known[1:], strict=True)
+        if available
     ]
     bins = []
     for b in range(10):
@@ -553,7 +687,9 @@ def _evaluate_intervention_selection(
                 }
             )
     calibration = {
-        "label_semantics": "fixed-mask proxy harm, not metric GT risk",
+        "label_semantics": "physical_metric_guard_violation"
+        if cfg.metric_quality is not None
+        else "fixed-mask proxy harm, not metric GT risk",
         "brier": statistics.mean((p - y) ** 2 for p, y in zip(probabilities, labels, strict=True))
         if probabilities
         else None,
@@ -568,10 +704,21 @@ def _evaluate_intervention_selection(
     result: dict[str, object] = {
         "status": "native_intervention_evaluation_complete",
         "samples": len(records),
+        "samples_sha256": hashlib.sha256((output_dir / "samples.jsonl").read_bytes()).hexdigest(),
         "train_overlap": 0,
+        # This exclusion does not establish an unseen evaluation cohort for
+        # weights initialized from another training run. Audit that ancestry
+        # separately before making generalization or final-test claims.
+        "training_overlap_scope": "current_training_manifest_only",
+        "initialization_overlap_audited": False,
+        "evaluation_scope": "development_diagnostic",
         "manifest_hash": manifest.manifest_hash,
         "training_manifest_hash": train.manifest_hash,
-        "checkpoint_sha256": hashlib.sha256(checkpoint.read_bytes()).hexdigest(),
+        "checkpoint_sha256": checkpoint_digest,
+        "checkpoint_source_sha256": raw["identity"]["source_sha256"],
+        "checkpoint_import_mode": "explicit_pinned_historical_read_only_evaluation"
+        if expected_checkpoint_sha256 is not None
+        else "strict_current_source",
         "source_sha256": source_sha256(repo),
         "git_commit": get_git_commit(repo),
         "git_dirty": is_git_dirty(repo),
@@ -584,10 +731,29 @@ def _evaluate_intervention_selection(
         "peak_allocated_bytes": torch.cuda.max_memory_allocated(device),
         "elapsed_seconds": time.perf_counter() - started,
         "oracle_agreement": statistics.mean(r["oracle_agreement"] for r in records),
-        "oracle_semantics": "measured RGB/warp proxy gain and harm; not metric GT utility",
-        "mean_safe_gain_regret": statistics.mean(r["safe_gain_regret"] for r in records),
+        "oracle_semantics": "measured physical metric utility and guards"
+        if cfg.metric_quality is not None
+        else "measured RGB/warp proxy gain and harm; not metric GT utility",
+        "cost_calibration": learner.cost_calibration_metadata(),
+        "mean_safe_gain_regret": statistics.mean(
+            r["safe_gain_regret"] for r in records if r["safe_gain_regret"] is not None
+        )
+        if any(r["safe_gain_regret"] is not None for r in records)
+        else None,
         "harm_calibration": calibration,
+        "risk_event_calibration": risk_event_metrics(records, cfg)
+        if cfg.selector_risk_mode == "local_global"
+        else None,
+        "feature_names": list(selector_feature_names(cfg))
+        if isinstance(learner.selector, BalancedSelector)
+        else None,
         "weights_unchanged": True,
+        "selector_refit_sha256": None
+        if selector_refit_path is None
+        else hashlib.sha256(selector_refit_path.read_bytes()).hexdigest(),
+        "refit_calibration_available": None
+        if not isinstance(refit, CalibratedSelector)
+        else refit.calibration_available.cpu().tolist(),
         "teacher_inference_executed": False,
         "training_executed": False,
         "summary": summaries,
@@ -607,5 +773,7 @@ def _evaluate_intervention_selection(
         from reliable_endo_gs.evaluation.mask_metrics import summarize_metric_diagnostics
 
         result["metric_diagnostics"] = summarize_metric_diagnostics(records, metric_config)
+    if cfg.selector_gain_mode == "signed_expectation":
+        result["gain_event_diagnostics"] = gain_event_metrics(records)
     write_json_atomic(output_dir / "result.json", result)
     return result

@@ -17,10 +17,25 @@ class GradientBalance(nn.Module):
     weights: torch.Tensor
     observations: torch.Tensor
 
-    def __init__(self, names: tuple[str, ...], config: InterventionConfig) -> None:
+    def __init__(
+        self,
+        names: tuple[str, ...],
+        config: InterventionConfig,
+        *,
+        groups: tuple[tuple[int, ...], ...] | None = None,
+    ) -> None:
         super().__init__()
         self.names = names
         self.config = config
+        self.groups = (tuple(range(len(names))),) if groups is None else groups
+        indices = [i for group in self.groups for i in group]
+        if (
+            not names
+            or any(not group for group in self.groups)
+            or any(type(i) is not int for i in indices)
+            or sorted(indices) != list(range(len(names)))
+        ):
+            raise ValueError("gradient balance groups must partition all loss indices")
         self.register_buffer("ema", torch.zeros(len(names)))
         self.register_buffer("weights", torch.ones(len(names)))
         self.register_buffer("observations", torch.tensor(0, dtype=torch.long))
@@ -58,16 +73,21 @@ class GradientBalance(nn.Module):
         active = (proposed > self.config.normalization_floor) & (
             norms > self.config.normalization_floor
         )
-        reference = proposed[active].median() if bool(active.any()) else proposed.new_tensor(1.0)
-        weights = (
-            torch.where(
-                active,
-                reference / proposed.clamp_min(self.config.normalization_floor),
-                torch.ones_like(proposed),
+        weights = torch.ones_like(proposed)
+        for group in self.groups:
+            index = torch.tensor(group, device=proposed.device, dtype=torch.long)
+            group_active, group_ema = active[index], proposed[index]
+            reference = (
+                group_ema[group_active].median()
+                if bool(group_active.any())
+                else proposed.new_tensor(1.0)
             )
-            .clamp(self.config.balance_minimum, self.config.balance_maximum)
-            .detach()
-        )
+            weights[index] = torch.where(
+                group_active,
+                reference / group_ema.clamp_min(self.config.normalization_floor),
+                torch.ones_like(group_ema),
+            ).clamp(self.config.balance_minimum, self.config.balance_maximum)
+        weights = weights.detach()
         diag = {f"shared_grad_{name}": float(norms[i]) for i, name in enumerate(self.names)}
         diag.update({f"balance_{name}": float(weights[i]) for i, name in enumerate(self.names)})
         for a in range(len(self.names)):

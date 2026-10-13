@@ -1,0 +1,28 @@
+# Joint student/actions/selector. GT is a separate offline TRAIN label only.
+schema: intervention_selection.v2
+ranking_margin_units: train_scale
+normalization_mode: burn_in
+normalization_frames: 32
+normalization_rows: 256
+stereo_weight: 3.0
+stereo_training_priority: 3.0
+maximum_stereo_harm_probability: 0.2
+maximum_gaussian_harm_probability: 0.05
+gaussian_guard_multiplier: 0.5
+local_auxiliary_weight: 0.25
+metric_quality:
+  schema: metric_action_tradeoff.v2
+  maximum_psnr_drop_db: 0.01
+  maximum_ssim_drop: 0.0005
+  maximum_outside_rgb_increase: 1.0e-5
+  maximum_local_rgb_increase: 1.0e-4
+  geometry_weight: 1.0
+  local_geometry_weight: 1.0
+  geometry_priority: 3.0
+  psnr_weight: 0.5
+  ssim_weight: 0.5
+  collateral_weight: 0.0
+  local_render_weight: 0.0
+  maximum_predicted_violation_probability: 0.2
+# mm x5; dB x2; SSIM x2; RGB outside/local; coverage. Common to both actions.
+metric_scales: [1.0, 1.0, 1.0, 1.0, 1.0, 0.1, 0.1, 0.001, 0.001, 0.0001, 0.0001, 0.001]

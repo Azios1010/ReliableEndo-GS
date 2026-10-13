@@ -46,6 +46,11 @@ def save_student_checkpoint(
         _cpu_tree(
             {
                 "schema": _schema(learner),
+                **(
+                    {"frozen_student_start_step": learner.frozen_student_start_step}
+                    if learner.student_frozen
+                    else {}
+                ),
                 "mask_config": None if learner.mask_config is None else asdict(learner.mask_config),
                 "target_mask_index_sha256": None
                 if learner.target_masks is None
@@ -75,6 +80,7 @@ def save_student_checkpoint(
                 "model_optimizer": learner.model_optimizer.state_dict(),
                 "action_optimizer": learner.action_optimizer.state_dict(),
                 "selector_optimizer": learner.selector_optimizer.state_dict(),
+                "optimizer_update_counts": dict(learner.optimizer_update_counts),
                 "cost_max_ms": learner.cost_max_ms,
                 "cost_observations": learner.cost_observations,
                 "cost_history": learner.cost_history,
@@ -287,6 +293,52 @@ def load_student_checkpoint(
         or observations > cursor["samples_seen"]
     ):
         raise ValueError("invalid student cost calibration")
+    burn_in = (
+        learner.intervention_config is not None
+        and isinstance(learner.selector, BalancedSelector)
+        and learner.intervention_config.normalization_mode == "burn_in"
+    )
+    update_counts = raw.get("optimizer_update_counts")
+    frozen_start = raw.get("frozen_student_start_step")
+    if learner.student_frozen:
+        if (
+            type(frozen_start) is not int
+            or frozen_start < 0
+            or frozen_start > cursor["samples_seen"]
+        ):
+            raise ValueError("invalid frozen student start step")
+        expected_model_updates = frozen_start
+    else:
+        if "frozen_student_start_step" in raw:
+            raise ValueError("joint checkpoint must not carry frozen student ownership")
+        expected_model_updates = cursor["optimizer_steps"]
+    updates_per_snapshot = (
+        learner.intervention_config.selector_updates_per_snapshot
+        if isinstance(learner.selector, BalancedSelector)
+        and learner.intervention_config is not None
+        else 1
+    )
+    if "optimizer_update_counts" not in raw:
+        # Historical protocols updated repairs and selector together. Do not
+        # infer missing update ownership for the new burn-in protocol.
+        if burn_in or updates_per_snapshot != 1 or learner.student_frozen:
+            raise ValueError("burn-in checkpoint requires optimizer update counts")
+        update_counts = {
+            "model": cursor["optimizer_steps"],
+            "actions": observations,
+            "selector": observations,
+        }
+    if (
+        not isinstance(update_counts, dict)
+        or set(update_counts) != {"model", "actions", "selector"}
+        or any(type(value) is not int or value < 0 for value in update_counts.values())
+        or update_counts["model"] != expected_model_updates
+        or update_counts["actions"] != observations
+        or update_counts["selector"] > update_counts["actions"] * updates_per_snapshot
+        or update_counts["selector"] % updates_per_snapshot != 0
+        or (not burn_in and update_counts["selector"] != observations * updates_per_snapshot)
+    ):
+        raise ValueError("invalid student optimizer update counts")
     history = raw.get("cost_history")
     history_observations = raw.get("cost_history_observations", 0)
     if history is not None and (
@@ -333,8 +385,17 @@ def load_student_checkpoint(
             probe = copy.deepcopy(balancer)
             probe.load_state_dict(payload, strict=True)
             probe.validate_state()
-            if int(probe.observations) > cursor["optimizer_steps"]:
+            maximum_balance_steps = cursor["optimizer_steps"] * (
+                updates_per_snapshot if name == "selector_gradient_balance" else 1
+            )
+            if int(probe.observations) > maximum_balance_steps:
                 raise ValueError("gradient balance cursor mismatch")
+            if (
+                name == "selector_gradient_balance"
+                and updates_per_snapshot != 1
+                and int(probe.observations) != update_counts["selector"]
+            ):
+                raise ValueError("selector gradient balance update count mismatch")
     for name, module in zip(("model", "actions", "selector"), modules, strict=True):
         state = raw.get(name)
         expected = module.state_dict()
@@ -356,8 +417,28 @@ def load_student_checkpoint(
         probe_selector.validate_state()
         if int(probe_selector.normalization.counts[2]) > observations:
             raise ValueError("normalization cursor mismatch")
+        if burn_in:
+            maximum_selector_updates = (
+                observations - int(probe_selector.normalization.counts[2])
+            ) * updates_per_snapshot
+            physical_labels = (
+                learner.intervention_config is not None
+                and learner.intervention_config.metric_quality is not None
+            )
+            # Physical outcomes may be unknown both before and after fitting.
+            # Those joint updates still optimize model/actions but do not train
+            # the selector or observe normalization. Its actual Adam step count
+            # is checked independently below, rather than inferred from samples.
+            if (
+                update_counts["selector"] > maximum_selector_updates
+                or (not physical_labels and update_counts["selector"] != maximum_selector_updates)
+                or (not bool(probe_selector.normalization.fitted) and update_counts["selector"])
+            ):
+                raise ValueError("selector burn-in update count mismatch")
         if not resume and not bool(probe_selector.normalization.fitted):
             raise ValueError("deployment requires fitted training normalization")
+        if not resume and not update_counts["selector"]:
+            raise ValueError("deployment requires a trained selector")
     optimizers = (learner.model_optimizer, learner.action_optimizer, learner.selector_optimizer)
     # Loading into a temporary optimizer detects group/ownership incompatibility
     # before any live weight has changed. Tensor states must match each parameter.
@@ -378,7 +459,22 @@ def load_student_checkpoint(
             test_optimizer.load_state_dict(raw[name])
         except (KeyError, ValueError, TypeError) as error:
             raise ValueError(f"invalid student optimizer: {name}") from error
-        expected_steps = cursor["optimizer_steps"] if name == "model_optimizer" else observations
+        owner = {
+            "model_optimizer": "model",
+            "action_optimizer": "actions",
+            "selector_optimizer": "selector",
+        }[name]
+        expected_steps = update_counts[owner]
+        # In the opt-in gain-only schedule, one final joint Adam call per
+        # snapshot updates harm; extra calls have harm grad=None and MUST NOT
+        # change its moments, parameters or step counter.
+        parameter_steps = {
+            p: expected_steps // updates_per_snapshot
+            if owner == "selector" and group.get("name") == "harm"
+            else expected_steps
+            for group in test_optimizer.param_groups
+            for p in group["params"]
+        }
         if len(test_optimizer.state) != (len(group_ids) if expected_steps else 0):
             raise ValueError(f"incomplete student optimizer parameter state: {name}")
         for parameter, state in test_optimizer.state.items():
@@ -393,7 +489,7 @@ def load_student_checkpoint(
                 not isinstance(step, torch.Tensor)
                 or step.numel() != 1
                 or not bool(torch.isfinite(step).all())
-                or float(step) != expected_steps
+                or float(step) != parameter_steps[parameter]
             ):
                 raise ValueError(f"invalid student Adam step: {name}")
             for key in ("exp_avg", "exp_avg_sq"):
@@ -424,12 +520,12 @@ def load_student_checkpoint(
             ("model_optimizer", "action_optimizer", "selector_optimizer"), optimizers, strict=True
         ):
             optimizer.load_state_dict(raw[name])
+        learner.optimizer_update_counts = dict(update_counts)
+        learner.frozen_student_start_step = frozen_start if learner.student_frozen else None
         restore_rng(rng, device)
     learner.cost_max_ms = costs.to(device)
     learner.cost_observations = observations
-    learner.cost_history = (
-        new_cost_history(device) if history is None else history.to(device)
-    )
+    learner.cost_history = new_cost_history(device) if history is None else history.to(device)
     learner.cost_history_observations = history_observations
     learner.deployment_cost_calibration = None
     if calibration is not None:

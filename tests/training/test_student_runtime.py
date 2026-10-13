@@ -107,6 +107,27 @@ def test_cli_fp32_startup_reaches_data_boundary(command, tmp_path, monkeypatch, 
         student_runtime.run_student_command(build_parser().parse_args(argv))
 
 
+def test_bounded_smoke_rejects_full_burn_in_schedule(tmp_path, cpu_native_runtime):
+    argv = [
+        "smoke",
+        "--config",
+        "configs/training/intervention_remediation_smoke.yaml",
+        "--intervention-config",
+        "configs/routing/intervention_remediation.yaml",
+        "--data-root",
+        str(tmp_path / "data"),
+        "--manifest",
+        str(tmp_path / "manifest"),
+        "--output-dir",
+        str(tmp_path / "output"),
+        "--sample-id",
+        "dataset_1/keyframe_1/frame_data000000",
+    ]
+    with pytest.raises(ValueError, match="bounded burn-in smoke"):
+        student_runtime.run_student_command(build_parser().parse_args(argv))
+    assert not (tmp_path / "output").exists()
+
+
 @pytest.mark.parametrize(
     "command,cache_hit,populate,balanced",
     [
@@ -118,6 +139,7 @@ def test_cli_fp32_startup_reaches_data_boundary(command, tmp_path, monkeypatch, 
         ("train", False, True, False),
         ("smoke", True, False, True),
         ("smoke", True, False, "priority"),
+        ("smoke", True, False, "remediation"),
     ],
 )
 def test_cached_cli_updates_without_loading_teacher(
@@ -218,9 +240,13 @@ def test_cached_cli_updates_without_loading_teacher(
     if balanced:
         argv += [
             "--config",
-            "configs/training/intervention_balanced_smoke.yaml",
+            "configs/training/intervention_remediation_smoke.yaml"
+            if balanced == "remediation"
+            else "configs/training/intervention_balanced_smoke.yaml",
             "--intervention-config",
-            "configs/routing/intervention_stereo_priority_smoke.yaml"
+            "configs/routing/intervention_remediation_smoke.yaml"
+            if balanced == "remediation"
+            else "configs/routing/intervention_stereo_priority_smoke.yaml"
             if balanced == "priority"
             else "configs/routing/intervention_balanced_smoke.yaml",
         ]
@@ -233,7 +259,9 @@ def test_cached_cli_updates_without_loading_teacher(
     else:
         report = student_runtime.run_student_command(arguments)
         assert report["schedule_complete"]
-        assert report["cursor"]["optimizer_steps"] == (3 if balanced else 2)
+        assert report["cursor"]["optimizer_steps"] == (
+            4 if balanced == "remediation" else 3 if balanced else 2
+        )
         raw = read_student_checkpoint(output / "final.pt")
         assert raw["identity"]["renderer_identity"] == AnalyticRenderer().identity
         assert raw["identity"]["target_mode"] == (
@@ -244,12 +272,19 @@ def test_cached_cli_updates_without_loading_teacher(
             assert torch.equal(raw["rng"]["torch_cpu"], before_teacher_rng[-1])
         assert raw["construction_config"]["runtime"]["precision"] == "fp32"
         assert ReferenceConfig.from_dict(raw["construction_config"]).runtime.precision == "fp32"
-        assert raw["cost_observations"] == (2 if balanced else 1)
+        assert raw["cost_observations"] == (
+            3 if balanced == "remediation" else 2 if balanced else 1
+        )
         if balanced:
             assert raw["schema"] == "student_joint_intervention_checkpoint.v2"
             assert bool(raw["selector"]["normalization.fitted"])
             if balanced == "priority":
                 assert raw["intervention_config"]["stereo_training_priority"] == 3.0
+            if balanced == "remediation":
+                assert raw["optimizer_update_counts"] == {"model": 4, "actions": 3, "selector": 1}
+                assert all(
+                    int(state["step"]) == 1 for state in raw["selector_optimizer"]["state"].values()
+                )
         assert (output / "result.json").exists()
         if command == "smoke":
             assert all(report["parameters_changed"].values())

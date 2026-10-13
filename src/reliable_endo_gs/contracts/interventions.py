@@ -19,5 +19,13 @@ COMPONENT_NAMES = (
     "geometry_coverage_change",
 )
 
+# Disjoint, exhaustive event taxonomy. Outside RGB is collateral/global.
+LOCAL_RISK_COMPONENT_NAMES = (
+    "local_depth_mae_gain_mm",
+    "local_depth_rmse_gain_mm",
+    "local_rgb_gain",
+)
+RISK_EVENT_NAMES = ("local", "global", "any")
+
 
 ACTION_NAMES = ("correspondence", "learned_stereo", "gaussian")

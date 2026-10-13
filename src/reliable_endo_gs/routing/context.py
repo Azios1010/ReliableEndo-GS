@@ -93,8 +93,18 @@ def balanced_features(
     )
 
     def mean(value: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
-        selected = value[mask.expand_as(value)].float()
-        return selected.mean() if selected.numel() else value.new_zeros(())
+        # Fixed-shape reductions avoid CUDA nonzero/boolean-index compaction,
+        # which must synchronize with the host to determine output size.
+        expanded = mask.expand_as(value)
+        return torch.where(expanded, value.float(), 0).sum() / expanded.sum().clamp_min(1)
+
+    def std(value: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+        # Two-pass centred variance avoids cancellation in E[x^2]-E[x]^2.
+        centre = mean(value, mask)
+        return mean((value.float() - centre).square(), mask).sqrt()
+
+    def primitive_mean(value: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+        return torch.where(mask[:, None], value.float(), 0).sum(0) / mask.sum().clamp_min(1)
 
     global_values = torch.stack(
         (
@@ -103,10 +113,13 @@ def balanced_features(
             mean(error, state.support),
             mean(warped_valid.float(), state.support),
             mean(disparity / w, state.support),
-            disparity[state.support].float().std(unbiased=False),
+            torch.where(state.support.any(), std(disparity, state.support), float("nan")),
         )
     )
     frame = quaternion_to_rotation_matrix(state.base.gaussians.rotations)
+    scales = state.base.gaussians.scales[0].float()
+    log_scales = scales.clamp_min(1e-8).log()
+    log_anisotropy = (scales.max(-1).values / scales.min(-1).values.clamp_min(1e-8)).log()
     rows = []
     for i, region in enumerate(regions):
         mask = region.mask(batch.left) & state.support
@@ -115,36 +128,29 @@ def balanced_features(
         for channel in range(3):
             basic[i, 6 + channel] = mean(right_error[:, channel : channel + 1], right_mask)
         valid_depth = mask & geometry.depth.valid_mask
-        depths = depth[valid_depth].float()
         slots = primitive_core(state, region)[0]
-        scales = state.base.gaussians.scales[0, slots].float()
         zero = disparity.new_zeros((), dtype=torch.float32)
         physical = torch.stack(
             (
-                depths.mean() if depths.numel() else zero,
-                depths.std(unbiased=False) if depths.numel() else zero,
+                mean(depth, valid_depth),
+                std(depth, valid_depth),
                 batch.camera.K_L[0, 0, 0].float() / w,
                 batch.camera.K_L[0, 1, 1].float() / h,
                 -batch.camera.T_R_from_L[0, 0, 3].float(),
                 (batch.camera.K_L[0, 0, 2] - batch.camera.K_R[0, 0, 2]).float() / w,
             )
         )
-        log_scale = scales.clamp_min(1e-8).log().mean(0) if scales.numel() else zero.expand(3)
-        anisotropy = (
-            (scales.max(-1).values / scales.min(-1).values.clamp_min(1e-8)).log().mean()
-            if scales.numel()
-            else zero
-        )
+        log_scale = primitive_mean(log_scales, slots)
+        anisotropy = primitive_mean(log_anisotropy[:, None], slots)[0]
         density = slots.float().sum() / mask.float().sum().clamp_min(1)
-        normal = frame[0, slots, :, 2].float().mean(0) if bool(slots.any()) else zero.expand(3)
+        normal = primitive_mean(frame[0, :, :, 2], slots)
         visible = zero
         radius = zero
         if visibility_available:
             assert radii is not None
-            selected = radii[0, slots].float()
-            if selected.numel():
-                visible = (selected > 0).float().mean()
-                radius = selected.mean() / (h * h + w * w) ** 0.5
+            selected = radii[0].float()[:, None]
+            visible = primitive_mean((selected > 0).float(), slots)[0]
+            radius = primitive_mean(selected, slots)[0] / (h * h + w * w) ** 0.5
         gaussians = torch.cat(
             (
                 log_scale,

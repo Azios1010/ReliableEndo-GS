@@ -39,9 +39,12 @@ def stereo_distillation(
     teacher = target.disparity.detach().to(device=prediction.device, dtype=prediction.dtype)
     if teacher.shape != prediction.shape:
         raise ValueError("stereo KD teacher grid mismatch")
-    declared = batch.support & target.support.to(prediction.device) & target.validity.to(
-        prediction.device
-    ) & torch.isfinite(teacher)
+    declared = (
+        batch.support
+        & target.support.to(prediction.device)
+        & target.validity.to(prediction.device)
+        & torch.isfinite(teacher)
+    )
     diagnostics: dict[str, float] = {"kd_declared_pixels": float(declared.sum())}
     if config is None:
         mask = declared
@@ -57,8 +60,13 @@ def stereo_distillation(
         )
     if not bool(torch.isfinite(prediction[mask]).all()):
         raise ValueError("stereo KD has nonfinite supported student predictions")
-    loss = F.smooth_l1_loss(prediction[mask], teacher[mask]) / scale if bool(mask.any()) else (
-        torch.where(torch.isfinite(prediction), prediction, torch.zeros_like(prediction)).sum() * 0
+    loss = (
+        F.smooth_l1_loss(prediction[mask], teacher[mask]) / scale
+        if bool(mask.any())
+        else (
+            torch.where(torch.isfinite(prediction), prediction, torch.zeros_like(prediction)).sum()
+            * 0
+        )
     )
     diagnostics.update(kd_accepted_pixels=float(mask.sum()), kd_empty=float(not bool(mask.any())))
     return DistillationResult(loss, diagnostics)

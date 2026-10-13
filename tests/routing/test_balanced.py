@@ -81,9 +81,7 @@ def test_remediation_units_and_burn_in_are_explicit_without_changing_legacy_hash
     assert legacy.ranking_margin_units == "raw"
     assert legacy.normalization_mode == "legacy"
     assert legacy.config_hash == "9abdf5e35f91b62a1bb49efa61c0209b0565476d69ed61542f5c4894b1aa5266"
-    remediation = load_intervention_config(
-        Path("configs/routing/intervention_remediation.yaml")
-    )
+    remediation = load_intervention_config(Path("configs/routing/intervention_remediation.yaml"))
     assert remediation.ranking_margin_units == "train_scale"
     assert remediation.normalization_mode == "burn_in"
     assert "ranking_margin_units" in remediation.to_dict()
@@ -347,9 +345,7 @@ def test_ranking_margin_uses_common_train_gain_scale_for_small_proxy_gains():
     # Raw gains are much smaller than the historical 0.02 margin, but their
     # normalized separation is 0.04 and therefore informative in v2.
     target = torch.tensor([[0.0, 0.002, 0.0005], [0.0, 0.0005, 0.002]])
-    losses, diagnostics = selector.objective(
-        features, target, target, torch.zeros_like(target)
-    )
+    losses, diagnostics = selector.objective(features, target, target, torch.zeros_like(target))
     assert diagnostics["selector_ranking_informative_fraction"] > 0
     assert diagnostics["selector_ranking_margin_units"] == "train_scale"
     assert diagnostics["selector_ranking_margin"] == pytest.approx(0.02)
@@ -366,15 +362,12 @@ def test_balanced_objective_rejects_nonzero_stop_supervision(setup):
 
 def test_burn_in_collects_normalization_before_selector_updates(setup):
     learner, sample, target = setup
-    learner.intervention_config = replace(
-        learner.intervention_config, normalization_mode="burn_in"
-    )
+    learner.intervention_config = replace(learner.intervention_config, normalization_mode="burn_in")
     before = [p.detach().clone() for p in learner.selector.parameters()]
     first = learner.step(sample, joint=True, teacher_target=target, position=0)
     assert first["selector_burn_in"] is True
     assert all(
-        torch.equal(p, old)
-        for p, old in zip(learner.selector.parameters(), before, strict=True)
+        torch.equal(p, old) for p, old in zip(learner.selector.parameters(), before, strict=True)
     )
     second = learner.step(sample, joint=True, teacher_target=target, position=1)
     assert learner.selector.normalization.fitted
@@ -382,6 +375,124 @@ def test_burn_in_collects_normalization_before_selector_updates(setup):
     third = learner.step(sample, joint=True, teacher_target=target, position=2)
     assert "selector_burn_in" not in third
     assert third["optimizer_update_norm_selector"] > 0
+
+
+@pytest.mark.parametrize("steps", [1, 2, 3])
+def test_burn_in_checkpoint_preserves_each_optimizer_step(setup, tmp_path, steps):
+    original, sample, target = setup
+    cfg = replace(original.intervention_config, normalization_mode="burn_in")
+    learner = StudentLearner(
+        copy.deepcopy(original.model), original.config, original.routing, intervention_config=cfg
+    )
+    for position in range(steps):
+        learner.step(sample, joint=True, teacher_target=target, position=position)
+    identity = {
+        k: "synthetic" for k in ("source_sha256", "manifest_hash", "role_hash", "renderer_identity")
+    }
+    cursor = dict(epoch=0, next_sample_index=steps, samples_seen=steps, optimizer_steps=steps)
+    path = tmp_path / "burn-in.pt"
+    save_student_checkpoint(path, learner, identity, cursor)
+    counts = {"model": steps, "actions": steps, "selector": max(0, steps - 2)}
+    raw = read_student_checkpoint(path)
+    assert raw["optimizer_update_counts"] == counts
+    clone = StudentLearner(
+        copy.deepcopy(original.model), original.config, original.routing, intervention_config=cfg
+    )
+    assert load_student_checkpoint(path, clone, identity, 4) == cursor
+    assert clone.optimizer_update_counts == counts
+    for optimizer, owner in (
+        (clone.model_optimizer, "model"),
+        (clone.action_optimizer, "actions"),
+        (clone.selector_optimizer, "selector"),
+    ):
+        assert bool(optimizer.state) == bool(counts[owner])
+        assert all(int(state["step"]) == counts[owner] for state in optimizer.state.values())
+    if steps < 3:
+        with pytest.raises(ValueError, match="deployment requires"):
+            load_student_checkpoint(path, clone, identity, 4, resume=False)
+    else:
+        before_counts = dict(clone.optimizer_update_counts)
+        load_student_checkpoint(path, clone, identity, 4, resume=False)
+        assert clone.optimizer_update_counts == before_counts
+    clone.step(sample, joint=True, teacher_target=target, position=steps)
+    assert clone.optimizer_update_counts == {
+        "model": steps + 1,
+        "actions": steps + 1,
+        "selector": max(0, steps - 1),
+    }
+
+
+@pytest.mark.parametrize("corruption", ["missing", "null", "counter", "adam"])
+def test_burn_in_rejects_invalid_update_counts_before_mutation(setup, tmp_path, corruption):
+    original, sample, target = setup
+    cfg = replace(original.intervention_config, normalization_mode="burn_in")
+    learner = StudentLearner(
+        copy.deepcopy(original.model), original.config, original.routing, intervention_config=cfg
+    )
+    for position in range(3):
+        learner.step(sample, joint=True, teacher_target=target, position=position)
+    path = tmp_path / "valid.pt"
+    save_student_checkpoint(
+        path, learner, {}, dict(epoch=0, next_sample_index=3, samples_seen=3, optimizer_steps=3)
+    )
+    raw = read_student_checkpoint(path)
+    if corruption == "missing":
+        del raw["optimizer_update_counts"]
+    elif corruption == "null":
+        raw["optimizer_update_counts"] = None
+    elif corruption == "counter":
+        raw["optimizer_update_counts"]["selector"] = 3
+    else:
+        next(iter(raw["selector_optimizer"]["state"].values()))["step"].fill_(3)
+    bad = tmp_path / "bad.pt"
+    torch.save(raw, bad)
+    before = copy.deepcopy(learner.model.state_dict())
+    before_counts = dict(learner.optimizer_update_counts)
+    rng = torch.get_rng_state().clone()
+    with pytest.raises(ValueError, match="update count|Adam step"):
+        load_student_checkpoint(bad, learner, {}, 4)
+    assert all(torch.equal(v, learner.model.state_dict()[k]) for k, v in before.items())
+    assert learner.optimizer_update_counts == before_counts
+    assert torch.equal(rng, torch.get_rng_state())
+
+
+def test_burn_in_run_resume_matches_continuous_parameter_updates(setup, tmp_path):
+    from reliable_endo_gs.training.student_run import run_student_training
+
+    original, sample, target = setup
+    cfg = replace(original.intervention_config, normalization_mode="burn_in")
+    template = StudentLearner(
+        copy.deepcopy(original.model), original.config, original.routing, intervention_config=cfg
+    )
+    continuous = copy.deepcopy(template)
+    full = run_student_training(
+        [sample], continuous, {}, tmp_path / "full", target_provider=lambda _: target
+    )
+    partial = run_student_training(
+        [sample],
+        copy.deepcopy(template),
+        {},
+        tmp_path / "partial",
+        max_steps=1,
+        target_provider=lambda _: target,
+    )
+    restored = copy.deepcopy(template)
+    resumed = run_student_training(
+        [sample],
+        restored,
+        {},
+        tmp_path / "resumed",
+        resume=Path(partial["checkpoint"]),
+        target_provider=lambda _: target,
+    )
+    assert resumed["schedule_complete"] and resumed["cursor"] == full["cursor"]
+    assert restored.optimizer_update_counts == {"model": 3, "actions": 3, "selector": 1}
+    for before, after in (
+        (continuous.model, restored.model),
+        (continuous.actions, restored.actions),
+        (continuous.selector, restored.selector),
+    ):
+        assert all(torch.equal(v, after.state_dict()[k]) for k, v in before.state_dict().items())
 
 
 def test_balanced_router_can_fit_two_action_synthetic_labels():

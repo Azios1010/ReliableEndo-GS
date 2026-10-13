@@ -12,7 +12,11 @@ import torch
 from reliable_endo_gs.actions.repair import ActionResult, RepairState
 from reliable_endo_gs.evaluation.geometry_native import _geometry_metrics
 from reliable_endo_gs.evaluation.rendering import psnr, windowed_ssim
-from reliable_endo_gs.evaluation.tradeoff_outcomes import depth_snapshot, metric_changes
+from reliable_endo_gs.evaluation.tradeoff_outcomes import (
+    depth_snapshot,
+    fixed_depth_support,
+    metric_changes,
+)
 from reliable_endo_gs.geometry.rectified import reconstruct_rectified
 from reliable_endo_gs.regions.grid import Region
 from reliable_endo_gs.routing.tradeoff import (
@@ -75,9 +79,35 @@ def intervention_metrics(
         qb["local_rgb"],
         qa["local_rgb"],
     )
+    fixed = fixed_depth_support(stop, state, geometry.depth.valid_mask)
+    local = fixed & region.mask(state.batch.left)
+    predicted = reconstruct_rectified(
+        outcome.disparity, state.batch.camera, state.batch.support, min_effective_disparity=1e-6
+    )
+    lost = fixed & ~predicted.depth.valid_mask
+    support = {
+        "gt_valid_pixels": int(geometry.depth.valid_mask.sum()),
+        "write_pixels": region.pixel_count,
+        "global_fixed_pixels": int(fixed.sum()),
+        "local_fixed_pixels": int(local.sum()),
+        "global_lost_pixels": int(lost.sum()),
+        "local_lost_pixels": int((lost & local).sum()),
+    }
+    reasons = []
+    for scope in ("global", "local"):
+        if support[f"{scope}_fixed_pixels"] == 0:
+            reasons.append(f"no_{scope}_gt_base_support")
+        elif support[f"{scope}_lost_pixels"]:
+            reasons.append(f"lost_{scope}_prediction_support")
+        elif any(v is None for d in (before[scope], after[scope]) for v in d.values()):
+            reasons.append(f"nonfinite_{scope}_depth_error")
+    if changes is None and not reasons:
+        reasons.append("missing_or_nonfinite_render_or_quality_metric")
     return {
         "metric_changes": changes,
         "complete_metric_observation": changes is not None,
+        "metric_support": support,
+        "metric_unavailable_reasons": reasons,
         "metric_feasible": feasible_changes(changes, config) if changes is not None else None,
         "component_feasible": list(component_feasibility(changes, config))
         if changes is not None
@@ -103,6 +133,7 @@ def summarize_metric_diagnostics(
     counters: dict[str, Counter[str]] = {name: Counter() for name in ("STEREO", "GAUSSIAN")}
     changes: dict[str, list[list[float]]] = {name: [] for name in counters}
     failures: dict[str, Counter[str]] = {name: Counter() for name in counters}
+    unknown_reasons: dict[str, Counter[str]] = {name: Counter() for name in counters}
     opportunities = misses = unsafe_selected = unknown_selected = 0
     for record in records:
         available = []
@@ -112,6 +143,9 @@ def summarize_metric_diagnostics(
             vector = row["metric_changes"]
             if vector is None:
                 counters[action]["unknown"] += 1
+                unknown_reasons[action].update(
+                    row.get("metric_unavailable_reasons") or ["not_recorded_in_artifact"]
+                )
                 continue
             changes[action].append(vector)
             safe = row["metric_feasible"] is True
@@ -145,6 +179,7 @@ def summarize_metric_diagnostics(
             name: {
                 **dict(counters[name]),
                 "failed_guards": dict(failures[name]),
+                "unknown_reasons": dict(unknown_reasons[name]),
                 "mean_changes_raw_units": dict(
                     zip(
                         COMPONENT_NAMES,

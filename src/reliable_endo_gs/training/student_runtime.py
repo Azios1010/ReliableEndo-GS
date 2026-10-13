@@ -25,11 +25,10 @@ from reliable_endo_gs.reconstruction.model import _freeze_injected_teacher
 from reliable_endo_gs.reconstruction.student import StudentReconstructionModel
 from reliable_endo_gs.regions.grid import grid_regions
 from reliable_endo_gs.rendering.production import ProductionFieldRenderer
-from reliable_endo_gs.routing.balanced import BalancedSelector
 from reliable_endo_gs.routing.config import RoutingConfig, load_routing_config
-from reliable_endo_gs.routing.context import BALANCED_FEATURE_NAMES
 from reliable_endo_gs.routing.cost import load_cost_calibration
 from reliable_endo_gs.routing.masks import MaskProposalConfig, load_mask_config
+from reliable_endo_gs.routing.tokens import selector_feature_names
 from reliable_endo_gs.routing.tradeoff import load_tradeoff_config
 from reliable_endo_gs.runtime.git import get_git_commit, is_git_dirty
 from reliable_endo_gs.teachers import AlignedTeacherTarget, TargetCache, load_a01_roles
@@ -88,9 +87,7 @@ def run_student_command(arguments: argparse.Namespace) -> dict[str, object]:
     if any(value is not None for value in metric_selector_inputs) and not all(
         value is not None for value in metric_selector_inputs
     ):
-        raise ValueError(
-            "--metric-selector requires --metric-config and --metric-candidate-hash"
-        )
+        raise ValueError("--metric-selector requires --metric-config and --metric-candidate-hash")
     if metric_candidate_hash is not None and not str(metric_candidate_hash).strip():
         raise ValueError("--metric-candidate-hash must be nonempty")
     if initialize_from is not None and (infer or arguments.checkpoint is not None):
@@ -182,12 +179,16 @@ def run_student_command(arguments: argparse.Namespace) -> dict[str, object]:
         construction = replace(
             construction, seed=config.seed, runtime=replace(construction.runtime, precision="fp32")
         )
-        expected_joint = (
-            2
-            if intervention_config is not None
+        expected_joint = 1
+        if (
+            intervention_config is not None
             and intervention_config.schema == "intervention_selection.v2"
-            else 1
-        )
+        ):
+            expected_joint = 3 if intervention_config.normalization_mode == "burn_in" else 2
+            if smoke and expected_joint == 3 and intervention_config.normalization_frames > 2:
+                raise ValueError(
+                    "bounded burn-in smoke needs normalization_frames <= 2; use the remediation smoke config"
+                )
         if smoke and (config.student_epochs != 1 or config.joint_epochs != expected_joint):
             raise ValueError(
                 f"bounded smoke requires one student and {expected_joint} joint updates"
@@ -265,7 +266,7 @@ def run_student_command(arguments: argparse.Namespace) -> dict[str, object]:
         identity["intervention_config_hash"] = intervention_config.config_hash
         identity["selection_protocol"] = intervention_config.schema
         if intervention_config.schema == "intervention_selection.v2":
-            identity["feature_schema"] = list(BALANCED_FEATURE_NAMES)
+            identity["feature_schema"] = list(selector_feature_names(intervention_config))
             identity["normalization_protocol"] = "train_median_IQR_and_common_action_gain_q75.v1"
     if mask_config is not None:
         assert target_masks is not None
@@ -390,6 +391,20 @@ def run_student_command(arguments: argparse.Namespace) -> dict[str, object]:
             target_provider = provide
         elif arguments.teacher_factory is not None or arguments.cache_root is not None:
             raise ValueError("teacher/cache inputs require positive KD weight")
+        metric_truth_provider = None
+        if intervention_config is not None and intervention_config.metric_quality is not None:
+            from reliable_endo_gs.training.metric_quality import OfflineMetricTruth
+
+            def provide_metric_truth(sample: ScaredA00Sample) -> OfflineMetricTruth:
+                truth_sample = adapter.load(
+                    sample.sample_id,
+                    data_role="final_train",
+                    include_supervision=True,
+                    output_hw=construction.runtime.resolution_hw,
+                )
+                return OfflineMetricTruth.from_a00(truth_sample)
+
+            metric_truth_provider = provide_metric_truth
         samples: StudentSamples = dataset
         if intervention_config is not None and not smoke:
             ordered = SeededSampleOrder(dataset, config.seed)
@@ -459,7 +474,7 @@ def run_student_command(arguments: argparse.Namespace) -> dict[str, object]:
             }
             before = {
                 name: {
-                    key: value.detach().cpu().clone() for key, value in module.state_dict().items()
+                    key: value.detach().cpu().clone() for key, value in module.named_parameters()
                 }
                 for name, module in smoke_modules.items()
             }
@@ -471,11 +486,10 @@ def run_student_command(arguments: argparse.Namespace) -> dict[str, object]:
             learner,
             identity,
             output,
-            max_steps=(3 if isinstance(learner.selector, BalancedSelector) else 2)
-            if smoke
-            else arguments.max_steps,
+            max_steps=1 + config.joint_epochs if smoke else arguments.max_steps,
             resume=arguments.checkpoint,
             target_provider=target_provider,
+            metric_truth_provider=metric_truth_provider,
         )
         if smoke:
             torch.cuda.synchronize(device)
@@ -486,7 +500,7 @@ def run_student_command(arguments: argparse.Namespace) -> dict[str, object]:
             changed = {
                 name: any(
                     not torch.equal(value.detach().cpu(), before[name][key])
-                    for key, value in module.state_dict().items()
+                    for key, value in module.named_parameters()
                 )
                 for name, module in smoke_modules.items()
             }

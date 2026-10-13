@@ -223,24 +223,49 @@ def select_repairability(
         raise ValueError("risk_available must be bool [R,3]")
     if not math.isfinite(remaining_ms) or remaining_ms < 0:
         raise ValueError("remaining budget must be finite and nonnegative")
-    if not bool(
+    values_valid = (
         torch.isfinite(gains).all() & torch.isfinite(harms).all() & torch.isfinite(costs_ms).all()
-    ) or not bool(
-        ((harms >= 0) & (harms <= 1)).all() & (costs_ms >= 0).all() & (gains[:, 0] == 0).all()
-    ):
-        raise ValueError("invalid gain/harm/cost values")
+    ) & (((harms >= 0) & (harms <= 1)).all() & (costs_ms >= 0).all() & (gains[:, 0] == 0).all())
     action_valid = valid[:, None] if valid.ndim == 1 else valid
+    cutoffs = harms.new_tensor(
+        [
+            0.0,
+            config.maximum_harm_probability
+            if config.maximum_stereo_harm_probability is None
+            else config.maximum_stereo_harm_probability,
+            config.maximum_harm_probability
+            if config.maximum_gaussian_harm_probability is None
+            else config.maximum_gaussian_harm_probability,
+        ]
+    )
     allowed = (
         action_valid
         & (costs_ms > 0)
         & (costs_ms <= remaining_ms)
         & risk_available
-        & (harms <= config.maximum_harm_probability)
+        & (harms <= cutoffs)
         & (gains > config.minimum_gain)
     )
     allowed[:, 0] = False
-    if not bool(allowed.any()):
+    # Append a STOP sentinel. All permitted gains exceed a nonnegative minimum,
+    # so STOP wins only when no repair is permitted. Transfer validation,
+    # winning index/gain/cost together instead of six separate host readbacks.
+    scores = torch.cat((gains.new_zeros(1), torch.where(allowed, gains, -torch.inf).flatten()))
+    winner = scores.argmax()
+    selected_gain = torch.cat((gains.new_zeros(1), gains.flatten()))[winner]
+    selected_cost = torch.cat((costs_ms.new_zeros(1), costs_ms.flatten()))[winner]
+    status, encoded, gain, cost = (
+        torch.stack(
+            (values_valid.double(), winner.double(), selected_gain.double(), selected_cost.double())
+        )
+        .detach()
+        .cpu()
+        .tolist()
+    )
+    if not status:
+        raise ValueError("invalid gain/harm/cost values")
+    if encoded == 0:
         return Decision(None, Action.STOP, 0.0, 0.0)
-    index = int(torch.where(allowed, gains, -torch.inf).reshape(-1).argmax())
+    index = int(encoded) - 1
     row, action = divmod(index, 3)
-    return Decision(row, Action(action), float(gains[row, action]), float(costs_ms[row, action]))
+    return Decision(row, Action(action), gain, cost)

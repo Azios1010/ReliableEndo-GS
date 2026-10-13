@@ -1,0 +1,14 @@
+# Declared candidate policy; tolerances/cutoffs require held-out verification.
+schema: metric_action_tradeoff.v2
+maximum_psnr_drop_db: 0.01
+maximum_ssim_drop: 0.0005
+maximum_outside_rgb_increase: 1.0e-5
+maximum_local_rgb_increase: 1.0e-4
+geometry_weight: 1.0
+local_geometry_weight: 1.0
+geometry_priority: 3.0
+psnr_weight: 0.5
+ssim_weight: 0.5
+collateral_weight: 0.0
+local_render_weight: 0.0
+maximum_predicted_violation_probability: 0.2

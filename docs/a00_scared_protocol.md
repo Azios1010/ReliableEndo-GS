@@ -45,6 +45,23 @@ contains only RGB, camera, and preprocessing/sensor support. A missing sidecar,
 missing sample file, unsupported field, or ambiguous calibration raises a
 protocol/sample error with the required metadata rather than guessing.
 
+Runtime resizing uses bilinear RGB with `align_corners=False` and transforms
+intrinsics with the same half-pixel affine. Sparse supervision and its validity
+mask use **nearest-exact**, selecting the same closest source pixel for both;
+horizontal disparity values are then scaled to output pixels. This is a nearest
+surface approximation, not interpolation across missing GT or depth boundaries.
+`calibration_metadata.input_hw` records the original processed image dimensions;
+`output_hw` and `runtime_resampling` record the runtime grid and resampling rule.
+
+Before the 2026-10-10 correction, supervision used legacy `nearest`, which
+sampled `floor(u / scale)` rather than the RGB half-pixel centres. In a 2x
+reduction it picked even source indices where nearest-exact picks odd indices.
+Previously collected resized GT labels and metrics retain their historical
+semantics and must not be mixed with corrected collections. Source bindings
+reject automatic resume across this change. The metadata correction also changes
+teacher-cache calibration identities; do not relabel an old cache as current.
+No processed images or disparity TIFFs need rewriting for this runtime fix.
+
 ## Original SCARED one-sample preprocessing
 
 `configs/data/a00_scared_sample_v1.yaml` pins the first-party preprocessing

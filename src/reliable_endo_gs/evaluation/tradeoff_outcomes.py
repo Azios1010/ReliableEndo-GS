@@ -40,6 +40,16 @@ def fixed_depth_metrics(
     }
 
 
+def fixed_depth_support(
+    stop: ActionResult, state: RepairState, gt_valid: torch.Tensor
+) -> torch.Tensor:
+    """Immutable bool [1,1,H,W] GT+STOP+sensor support; offline only."""
+    base = reconstruct_rectified(
+        stop.disparity, state.batch.camera, state.support, min_effective_disparity=1e-6
+    )
+    return gt_valid & base.depth.valid_mask & state.support
+
+
 def depth_snapshot(
     outcome: ActionResult,
     stop: ActionResult,
@@ -49,10 +59,7 @@ def depth_snapshot(
     region: Region,
 ) -> dict[str, dict[str, float | None]]:
     """Before/after must call this with the same STOP reference and region."""
-    base = reconstruct_rectified(
-        stop.disparity, state.batch.camera, state.support, min_effective_disparity=1e-6
-    )
-    fixed = gt_valid & base.depth.valid_mask & state.support
+    fixed = fixed_depth_support(stop, state, gt_valid)
     return {
         "global": fixed_depth_metrics(outcome.disparity, gt_depth, fixed, state),
         "local": fixed_depth_metrics(

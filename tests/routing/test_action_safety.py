@@ -44,9 +44,7 @@ def test_zero_gaussian_noop_keeps_identity_and_gradients() -> None:
     )
     drift = torch.full_like(base.scales, 1e-6, requires_grad=True)
     changed = replace(base, scales=base.scales + drift)
-    residuals = AttributeResiduals(
-        torch.zeros(1, 2, 3), torch.zeros(1, 2, 3), torch.zeros(1, 2, 1)
-    )
+    residuals = AttributeResiduals(torch.zeros(1, 2, 3), torch.zeros(1, 2, 3), torch.zeros(1, 2, 1))
     result = preserve_zero_gaussian_residual(base, changed, residuals)
     assert torch.equal(result.scales, base.scales)
     drift_grad, base_grad = torch.autograd.grad(result.scales.sum(), (drift, base.scales))

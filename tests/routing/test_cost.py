@@ -9,11 +9,40 @@ from reliable_endo_gs.routing.cost import (
     HISTORY_SIZE,
     CostCalibrationPolicy,
     calibrate_action_costs,
+    capture_runtime_identity,
     estimated_costs,
+    load_cost_calibration,
     new_cost_history,
     record_costs,
+    save_cost_calibration,
 )
 from reliable_endo_gs.routing.repairability import select_repairability
+
+
+@pytest.mark.parametrize("explicit_runtime", [False, True])
+@pytest.mark.parametrize("tail_policy,quantile", [("max", None), ("quantile", 0.75)])
+def test_captured_runtime_cost_artifact_weights_only_roundtrip(
+    tmp_path, monkeypatch, explicit_runtime, tail_policy, quantile
+):
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    runtime = capture_runtime_identity("cpu")
+    assert type(runtime["torch"]) is str
+    artifact = calibrate_action_costs(
+        {0: lambda: None, 1: lambda: None, 2: lambda: None},
+        binding={"collection_role": "train", "model_digest": "synthetic"},
+        shape_hw=(4, 4),
+        policy=CostCalibrationPolicy(tail_policy, quantile, 0, 2),
+        runtime=runtime if explicit_runtime else None,
+    )
+    path = tmp_path / "cost.pt"
+    save_cost_calibration(path, artifact)
+    # Exercise the actual weights-only loader, without adding safe globals.
+    loaded = load_cost_calibration(path)
+    assert loaded.runtime == runtime
+    assert loaded.binding == artifact.binding
+    assert loaded.policy == artifact.policy
+    torch.testing.assert_close(loaded.timings_ms, artifact.timings_ms, rtol=0, atol=0)
+    torch.testing.assert_close(loaded.estimated_ms, artifact.estimated_ms, rtol=0, atol=0)
 
 
 def test_training_history_is_diagnostic_and_does_not_replace_max() -> None:
@@ -47,7 +76,11 @@ def test_explicit_deployment_artifact_uses_declared_tail_policy() -> None:
             1: lambda: torch.zeros(16),
             2: lambda: torch.zeros(16),
         },
-        binding={"train_manifest_hash": "train", "model_digest": "model", "action_digest": "action"},
+        binding={
+            "train_manifest_hash": "train",
+            "model_digest": "model",
+            "action_digest": "action",
+        },
         runtime={"device": "cpu", "cuda_launch_blocking": None},
         shape_hw=(4, 4),
         policy=policy,
@@ -64,7 +97,11 @@ def test_explicit_deployment_artifact_uses_declared_tail_policy() -> None:
         torch.tensor([0.0, 2635.0, 100.0]),
         observations=3,
         calibration=artifact,
-        binding={"train_manifest_hash": "train", "model_digest": "model", "action_digest": "action"},
+        binding={
+            "train_manifest_hash": "train",
+            "model_digest": "model",
+            "action_digest": "action",
+        },
         runtime={"device": "cpu", "cuda_launch_blocking": None},
         shape_hw=(4, 4),
     )
@@ -75,7 +112,11 @@ def test_explicit_deployment_artifact_uses_declared_tail_policy() -> None:
             torch.tensor([0.0, 1.0, 1.0]),
             observations=3,
             calibration=artifact,
-            binding={"train_manifest_hash": "changed", "model_digest": "model", "action_digest": "action"},
+            binding={
+                "train_manifest_hash": "changed",
+                "model_digest": "model",
+                "action_digest": "action",
+            },
             runtime={"device": "cpu", "cuda_launch_blocking": None},
             shape_hw=(4, 4),
         )

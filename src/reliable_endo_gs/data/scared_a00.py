@@ -45,6 +45,7 @@ class ScaredA00SampleError(ValueError):
 
 
 _PROTOCOL_FILENAME = "a00_protocol.json"
+A00_SUPERVISION_RESAMPLING = "nearest_exact_half_pixel_centres"
 _REQUIRED_PROTOCOL_FIELDS = (
     "schema_version",
     "image_range",
@@ -700,14 +701,20 @@ class ScaredA00Adapter:
             disparity = disparity - float(crop_xy_left[0] - crop_xy_right[0])
             if output_hw is not None:
                 disparity = (
-                    functional.interpolate(disparity[None, None], size=output_hw, mode="nearest")
+                    # Match the half-pixel centres used by RGB and camera resize.
+                    # Legacy nearest picks floor(u / scale), shifting sparse GT
+                    # by one source pixel for a 2x reduction. Never blend holes
+                    # or different surfaces into a synthetic valid target.
+                    functional.interpolate(
+                        disparity[None, None], size=output_hw, mode="nearest-exact"
+                    )
                     .squeeze(0)
                     .squeeze(0)
                 )
                 disparity = disparity * (output_hw[1] / resolved_crop_hw[1])
                 source_valid = (
                     functional.interpolate(
-                        source_valid[None, None].float(), size=output_hw, mode="nearest"
+                        source_valid[None, None].float(), size=output_hw, mode="nearest-exact"
                     )
                     .squeeze(0)
                     .squeeze(0)
@@ -734,11 +741,16 @@ class ScaredA00Adapter:
             "extrinsic_source": protocol.extrinsic_source,
             "extrinsic_direction": "right_from_left",
             "extrinsic_units": "m",
-            "input_hw": [int(left.shape[1]), int(left.shape[2])],
+            "input_hw": [height, width],
             "crop_xy_left": list(crop_xy_left),
             "crop_xy_right": list(crop_xy_right),
             "crop_hw": list(resolved_crop_hw),
             "output_hw": list(output_hw or resolved_crop_hw),
+            "runtime_resampling": {
+                "rgb": "bilinear_align_corners_false",
+                "supervision": A00_SUPERVISION_RESAMPLING,
+                "validity": "same_nearest_exact_source_index_as_disparity",
+            },
             "frame_id": frame_id,
             "manifest_hash": self.manifest.manifest_hash,
             "source_file_hashes": {

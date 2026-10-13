@@ -1,0 +1,57 @@
+# Opt-in TRAIN-only metric geometry objective; historical policy stays unchanged.
+# All owners learn jointly; GT is never part of deployment inputs.
+schema: intervention_selection.v2
+selector_architecture: separate_action_heads
+selector_balance_mode: per_action
+selector_updates_per_snapshot: 4
+selector_weight_decay: 0.01
+ranking_gap_fraction: 0.5
+ranking_margin_units: train_scale
+normalization_mode: burn_in
+normalization_frames: 32
+normalization_rows: 256
+stereo_weight: 3.0
+stereo_training_priority: 3.0
+stereo_utility_multiplier: 1.0
+maximum_stereo_harm_probability: 0.51
+maximum_gaussian_harm_probability: 0.22
+# Gaussian remains twice as strict in physical units, rather than adding
+# a 5% cutoff to an uncalibrated risk head. This is a pilot policy only.
+gaussian_guard_multiplier: 0.5
+local_auxiliary_weight: 0.25
+metric_quality:
+  schema: metric_action_tradeoff.v2
+  maximum_depth_mae_increase_mm: 0.05
+  maximum_local_depth_mae_increase_mm: 0.25
+  maximum_depth_rmse_increase_mm: 0.05
+  maximum_local_depth_rmse_increase_mm: 0.25
+  maximum_depth_p95_increase_mm: 0.1
+  maximum_psnr_drop_db: 0.05
+  maximum_ssim_drop: 0.002
+  maximum_outside_rgb_increase: 0.0001
+  maximum_local_rgb_increase: 0.001
+  maximum_coverage_drop: 0.0
+  geometry_weight: 1.0
+  local_geometry_weight: 1.0
+  geometry_priority: 1.5
+  psnr_weight: 0.5
+  ssim_weight: 0.5
+  collateral_weight: 0.0
+  local_render_weight: 0.0
+  maximum_predicted_violation_probability: 0.2
+# Shared utility scales are independent of the physical guard tolerances.
+metric_scales: [1.0, 1.0, 1.0, 1.0, 1.0, 0.1, 0.1, 0.001, 0.001, 0.0001, 0.0001, 0.001]
+
+geometry_supervision_weight: 1.0
+stereo_repair_geometry_weight: 1.0
+geometry_loss_scale_mm: 1.0
+
+# Explicit feature/event ablation; shared utility/guards remain identical.
+selector_risk_mode: local_global
+selector_feature_mode: mask_tokens
+selector_token_channels: 32
+
+# Explicit signed gain factorization; original utility/risk thresholds are unchanged.
+selector_gain_mode: signed_expectation
+gain_probability_weight: 1.0
+student_update_mode: frozen

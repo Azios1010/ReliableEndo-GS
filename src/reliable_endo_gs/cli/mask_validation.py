@@ -28,7 +28,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--intervention-config-path",
         type=Path,
-        default=Path("configs/routing/intervention_balanced.yaml"),
+        default=Path("configs/routing/intervention_metric_balanced.yaml"),
     )
     parser.add_argument(
         "--routing-config-path", type=Path, default=Path("configs/routing/frozen_a04.yaml")
@@ -36,7 +36,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--metric-config-path",
         type=Path,
-        default=Path("configs/routing/metric_tradeoff_balanced.yaml"),
+        default=Path("configs/routing/metric_tradeoff_joint_balanced.yaml"),
     )
     parser.add_argument("--epochs", type=int, default=3)
     parser.add_argument("--preflight-only", action="store_true")

@@ -1,0 +1,20 @@
+# Reuse the approved 25% parent cohort; original train/test roles stay unchanged.
+schema: selector_refit.v1
+seed: 0
+partition_policy: stratified_keyframe_hash
+max_training_samples: 5738
+max_development_samples: 112
+collection_shard_size: 64
+fit_fraction: 0.6
+validation_fraction: 0.15
+max_steps: 1000
+min_steps: 50
+validate_every: 25
+patience: 6
+min_delta: 0.0001
+learning_rate: 0.001
+weight_decay: 0.01
+calibration_regularization: 0.01
+gain_regularization: 0.05
+calibration_min_class_groups: 2
+calibration_min_observations: 32

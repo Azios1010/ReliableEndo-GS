@@ -34,6 +34,10 @@ from reliable_endo_gs.reconstruction.model import ReferenceReconstructionResult
 from reliable_endo_gs.reconstruction.student import StudentReconstructionModel
 from reliable_endo_gs.regions.grid import Region, grid_regions
 from reliable_endo_gs.routing.balanced import BalancedSelector
+from reliable_endo_gs.routing.calibrated_selector import (
+    CalibratedSelector,
+    load_calibrated_selector,
+)
 from reliable_endo_gs.routing.config import RoutingConfig
 from reliable_endo_gs.routing.context import balanced_features
 from reliable_endo_gs.routing.cost import (
@@ -58,12 +62,15 @@ from reliable_endo_gs.routing.selector import (
     region_features,
     select_action,
 )
+from reliable_endo_gs.routing.tokens import mask_feature_tokens
 from reliable_endo_gs.routing.tradeoff import TradeoffConfig
 from reliable_endo_gs.teachers import AlignedTeacherTarget
 from reliable_endo_gs.training.a04_reference import _move_batch
 from reliable_endo_gs.training.distillation import stereo_distillation
 from reliable_endo_gs.training.gradient_balance import GradientBalance
 from reliable_endo_gs.training.interventions import InterventionHarness, reconstruction_loss
+from reliable_endo_gs.training.metric_quality import OfflineMetricTruth
+from reliable_endo_gs.training.selector_optimization import make_selector_balancer
 from reliable_endo_gs.training.student_config import StudentLearningConfig
 
 
@@ -107,6 +114,20 @@ class StudentLearner:
             raise ValueError("mask routing requires balanced local/global/collateral supervision")
         self.mask_config, self.target_masks = mask_config, target_masks
         self.intervention_config = intervention_config
+        if (
+            intervention_config is not None
+            and intervention_config.selector_feature_mode == "mask_tokens"
+        ):
+            if mask_config is None or intervention_config.selector_token_channels != config.width:
+                raise ValueError(
+                    "mask tokens require target masks and channels matching student width"
+                )
+        self.student_frozen = (
+            intervention_config is not None and intervention_config.student_update_mode == "frozen"
+        )
+        if self.student_frozen and config.student_epochs:
+            raise ValueError("frozen student comparison excludes student-only warmup")
+        self.frozen_student_start_step: int | None = 0 if self.student_frozen else None
         first = model.stereo_student.features[0]
         if (
             not isinstance(first, nn.Conv2d)
@@ -154,18 +175,43 @@ class StudentLearner:
         ):
             self.selector = BalancedSelector(routing.width, intervention_config).to(device)
             self.objective_balancer = GradientBalance(
-                ("rgb", "warp", "kd", "repair"), intervention_config
+                ("rgb", "warp", "kd", "repair")
+                + (("geometry",) if intervention_config.geometry_supervision_weight else ()),
+                intervention_config,
             ).to(device)
-            self.selector_balancer = GradientBalance(
-                ("global", "local", "ranking"), intervention_config
-            ).to(device)
+            self.selector_balancer = make_selector_balancer(intervention_config).to(device)
         self.model_optimizer = torch.optim.Adam(model.parameters(), lr=config.learning_rate)
         self.action_optimizer = torch.optim.Adam(
             self.actions.parameters(), lr=routing.learning_rate
         )
-        self.selector_optimizer = torch.optim.Adam(
-            self.selector.parameters(), lr=routing.learning_rate
-        )
+        if (
+            isinstance(self.selector, BalancedSelector)
+            and self.selector.config.selector_gain_only_refinement
+        ):
+            self.selector_optimizer = torch.optim.Adam(
+                [
+                    {
+                        "params": self.selector.gain_network.parameters(),
+                        "name": "gain",
+                        "weight_decay": self.selector.config.selector_weight_decay,
+                    },
+                    {
+                        "params": self.selector.harm_network.parameters(),
+                        "name": "harm",
+                        "weight_decay": 0.0,
+                    },
+                ],
+                lr=routing.learning_rate,
+            )
+        else:
+            self.selector_optimizer = torch.optim.Adam(
+                self.selector.parameters(),
+                lr=routing.learning_rate,
+                weight_decay=0.0
+                if intervention_config is None
+                else intervention_config.selector_weight_decay,
+            )
+        self.optimizer_update_counts = {"model": 0, "actions": 0, "selector": 0}
         self.harness: InterventionHarness = InterventionHarness(routing.cost_weight_per_ms)
         if intervention_config is not None:
             from reliable_endo_gs.training.repairability import RepairabilityHarness
@@ -180,7 +226,7 @@ class StudentLearner:
         self.cost_history = new_cost_history(device)
         self.cost_history_observations = 0
         self.deployment_cost_calibration: DeploymentCostCalibration | None = None
-        self.metric_selector: MetricRepairSelector | None = None
+        self.metric_selector: MetricRepairSelector | CalibratedSelector | None = None
         self._frozen_versions: tuple[int, ...] | None = None
         self._cost_versions: tuple[int, ...] | None = None
 
@@ -191,8 +237,9 @@ class StudentLearner:
             "action_state_sha256": module_state_sha256(self.actions),
             "student_config_hash": self.config.config_hash,
             "routing_config_hash": self.routing.config_hash,
-            "intervention_config_hash": None if self.intervention_config is None else
-                self.intervention_config.config_hash,
+            "intervention_config_hash": None
+            if self.intervention_config is None
+            else self.intervention_config.config_hash,
             "mask_config_hash": None if self.mask_config is None else self.mask_config.config_hash,
         }
 
@@ -200,14 +247,21 @@ class StudentLearner:
         """Bind an offline TRAIN-fitted/calibrated predictor to frozen actions."""
         if self.intervention_config is None or self.mask_config is None:
             raise ValueError("metric mask selector requires the mask intervention protocol")
+        if self.intervention_config.selector_feature_mode != "statistics":
+            raise ValueError(
+                "historical outcome predictor expects statistics; use the trained mask-token selector"
+            )
         identity = self.frozen_action_identity()
         predictor = load_outcome_predictor(
-            path, expected_config=config, expected_action_identity=identity,
+            path,
+            expected_config=config,
+            expected_action_identity=identity,
             expected_candidate_hash=candidate_hash,
         ).to(next(self.model.parameters()).device)
         self.metric_selector = MetricRepairSelector(predictor, config, identity, candidate_hash)
-        self._frozen_versions = tuple(p._version for m in (self.model, self.actions)
-                                      for p in m.parameters())
+        self._frozen_versions = tuple(
+            p._version for m in (self.model, self.actions) for p in m.parameters()
+        )
 
     def attach_cost_calibration(self, calibration: DeploymentCostCalibration) -> None:
         """Attach an explicit deployment timing artifact.
@@ -219,9 +273,30 @@ class StudentLearner:
             calibration.binding.get("frozen_action_identity") != self.frozen_action_identity()
         ):
             raise ValueError("cost calibration requires exact frozen TRAIN model/action identity")
+        if "target_mask_index_sha256" in calibration.binding and (
+            calibration.binding["target_mask_index_sha256"]
+            != (None if self.target_masks is None else self.target_masks.identity)
+        ):
+            raise ValueError("deployment cost calibration target-mask identity mismatch")
         self.deployment_cost_calibration = calibration
-        self._cost_versions = tuple(p._version for m in (self.model, self.actions)
-                                    for p in m.parameters())
+        self._cost_versions = tuple(
+            p._version for m in (self.model, self.actions) for p in m.parameters()
+        )
+
+    def load_refit_selector(self, path: Path, source_sha256: str) -> None:
+        """Attach a TRAIN-only refit; any subsequent joint update invalidates it."""
+        if self.intervention_config is None or self.target_masks is None:
+            raise ValueError("refit selection requires physical masked reconstruction")
+        self.metric_selector = load_calibrated_selector(
+            path,
+            expected_action_identity=self.frozen_action_identity(),
+            expected_config=self.intervention_config,
+            expected_mask_identity=self.target_masks.identity,
+            expected_source_sha256=source_sha256,
+        ).to(next(self.model.parameters()).device)
+        self._frozen_versions = tuple(
+            p._version for m in (self.model, self.actions) for p in m.parameters()
+        )
 
     def record_action_costs(self, costs_ms: torch.Tensor) -> None:
         """Persist measured full-frame action costs for robust allocation."""
@@ -275,6 +350,8 @@ class StudentLearner:
             calibration_metadata=sample.calibration_metadata,
             include_matching_evidence=self.intervention_config is not None
             and self.intervention_config.schema == "intervention_selection.v2",
+            include_feature_tokens=self.intervention_config is not None
+            and self.intervention_config.selector_feature_mode == "mask_tokens",
         )
         return RepairState(batch, result)
 
@@ -283,13 +360,23 @@ class StudentLearner:
         if self.intervention_config is None:
             return region_features(state, regions)
         if self.mask_config is not None:
-            return mask_features(
+            features = mask_features(
                 state,
                 regions,
                 self.intervention_config,
                 self.mask_config,
                 scale_unit_m=self.model.config.context_scale_m,
             )
+            if self.intervention_config.selector_feature_mode == "mask_tokens":
+                tokens = mask_feature_tokens(
+                    state, regions, self.intervention_config.selector_token_channels
+                )
+                if self.mask_config.feature_evidence == "gaussian":
+                    tokens = torch.zeros_like(tokens)
+                features = torch.cat((features, tokens), 1)
+            return features.detach()
+        if self.intervention_config.selector_feature_mode == "mask_tokens":
+            raise ValueError("mask token selector requires the deployment target-mask contract")
         producer = (
             balanced_features
             if self.intervention_config.schema == "intervention_selection.v2"
@@ -315,8 +402,21 @@ class StudentLearner:
         joint: bool,
         teacher_target: AlignedTeacherTarget | None = None,
         position: int = 0,
+        metric_truth: OfflineMetricTruth | None = None,
+        selector_context: tuple[tuple[ScaredA00Sample, OfflineMetricTruth], ...] = (),
     ) -> Mapping[str, object]:
         """One bounded update; finite gradients checked before any optimizer step."""
+        if metric_truth is not None and (
+            self.intervention_config is None or self.intervention_config.metric_quality is None
+        ):
+            raise ValueError("offline truth requires explicit physical metric supervision")
+        if selector_context and (
+            not joint
+            or self.intervention_config is None
+            or self.intervention_config.metric_quality is None
+            or self.intervention_config.schema != "intervention_selection.v2"
+        ):
+            raise ValueError("fresh selector context requires physical joint learning")
         # An optimizer update changes the counterfactual label/cost generator.
         # No frozen predictor or deployment timing artifact may survive it.
         self.metric_selector = None
@@ -328,7 +428,13 @@ class StudentLearner:
                 from reliable_endo_gs.training.balanced_learning import balanced_step
 
                 return balanced_step(
-                    self, sample, joint=joint, teacher_target=teacher_target, position=position
+                    self,
+                    sample,
+                    joint=joint,
+                    teacher_target=teacher_target,
+                    position=position,
+                    metric_truth=metric_truth,
+                    selector_context=selector_context,
                 )
             from reliable_endo_gs.training.repairability import repairability_step
 
@@ -409,20 +515,30 @@ class StudentLearner:
         }
 
     def commit_gradients(
-        self, joint: bool, *, update_selector: bool = True
+        self, joint: bool, *, update_selector: bool = True, selector_only: bool = False
     ) -> dict[str, float]:
         """One shared finite-gradient/ownership/update path for both protocols."""
         update_selector = joint and update_selector
+        if selector_only and (
+            not update_selector or not isinstance(self.selector, BalancedSelector)
+        ):
+            raise ValueError("selector-only updates require joint balanced supervision")
         diagnostics: dict[str, float] = {}
-        groups: list[tuple[nn.Module, torch.optim.Adam]] = [(self.model, self.model_optimizer)]
+        groups: list[tuple[nn.Module, torch.optim.Adam]] = (
+            [] if self.student_frozen else [(self.model, self.model_optimizer)]
+        )
         if joint:
             groups.append((self.actions, self.action_optimizer))
             if update_selector:
                 groups.append((self.selector, self.selector_optimizer))
-        components = {
-            "student": self.model.stereo_student,
-            "head": self.model.head,
-        }
+        components = (
+            {}
+            if self.student_frozen
+            else {
+                "student": self.model.stereo_student,
+                "head": self.model.head,
+            }
+        )
         if joint:
             components.update(
                 stereo_repair=self.actions.stereo,
@@ -430,8 +546,30 @@ class StudentLearner:
             )
             if update_selector:
                 components["selector"] = self.selector
+        if selector_only:
+            groups = [(self.selector, self.selector_optimizer)]
+            components = {
+                "selector": self.selector.gain_network
+                if isinstance(self.selector, BalancedSelector)
+                and self.selector.config.selector_gain_only_refinement
+                else self.selector
+            }
+            if (
+                isinstance(self.selector, BalancedSelector)
+                and self.selector.config.selector_gain_only_refinement
+                and any(p.grad is not None for p in self.selector.harm_network.parameters())
+            ):
+                raise ValueError("gain-only refinement must not carry harm gradients")
         before_updates = {}
         if isinstance(self.selector, BalancedSelector):
+            if update_selector:
+                components.update(
+                    {
+                        f"selector_{name}": network
+                        for name, network in self.selector.optimization_components()
+                        if any(p.grad is not None for p in network.parameters())
+                    }
+                )
             before_updates = {
                 name: tuple(p.detach().clone() for p in module.parameters())
                 for name, module in components.items()
@@ -456,7 +594,7 @@ class StudentLearner:
             if not gradients or not all(bool(torch.isfinite(g).all()) for g in gradients):
                 raise ValueError("missing/nonfinite student/joint gradients")
             if isinstance(module, BalancedSelector):
-                for network in (module.gain_network, module.harm_network):
+                for network in module.optimization_networks():
                     nn.utils.clip_grad_norm_(network.parameters(), 1.0, error_if_nonfinite=True)
             else:
                 nn.utils.clip_grad_norm_(module.parameters(), 1.0, error_if_nonfinite=True)
@@ -485,6 +623,16 @@ class StudentLearner:
             bool(torch.isfinite(p).all()) for module, _ in groups for p in module.parameters()
         ):
             raise ValueError("nonfinite student/joint parameters")
+        if not selector_only and not self.student_frozen:
+            self.optimizer_update_counts["model"] += 1
+        if self.student_frozen and not selector_only:
+            # Model gradients exist solely for matched balancing probes and
+            # input derivatives through the frozen head. Never step its Adam.
+            self.model_optimizer.zero_grad(set_to_none=True)
+        if joint and not selector_only:
+            self.optimizer_update_counts["actions"] += 1
+        if update_selector:
+            self.optimizer_update_counts["selector"] += 1
         return diagnostics
 
     def infer(
@@ -528,18 +676,34 @@ class StudentLearner:
                         "cost_calibration": self.cost_calibration_metadata(),
                     },
                 )
-            if self.metric_selector is None and isinstance(self.selector, BalancedSelector) and not bool(
-                self.selector.normalization.fitted
+            if (
+                self.metric_selector is None
+                and isinstance(self.selector, BalancedSelector)
+                and not bool(self.selector.normalization.fitted)
             ):
                 raise ValueError("balanced deployment requires fitted training normalization")
+            if (
+                self.intervention_config is not None
+                and self.intervention_config.metric_quality is not None
+                and self.deployment_cost_calibration is None
+            ):
+                raise ValueError(
+                    "physical metric deployment requires dedicated TRAIN inference cost calibration"
+                )
             if not self.cost_observations and self.deployment_cost_calibration is None:
                 raise ValueError("selected inference requires measured cost calibration")
             if self.metric_selector is not None:
-                versions = tuple(p._version for m in (self.model, self.actions) for p in m.parameters())
+                versions = tuple(
+                    p._version for m in (self.model, self.actions) for p in m.parameters()
+                )
                 if self._frozen_versions != versions:
-                    raise ValueError("frozen metric selector action state changed; recollect outcomes")
+                    raise ValueError(
+                        "frozen metric selector action state changed; recollect outcomes"
+                    )
                 if self.deployment_cost_calibration is None:
-                    raise ValueError("metric deployment requires dedicated TRAIN inference cost calibration")
+                    raise ValueError(
+                        "metric deployment requires dedicated TRAIN inference cost calibration"
+                    )
             features = (
                 region_features(state, regions)
                 if self.intervention_config is None
@@ -562,10 +726,16 @@ class StudentLearner:
             action_valid = torch.stack(
                 (
                     torch.zeros_like(row_valid),
-                    torch.tensor([action_eligible(state, r, Action.STEREO) for r in regions],
-                                 device=features.device) & (not covariance_available),
-                    torch.tensor([action_eligible(state, r, Action.GAUSSIAN) for r in regions],
-                                 device=features.device) & (not covariance_available),
+                    torch.tensor(
+                        [action_eligible(state, r, Action.STEREO) for r in regions],
+                        device=features.device,
+                    )
+                    & (not covariance_available),
+                    torch.tensor(
+                        [action_eligible(state, r, Action.GAUSSIAN) for r in regions],
+                        device=features.device,
+                    )
+                    & (not covariance_available),
                 ),
                 dim=1,
             )
@@ -603,8 +773,12 @@ class StudentLearner:
                     )
                 else:
                     decision = select_repairability(
-                        gains, harms, estimated_cost.expand(len(regions), -1),
-                        action_valid, remaining, self.intervention_config,
+                        gains,
+                        harms,
+                        estimated_cost.expand(len(regions), -1),
+                        action_valid,
+                        remaining,
+                        self.intervention_config,
                     )
                 budget_metadata = {
                     # Include allocation/host synchronization in routing cost.
@@ -631,11 +805,33 @@ class StudentLearner:
                 estimated_cost_ms=[float(x) for x in estimated_cost.detach().cpu()],
                 max_cost_ms=[float(x) for x in self.cost_max_ms.detach().cpu()],
                 full_frame_action_execution=bool(decision.action != Action.STOP),
-                selector_target_event="physical_metric_guards" if self.metric_selector is not None
-                    else "uncalibrated_rgb_warp_proxy",
-                metric_guard_config_hash=None if self.metric_selector is None else
-                    self.metric_selector.config.config_hash,
+                selector_target_event="physical_metric_guards"
+                if self.metric_selector is not None
+                else "uncalibrated_physical_metric_guards"
+                if self.intervention_config is not None
+                and self.intervention_config.metric_quality is not None
+                else "uncalibrated_rgb_warp_proxy",
+                metric_guard_config_hash=None
+                if self.metric_selector is None
+                else self.metric_selector.config.config_hash,
             )
+            if (
+                self.intervention_config is not None
+                and self.intervention_config.metric_quality is not None
+            ):
+                budget_metadata.update(
+                    metric_quality_config_hash=self.intervention_config.config_hash,
+                    action_risk_cutoffs=[
+                        self.intervention_config.maximum_stereo_harm_probability,
+                        self.intervention_config.maximum_gaussian_harm_probability,
+                    ],
+                    gaussian_guard_multiplier=self.intervention_config.gaussian_guard_multiplier,
+                    risk_calibrated=isinstance(self.metric_selector, CalibratedSelector)
+                    and bool(self.metric_selector.calibration_available.all()),
+                    refit_calibration_available=None
+                    if not isinstance(self.metric_selector, CalibratedSelector)
+                    else self.metric_selector.calibration_available.cpu().tolist(),
+                )
             region = regions[decision.region_index or 0]
             started = time.perf_counter()
             outcome = self.actions.execute(state, region, decision.action, self.model)
@@ -649,21 +845,24 @@ class StudentLearner:
                     actual_policy_ms=base_ms + routing_elapsed + action_ms,
                     budget_overrun_ms=max(
                         0.0,
-                        base_ms + routing_elapsed + action_ms
+                        base_ms
+                        + routing_elapsed
+                        + action_ms
                         - self.intervention_config.total_budget_ms,
                     ),
                 )
             else:
-                action_ms = 0.0 if decision.action == Action.STOP else (
-                    time.perf_counter() - started
-                ) * 1000
+                action_ms = (
+                    0.0
+                    if decision.action == Action.STOP
+                    else (time.perf_counter() - started) * 1000
+                )
                 budget_metadata.update(
                     actual_action_ms=action_ms,
                     actual_policy_ms=base_ms + routing_ms + action_ms,
                     budget_overrun_ms=max(
                         0.0,
-                        base_ms + routing_ms + action_ms
-                        - self.routing.budget_ms,
+                        base_ms + routing_ms + action_ms - self.routing.budget_ms,
                     ),
                 )
             return replace(

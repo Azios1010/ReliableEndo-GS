@@ -28,6 +28,14 @@ def build_parser() -> argparse.ArgumentParser:
             command.add_argument("--checkpoint", type=Path, required=True)
             command.add_argument("--training-manifest", type=Path, required=True)
             command.add_argument("--device", default="cuda:0")
+            command.add_argument("--cost-calibration", type=Path)
+            command.add_argument("--target-mask-index", type=Path)
+            command.add_argument("--metric-config", type=Path)
+            command.add_argument("--sample-id", action="append", default=[])
+            command.add_argument(
+                "--checkpoint-sha256",
+                help="Explicit pinned historical read-only evaluation; records old/current sources",
+            )
     sweep = commands.add_parser("weight-sweep")
     sweep.add_argument("--pilot-dir", type=Path, required=True)
     sweep.add_argument("--output-dir", type=Path, required=True)
@@ -173,6 +181,11 @@ def main(argv: list[str] | None = None) -> int:
                 output_dir=args.output_dir,
                 max_samples=args.max_samples,
                 device_name=args.device,
+                cost_calibration_path=args.cost_calibration,
+                target_mask_index=args.target_mask_index,
+                metric_config_path=args.metric_config,
+                sample_ids=tuple(args.sample_id) if args.sample_id else None,
+                expected_checkpoint_sha256=args.checkpoint_sha256,
             )
     except (OSError, ValueError, RuntimeError, KeyError, AssertionError) as error:
         print(f"error: {error}", file=sys.stderr)

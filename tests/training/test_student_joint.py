@@ -353,6 +353,28 @@ def test_checkpoint_ownership_and_teacher_free_deployment(setup, tmp_path, monke
         save_student_checkpoint(path, learner, identity, cursor)
 
 
+def test_historical_checkpoint_without_update_counts_retains_strict_adam_validation(
+    setup, tmp_path
+):
+    learner, sample, target = setup
+    learner.step(sample, joint=True, teacher_target=target)
+    path = tmp_path / "new.pt"
+    cursor = dict(epoch=1, next_sample_index=0, samples_seen=1, optimizer_steps=1)
+    save_student_checkpoint(path, learner, {}, cursor)
+    raw = torch.load(path, weights_only=True)
+    del raw["optimizer_update_counts"]
+    historical = tmp_path / "historical.pt"
+    torch.save(raw, historical)
+    clone = copy.deepcopy(learner)
+    assert load_student_checkpoint(historical, clone, {}, 1) == cursor
+    assert clone.optimizer_update_counts == {"model": 1, "actions": 1, "selector": 1}
+    next(iter(raw["selector_optimizer"]["state"].values()))["step"].fill_(2)
+    broken = tmp_path / "broken.pt"
+    torch.save(raw, broken)
+    with pytest.raises(ValueError, match="Adam step"):
+        load_student_checkpoint(broken, clone, {}, 1)
+
+
 def test_failed_run_keeps_safe_checkpoint_and_rejects_gt_before_teacher(setup, tmp_path):
     learner, sample, _ = setup
 

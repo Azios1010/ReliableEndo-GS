@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+from dataclasses import replace
 from typing import TYPE_CHECKING
 
 import torch
@@ -12,14 +14,33 @@ from reliable_endo_gs.regions.grid import grid_regions
 from reliable_endo_gs.regions.masks import MaskRegion
 from reliable_endo_gs.routing.balanced import BalancedSelector
 from reliable_endo_gs.teachers import AlignedTeacherTarget
-from reliable_endo_gs.training.balanced_interventions import BalancedHarness
+from reliable_endo_gs.training.balanced_interventions import BalancedHarness, BalancedIntervention
 from reliable_endo_gs.training.distillation import stereo_distillation
 from reliable_endo_gs.training.interventions import reconstruction_loss
+from reliable_endo_gs.training.metric_objective import metric_depth_objective
+from reliable_endo_gs.training.metric_quality import OfflineMetricTruth
 from reliable_endo_gs.training.quality_components import measure_quality
 from reliable_endo_gs.training.repairability import stereo_consistency_loss
+from reliable_endo_gs.training.selector_optimization import selector_objective
 
 if TYPE_CHECKING:
     from reliable_endo_gs.training.student_learning import StudentLearner
+
+
+def _risk_components(
+    tables: list[tuple[BalancedIntervention, ...]], features: torch.Tensor
+) -> torch.Tensor:
+    """[R,3,2] local/global labels; unknown placeholders are always excluded."""
+    for table in tables:
+        for row in table:
+            if row.metric_observed and (row.risk_local is None or row.risk_global is None):
+                raise ValueError("observed grouped risk requires both canonical event labels")
+    return features.new_tensor(
+        [
+            [[float(row.risk_local or False), float(row.risk_global or False)] for row in table]
+            for table in tables
+        ]
+    )
 
 
 def balanced_step(
@@ -29,6 +50,8 @@ def balanced_step(
     joint: bool,
     teacher_target: AlignedTeacherTarget | None,
     position: int,
+    metric_truth: OfflineMetricTruth | None = None,
+    selector_context: tuple[tuple[ScaredA00Sample, OfflineMetricTruth], ...] = (),
 ) -> dict[str, object]:
     cfg = learner.intervention_config
     if (
@@ -47,19 +70,61 @@ def balanced_step(
         raise ValueError("balanced learning excludes GT/final_test inputs")
     if learner.config.kd_weight and teacher_target is None:
         raise ValueError("KD requires explicit aligned target")
-    learner.model.train().requires_grad_(True)
+    if selector_context and (not joint or cfg.metric_quality is None):
+        raise ValueError("fresh selector context requires physical joint learning")
+    if len(selector_context) >= cfg.selector_context_frames:
+        raise ValueError("too many fresh selector context frames")
+    seen_context = {sample.sample_id}
+    for context_sample, context_truth in selector_context:
+        if context_sample.supervision is not None or context_sample.sample_id in seen_context:
+            raise ValueError(
+                "fresh selector context must be distinct deployment-only TRAIN samples"
+            )
+        context_truth.validate(context_sample.sample_id, context_sample.batch.support.shape)
+        if context_sample.data_role != "final_train":
+            raise ValueError("fresh selector context cannot consume final_test")
+        seen_context.add(context_sample.sample_id)
+    if cfg.metric_quality is not None and joint:
+        if metric_truth is None:
+            raise ValueError("metric joint learning requires separate offline TRAIN truth")
+        metric_truth.validate(sample.sample_id, sample.batch.left[:, :1].shape)
+    # The frozen ablation retains virtual model derivatives for the SAME
+    # balancing probes as joint. Its optimizer is excluded and gradients discarded.
+    learner.model.train(not learner.student_frozen).requires_grad_(True)
     learner.actions.train().requires_grad_(True)
     learner.selector.train()
     for opt in (learner.model_optimizer, learner.action_optimizer, learner.selector_optimizer):
         opt.zero_grad(set_to_none=True)
     state = learner.state(sample)
+    if metric_truth is not None:
+        metric_truth = replace(
+            metric_truth,
+            disparity=metric_truth.disparity.to(state.batch.left.device),
+            valid_mask=metric_truth.valid_mask.to(state.batch.left.device),
+        )
     h, w = state.batch.left.shape[-2:]
     full = grid_regions((h, w), (h, w), learner.routing.halo)[0]
     base = learner.actions.execute(state, full, Action.STOP, learner.model)
     rgb = reconstruction_loss(state, base)
     warp = stereo_consistency_loss(state, base.disparity)
     kd = rgb.new_zeros(())
-    diag: dict[str, object] = {}
+    diag: dict[str, object] = {
+        "student_update_mode": cfg.student_update_mode,
+        "model_update_enabled": not learner.student_frozen,
+        "frozen_student_start_step": learner.frozen_student_start_step,
+    }
+    if metric_truth is not None:
+        digest = hashlib.sha256()
+        for tensor in (metric_truth.disparity, metric_truth.valid_mask):
+            value = tensor.detach().cpu().contiguous()
+            digest.update(str(value.dtype).encode())
+            digest.update(str(tuple(value.shape)).encode())
+            digest.update(value.numpy().tobytes())
+        diag.update(
+            offline_metric_truth_sample_id=metric_truth.sample_id,
+            offline_metric_truth_sha256=digest.hexdigest(),
+            offline_metric_truth_resampling_identity=metric_truth.resampling_identity,
+        )
     if learner.config.kd_weight:
         assert teacher_target is not None
         learner.model._validate_target_metadata(teacher_target, calibration_metadata=None)
@@ -67,14 +132,33 @@ def balanced_step(
         kd = distillation.loss
         diag.update(distillation.diagnostics)
     repair = rgb.new_zeros(())
+    geometry = rgb.new_zeros(())
+    geometry_repairs: list[torch.Tensor] = []
+    if cfg.geometry_supervision_weight:
+        if metric_truth is None:
+            raise ValueError("metric geometry learning requires separate offline TRAIN truth")
+        depth_objective = metric_depth_objective(
+            base.disparity,
+            state.batch,
+            metric_truth,
+            sample_id=sample.sample_id,
+            scale_mm=cfg.geometry_loss_scale_mm,
+        )
+        geometry = depth_objective.loss
+        diag.update(
+            geometry_base_loss=float(geometry.detach()),
+            geometry_base_mae_mm=depth_objective.mae_mm,
+            geometry_base_pixels=depth_objective.pixels,
+            geometry_supervision_protocol="fixed_train_gt_depth_smooth_l1.v1",
+        )
     selector_loss = rgb.new_zeros(())
     selector_pending = None
     # In burn-in mode the selector sees only detached labels while TRAIN
     # normalization is collected.  Student and action owners continue to
     # optimize; selector parameters begin updating only on a later snapshot
     # with the frozen transform.
-    selector_training_ready = (
-        cfg.normalization_mode == "legacy" or bool(learner.selector.normalization.fitted)
+    selector_training_ready = cfg.normalization_mode == "legacy" or bool(
+        learner.selector.normalization.fitted
     )
     regions = (
         tuple(r for r in learner.candidate_regions(state, sample.sample_id) if eligible(state, r))
@@ -93,7 +177,10 @@ def balanced_step(
         learner.actions.requires_grad_(False)
         try:
             tables = [
-                learner.harness.collect(state, r, learner.actions, learner.model) for r in regions
+                learner.harness.collect(
+                    state, r, learner.actions, learner.model, metric_truth=metric_truth
+                )
+                for r in regions
             ]
         finally:
             learner.actions.requires_grad_(True)
@@ -102,49 +189,170 @@ def balanced_step(
         # Counterfactuals are detached supervision.  STOP is always an exact
         # zero-risk/zero-gain reference; only repair actions carry risk labels.
         harms = features.new_tensor([[float(row.harmful) for row in table] for table in tables])
+        label_available = torch.tensor(
+            [all(row.metric_observed for row in table) for table in tables],
+            device=features.device,
+            dtype=torch.bool,
+        )
+        # Only labels/features are batched. Every historical sample is run again
+        # with this exact current actor snapshot; no stale outcome replay.
+        fit_features = [features]
+        fit_global = [global_targets]
+        fit_local = [local_targets]
+        fit_harms = [harms]
+        fit_risk = (
+            [_risk_components(tables, features)] if cfg.selector_risk_mode == "local_global" else []
+        )
+        fit_available = [label_available]
+        context_diagnostics = []
+        if selector_context:
+            from reliable_endo_gs.training.student_learning import evaluation_mode
+
+            action_flags = [(p, p.requires_grad) for p in learner.actions.parameters()]
+            learner.actions.requires_grad_(False)
+            try:
+                with torch.no_grad(), evaluation_mode(learner.model, learner.actions):
+                    for context_sample, context_truth in selector_context:
+                        context_state = learner.state(context_sample)
+                        context_regions = tuple(
+                            r
+                            for r in learner.candidate_regions(
+                                context_state, context_sample.sample_id
+                            )
+                            if eligible(context_state, r)
+                        )
+                        if not context_regions:
+                            continue
+                        context_truth = replace(
+                            context_truth,
+                            disparity=context_truth.disparity.to(context_state.batch.left.device),
+                            valid_mask=context_truth.valid_mask.to(context_state.batch.left.device),
+                        )
+                        context_features = learner.selection_features(
+                            context_state, context_regions
+                        )
+                        context_tables = [
+                            learner.harness.collect(
+                                context_state,
+                                r,
+                                learner.actions,
+                                learner.model,
+                                metric_truth=context_truth,
+                            )
+                            for r in context_regions
+                        ]
+                        context_global = features.new_tensor(
+                            [[row.utility for row in t] for t in context_tables]
+                        )
+                        context_local = features.new_tensor(
+                            [[row.local_gain for row in t] for t in context_tables]
+                        )
+                        context_harms = features.new_tensor(
+                            [[float(row.harmful) for row in t] for t in context_tables]
+                        )
+                        context_available = torch.tensor(
+                            [all(row.metric_observed for row in t) for t in context_tables],
+                            device=features.device,
+                            dtype=torch.bool,
+                        )
+                        fit_features.append(context_features)
+                        fit_global.append(context_global)
+                        fit_local.append(context_local)
+                        fit_harms.append(context_harms)
+                        if cfg.selector_risk_mode == "local_global":
+                            fit_risk.append(_risk_components(context_tables, features))
+                        fit_available.append(context_available)
+                        context_diagnostics.append(
+                            {
+                                "sample_id": context_sample.sample_id,
+                                "snapshot_optimizer_step": position,
+                                "features_raw": context_features.cpu().tolist(),
+                                "global_targets": context_global.cpu().tolist(),
+                                "local_targets": context_local.cpu().tolist(),
+                                "harms": context_harms.cpu().tolist(),
+                                "risk_events": [
+                                    [
+                                        [
+                                            row.risk_local,
+                                            row.risk_global,
+                                            row.harmful if row.metric_observed else None,
+                                        ]
+                                        for row in table
+                                    ]
+                                    for table in context_tables
+                                ]
+                                if cfg.selector_risk_mode == "local_global"
+                                else None,
+                                "label_available": context_available.cpu().tolist(),
+                            }
+                        )
+            finally:
+                for parameter, flag in action_flags:
+                    parameter.requires_grad_(flag)
+        snapshot_features = torch.cat(fit_features).detach()
+        snapshot_global = torch.cat(fit_global).detach()
+        snapshot_local = torch.cat(fit_local).detach()
+        snapshot_harms = torch.cat(fit_harms).detach()
+        snapshot_risk = torch.cat(fit_risk).detach() if fit_risk else None
+        snapshot_available = torch.cat(fit_available)
+        selector_training_ready = selector_training_ready and bool(snapshot_available.any())
+        diag["selector_snapshot_context"] = context_diagnostics
+        diag["selector_snapshot_known_regions"] = int(snapshot_available.sum())
+        diag["selector_snapshot_frames"] = 1 + len(context_diagnostics)
+        diag["selector_snapshot_protocol"] = "fresh_current_actor_multi_frame.v1"
+        diag["selector_observed_regions"] = int(label_available.sum())
+        diag["selector_unknown_metric_regions"] = int((~label_available).sum())
         if not bool((global_targets[:, 0] == 0).all() & (local_targets[:, 0] == 0).all()):
             raise ValueError("balanced intervention labels must keep STOP gains at zero")
         if not bool((harms[:, 0] == 0).all()):
             raise ValueError("balanced intervention labels must keep STOP harm at zero")
         if selector_training_ready:
-            component_losses, selector_diag = learner.selector.objective(
-                features, global_targets, local_targets, harms
+            selector_loss, selector_pending, selector_diag = selector_objective(
+                learner.selector,
+                learner.selector_balancer,
+                snapshot_features[snapshot_available],
+                snapshot_global[snapshot_available],
+                snapshot_local[snapshot_available],
+                snapshot_harms[snapshot_available],
+                risk_components=None
+                if snapshot_risk is None
+                else snapshot_risk[snapshot_available],
+                train_harm=not cfg.selector_gain_only_refinement
+                or cfg.selector_updates_per_snapshot == 1,
             )
-            shared = tuple(
-                p
-                for layer in list(learner.selector.gain_network.children())[:-1]
-                for p in layer.parameters()
-            )
-            selector_pending, balance_diag = learner.selector_balancer.measure(
-                tuple(component_losses[k] for k in ("global", "local", "ranking")), shared
-            )
-            selector_loss = (
-                sum(
-                    selector_pending[1, i] * weight * component_losses[k]
-                    for i, (k, weight) in enumerate(
-                        (
-                            ("global", 1.0),
-                            ("local", cfg.local_auxiliary_weight),
-                            ("ranking", cfg.ranking_weight),
-                        )
-                    )
-                )
-                + cfg.harm_weight * component_losses["harm"]
-            )
-            selector_diag.update({f"selector_{k}": v for k, v in balance_diag.items()})
             diag.update(selector_diag)
         else:
             diag.update(
-                selector_burn_in=True,
-                selector_normalization_fitted=False,
-                selector_supervision_collected=True,
+                selector_burn_in=cfg.normalization_mode == "burn_in"
+                and not bool(learner.selector.normalization.fitted),
+                selector_normalization_fitted=bool(learner.selector.normalization.fitted),
+                selector_supervision_collected=bool(snapshot_available.any()),
+                selector_skip_reason="normalization_burn_in"
+                if bool(snapshot_available.any())
+                else "no_observed_metric_outcomes",
             )
-        diag["selector_supervision_semantics"] = "global_decision_local_auxiliary"
+        diag["selector_supervision_semantics"] = (
+            "physical_metric_decision_local_geometry_auxiliary"
+            if cfg.metric_quality is not None
+            else "global_decision_local_auxiliary"
+        )
         repair_terms = []
         for region, table in zip(regions, tables, strict=True):
             before = table[0].components_before
             for action in (Action.STEREO, Action.GAUSSIAN):
                 outcome = learner.actions.execute(state, region, action, learner.model)
+                if cfg.geometry_supervision_weight and action == Action.STEREO:
+                    assert metric_truth is not None
+                    local_depth = metric_depth_objective(
+                        outcome.disparity,
+                        state.batch,
+                        metric_truth,
+                        sample_id=sample.sample_id,
+                        scale_mm=cfg.geometry_loss_scale_mm,
+                        region_mask=region.mask(state.batch.left),
+                    )
+                    if local_depth.pixels:
+                        geometry_repairs.append(local_depth.loss)
                 quality_components = measure_quality(state, outcome, region)
                 local = (
                     quality_components.local_rgb / cfg.rgb_scale
@@ -182,11 +390,16 @@ def balanced_step(
                     {
                         "action": row.action.name,
                         "cost_ms": row.cost_ms,
-                        "global_gain": row.utility,
-                        "local_gain": row.local_gain,
-                        "harm": row.harmful,
+                        "global_gain": row.utility if row.metric_observed else None,
+                        "local_gain": row.local_gain if row.metric_observed else None,
+                        "harm": row.harmful if row.metric_observed else None,
+                        "risk_local": row.risk_local,
+                        "risk_global": row.risk_global,
                         "before": row.components_before,
                         "after": row.components_after,
+                        "metric_changes": row.metric_changes,
+                        "selector_label_available": row.metric_observed,
+                        "metric_diagnostics": row.metric_diagnostics,
                     }
                     for row in table
                 ],
@@ -196,15 +409,44 @@ def balanced_step(
         diag["selector_regions"] = len(regions)
         diag["features_raw"] = features.detach().cpu().tolist()
         if selector_training_ready:
-            global_predictions, local_predictions, predicted_harms = learner.selector.outputs(features)
+            (
+                global_predictions,
+                local_predictions,
+                predicted_harms,
+                predicted_events,
+                gain_components,
+            ) = learner.selector.outputs_with_components(features)
             diag.update(
                 predicted_global_gains=global_predictions.detach().cpu().tolist(),
                 predicted_local_gains=local_predictions.detach().cpu().tolist(),
                 predicted_harms=predicted_harms.detach().cpu().tolist(),
             )
-    terms = (rgb / cfg.rgb_scale, cfg.stereo_weight * warp / cfg.stereo_scale, kd, repair)
+            if cfg.selector_risk_mode == "local_global":
+                assert predicted_events is not None
+                diag["predicted_risk_events"] = predicted_events.detach().cpu().tolist()
+            if gain_components is not None:
+                diag["predicted_gain_components"] = gain_components.to_report()
+    terms: tuple[torch.Tensor, ...] = (
+        rgb / cfg.rgb_scale,
+        cfg.stereo_weight * warp / cfg.stereo_scale,
+        kd,
+        repair,
+    )
+    if cfg.geometry_supervision_weight:
+        local_geometry = torch.stack(geometry_repairs).mean() if geometry_repairs else geometry * 0
+        geometry = geometry + cfg.stereo_repair_geometry_weight * local_geometry
+        terms += (geometry,)
+        diag.update(
+            geometry_stereo_local_loss=float(local_geometry.detach()),
+            geometry_stereo_observed_regions=len(geometry_repairs),
+        )
     pending = None
-    if position % cfg.gradient_diagnostics_every == 0:
+    initialize_geometry_balance = (
+        bool(cfg.geometry_supervision_weight)
+        and bool(geometry.detach() > 0)
+        and float(learner.objective_balancer.ema[-1]) == 0
+    )
+    if position % cfg.gradient_diagnostics_every == 0 or initialize_geometry_balance:
         pending, balance_diag = learner.objective_balancer.measure(
             terms, tuple(learner.model.stereo_student.features.parameters())
         )
@@ -217,17 +459,59 @@ def balanced_step(
             learner.config.kd_weight,
             learner.config.repair_weight if joint else 0.0,
         ]
+        + ([cfg.geometry_supervision_weight] if cfg.geometry_supervision_weight else [])
     )
     loss = learner.objective_balancer.weighted_loss(terms, priorities, pending)
     diag.update(
         stereo_training_priority=cfg.stereo_training_priority,
         model_effective_weight_warp=float(weights[1] * priorities[1] * cfg.stereo_weight),
     )
+    if cfg.geometry_supervision_weight:
+        diag["model_effective_weight_geometry"] = float(weights[4] * priorities[4])
+        diag["geometry"] = float(geometry.detach())
     if not bool(torch.isfinite(loss) & torch.isfinite(selector_loss)):
         raise ValueError("nonfinite balanced objective")
     loss.backward()
     if joint and selector_training_ready:
+        # Fast head updates happen BEFORE the student/actions change. Reuse
+        # only this sample's detached fresh counterfactuals, never old outcomes.
+        loss_before_refinement = float(selector_loss.detach())
+        if cfg.selector_gain_only_refinement and cfg.selector_updates_per_snapshot > 1:
+            # Report the full objective at both endpoints even though extra
+            # gain steps exclude BCE. Risk is trained once on the final step.
+            harm_loss = diag["selector_harm_loss"]
+            assert isinstance(harm_loss, float)
+            loss_before_refinement += cfg.harm_weight * harm_loss
+        diag["selector_loss_before_refinement"] = loss_before_refinement
+        for refinement in range(cfg.selector_updates_per_snapshot - 1):
+            assert selector_pending is not None
+            selector_loss.backward()
+            learner.commit_gradients(True, selector_only=True)
+            learner.selector_balancer.commit(selector_pending)
+            learner.selector_optimizer.zero_grad(set_to_none=True)
+            selector_loss, selector_pending, selector_diag = selector_objective(
+                learner.selector,
+                learner.selector_balancer,
+                snapshot_features[snapshot_available],
+                snapshot_global[snapshot_available],
+                snapshot_local[snapshot_available],
+                snapshot_harms[snapshot_available],
+                risk_components=None
+                if snapshot_risk is None
+                else snapshot_risk[snapshot_available],
+                train_harm=not cfg.selector_gain_only_refinement
+                or refinement == cfg.selector_updates_per_snapshot - 2,
+            )
+            diag.update(selector_diag)
         selector_loss.backward()
+    diag["selector_updates_this_snapshot"] = (
+        cfg.selector_updates_per_snapshot if joint and selector_training_ready else 0
+    )
+    diag["selector_harm_updates_this_snapshot"] = (
+        (1 if cfg.selector_gain_only_refinement else cfg.selector_updates_per_snapshot)
+        if joint and selector_training_ready
+        else 0
+    )
     diag.update(learner.commit_gradients(joint, update_selector=selector_training_ready))
     if pending is not None:
         learner.objective_balancer.commit(pending)
@@ -235,13 +519,14 @@ def balanced_step(
         # Statistics are collected after the model/action optimizer step.  In
         # burn-in mode this is the only selector state mutation; it enables
         # the next step without backpropagating through the calibration pass.
-        learner.selector.normalization.observe(
-            features,
-            global_targets,
-            local_targets,
-            sample_id=sample.sample_id,
-            role=sample.data_role,
-        )
+        if bool(label_available.any()):
+            learner.selector.normalization.observe(
+                features[label_available],
+                global_targets[label_available],
+                local_targets[label_available],
+                sample_id=sample.sample_id,
+                role=sample.data_role,
+            )
         learner.record_action_costs(cost_rows)
     if joint and selector_training_ready:
         assert selector_pending is not None

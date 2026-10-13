@@ -71,6 +71,8 @@ def test_fixed_metric_zero_action_and_missing_support(setup):
         )
         assert result["metric_changes"] == [0.0] * 12
         assert result["metric_feasible"] is True
+        assert result["metric_support"]["local_fixed_pixels"] == 4
+        assert result["metric_unavailable_reasons"] == []
         empty = intervention_metrics(
             stop,
             stop,
@@ -83,6 +85,40 @@ def test_fixed_metric_zero_action_and_missing_support(setup):
             metrics,
         )
         assert empty["metric_changes"] is None and empty["metric_feasible"] is None
+        assert empty["metric_support"]["global_fixed_pixels"] == 0
+        assert empty["metric_unavailable_reasons"] == [
+            "no_global_gt_base_support",
+            "no_local_gt_base_support",
+        ]
+        partial_gt = state.support.clone()
+        partial_gt[region.mask(state.batch.left)] = False
+        partial = intervention_metrics(
+            stop, stop, state, region, truth, partial_gt, TradeoffConfig(), metrics, metrics
+        )
+        assert partial["metric_changes"] is None and partial["metric_feasible"] is None
+        assert partial["metric_support"]["global_fixed_pixels"] > 0
+        assert partial["metric_support"]["local_fixed_pixels"] == 0
+        assert partial["metric_unavailable_reasons"] == ["no_local_gt_base_support"]
+        invalid = stop.disparity.clone()
+        invalid[region.mask(state.batch.left)] = float("nan")
+        lost = intervention_metrics(
+            replace(stop, disparity=invalid),
+            stop,
+            state,
+            region,
+            truth,
+            state.support,
+            TradeoffConfig(),
+            metrics,
+            metrics,
+        )
+        assert lost["metric_changes"] is None and lost["metric_feasible"] is None
+        assert lost["metric_support"]["local_fixed_pixels"] == 4
+        assert lost["metric_support"]["local_lost_pixels"] == 4
+        assert lost["metric_unavailable_reasons"] == [
+            "lost_global_prediction_support",
+            "lost_local_prediction_support",
+        ]
 
 
 def test_diagnostic_does_not_certify_unknown_or_mix_units():
@@ -106,6 +142,7 @@ def test_diagnostic_does_not_certify_unknown_or_mix_units():
         out["samples_with_budgeted_opportunity"] == out["selector_missed_opportunity_samples"] == 1
     )
     assert out["actions"]["GAUSSIAN"]["unknown"] == 1
+    assert out["actions"]["GAUSSIAN"]["unknown_reasons"] == {"not_recorded_in_artifact": 1}
     assert out["actions"]["STEREO"]["mean_changes_raw_units"]["global_depth_mae_gain_mm"] == 0.2
     assert "normalized utility" in out["semantics"]
     record["counterfactual_metric_outcomes"][0]["within_estimated_budget"] = False
@@ -114,8 +151,10 @@ def test_diagnostic_does_not_certify_unknown_or_mix_units():
 
 @pytest.mark.parametrize("quiet", [False, True])
 @pytest.mark.parametrize("base_only", [False, True])
+@pytest.mark.parametrize("calibrated", [False, True])
+@pytest.mark.parametrize("historical", [False, True])
 def test_native_evaluator_mask_checkpoint_cursor_gt_order_and_immutability(
-    setup, tmp_path, monkeypatch, quiet, base_only
+    setup, tmp_path, monkeypatch, quiet, base_only, calibrated, historical
 ):
     import reliable_endo_gs.evaluation.intervention_selection as runtime
     from reliable_endo_gs.routing.masks import MaskProposalConfig
@@ -150,9 +189,12 @@ def test_native_evaluator_mask_checkpoint_cursor_gt_order_and_immutability(
     masked.actions.load_state_dict(learner.actions.state_dict())
     masked.selector.load_state_dict(learner.selector.state_dict())
     masked.cost_max_ms.copy_(learner.cost_max_ms)
+    if calibrated:
+        masked.cost_max_ms[1] = 2990.0
     masked.cost_observations = learner.cost_observations
     for name in ("model_optimizer", "action_optimizer", "selector_optimizer"):
         getattr(masked, name).load_state_dict(getattr(learner, name).state_dict())
+    masked.optimizer_update_counts = dict(learner.optimizer_update_counts)
     tr = [f"dataset_{i}/keyframe_1/train" for i in range(1, 8)]
     identity = dict(
         run_kind="bounded_mask_validation",
@@ -164,6 +206,32 @@ def test_native_evaluator_mask_checkpoint_cursor_gt_order_and_immutability(
         samples_per_epoch=7,
     )
     checkpoint = tmp_path / "mask.pt"
+    cost_path = None
+    if calibrated:
+        from reliable_endo_gs.routing.cost import (
+            CostCalibrationPolicy,
+            DeploymentCostCalibration,
+            capture_runtime_identity,
+            save_cost_calibration,
+        )
+
+        cost_path = tmp_path / "cost.pt"
+        save_cost_calibration(
+            cost_path,
+            DeploymentCostCalibration(
+                {
+                    "collection_role": "train",
+                    "frozen_action_identity": masked.frozen_action_identity(),
+                    "training_identity": identity,
+                    "training_manifest_hash": "train",
+                },
+                CostCalibrationPolicy("max", None, 0, 2),
+                capture_runtime_identity("cpu"),
+                (5, 5),
+                torch.tensor([[0.0, 0.0], [1.0, 1.0], [1.0, 1.0]]),
+                torch.tensor([0.0, 1.0, 1.0]),
+            ),
+        )
     save_student_checkpoint(
         checkpoint,
         masked,
@@ -175,7 +243,7 @@ def test_native_evaluator_mask_checkpoint_cursor_gt_order_and_immutability(
             optimizer_steps=0 if base_only else 2,
         ),
     )
-    monkeypatch.setattr(runtime, "source_sha256", lambda _: "source")
+    monkeypatch.setattr(runtime, "source_sha256", lambda _: "current" if historical else "source")
     monkeypatch.setattr(runtime, "load_a01_roles", lambda _: SimpleNamespace(role_hash="roles"))
     monkeypatch.setattr(
         runtime,
@@ -239,9 +307,44 @@ def test_native_evaluator_mask_checkpoint_cursor_gt_order_and_immutability(
         sample_ids=("dataset_1/keyframe_1/dev",),
         metric_config_path=metric,
         base_only=base_only,
+        cost_calibration_path=cost_path,
+        expected_checkpoint_sha256=runtime.hashlib.sha256(checkpoint.read_bytes()).hexdigest()
+        if historical
+        else None,
     )
     assert report["weights_unchanged"] and not report["teacher_inference_executed"]
+    assert report["training_overlap_scope"] == "current_training_manifest_only"
+    assert report["initialization_overlap_audited"] is False
+    assert report["evaluation_scope"] == "development_diagnostic"
     assert report["samples"] == 1 and report["region_protocol"] == "target_mask_proposals.v1"
+    assert report["checkpoint_source_sha256"] == "source"
+    assert report["source_sha256"] == ("current" if historical else "source")
+    if historical:
+        with pytest.raises(ValueError, match="SHA-256 mismatch"):
+            runtime.evaluate_intervention_selection(
+                checkpoint=checkpoint,
+                data_root=tmp_path,
+                manifest_path=tmp_path / "dev",
+                training_manifest=tmp_path / "train",
+                roles_path=tmp_path / "roles",
+                output_dir=tmp_path / "bad-pin",
+                device_name="cpu",
+                max_samples=1,
+                target_mask_index=index,
+                expected_checkpoint_sha256="0" * 64,
+            )
+        with pytest.raises(ValueError, match="source/training/role identity"):
+            runtime.evaluate_intervention_selection(
+                checkpoint=checkpoint,
+                data_root=tmp_path,
+                manifest_path=tmp_path / "dev",
+                training_manifest=tmp_path / "train",
+                roles_path=tmp_path / "roles",
+                output_dir=tmp_path / "unpinned",
+                device_name="cpu",
+                max_samples=1,
+                target_mask_index=index,
+            )
     record = json.loads((tmp_path / "result/samples.jsonl").read_text())
     assert torch.equal(torch.get_rng_state(), rng_before)
     if quiet or base_only:
@@ -249,6 +352,12 @@ def test_native_evaluator_mask_checkpoint_cursor_gt_order_and_immutability(
         assert all(r["action"] == "STOP" for r in record["policies"].values())
     else:
         assert record["mask_candidates"] and record["counterfactual_metric_outcomes"]
+        if calibrated:
+            assert report["cost_calibration"]["method"] == "deployment_artifact"
+            assert all(
+                row["estimated_action_ms"] == 1.0
+                for row in record["counterfactual_metric_outcomes"]
+            )
     assert calls[-1] == "GT"
 
 

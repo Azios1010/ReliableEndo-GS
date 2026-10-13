@@ -18,6 +18,7 @@ import yaml
 
 from reliable_endo_gs.contracts.interventions import ACTION_NAMES as ACTION_NAMES
 from reliable_endo_gs.contracts.interventions import COMPONENT_NAMES as COMPONENT_NAMES
+from reliable_endo_gs.contracts.interventions import LOCAL_RISK_COMPONENT_NAMES
 
 # Declared numerical floors in the units of COMPONENT_NAMES, not utility weights.
 SCALE_FLOORS = (0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.0001, 0.0001, 0.0001, 0.0001, 0.0001)
@@ -69,6 +70,9 @@ class TradeoffConfig:
     component_risk_weight: float = 0.25
     calibration_min_class_groups: int = 2
     constraint_margin_weight: float = 0.25
+    # Applied after group normalization: raising geometry_weight alone merely
+    # changes the global/local share and cannot prioritize geometry over render.
+    geometry_priority: float = 1.0
 
     def __post_init__(self) -> None:
         if self.schema not in ("metric_action_tradeoff.v1", "metric_action_tradeoff.v2"):
@@ -93,6 +97,10 @@ class TradeoffConfig:
             raise ValueError("both geometry and render utility must remain active")
         if self.utility_gain_cap <= 0:
             raise ValueError("utility gain cap must be positive")
+        if self.geometry_priority <= 0:
+            raise ValueError("geometry priority must be positive")
+        if self.schema == "metric_action_tradeoff.v1" and self.geometry_priority != 1.0:
+            raise ValueError("geometry priority requires the bounded v2 utility")
         if self.schema == "metric_action_tradeoff.v2" and (
             self.collateral_weight != 0 or self.local_render_weight != 0
         ):
@@ -126,8 +134,8 @@ class TradeoffConfig:
             geometry = self.geometry_weight + self.local_geometry_weight
             render = self.psnr_weight + self.ssim_weight
             return (
-                self.geometry_weight / geometry,
-                self.local_geometry_weight / geometry,
+                self.geometry_priority * self.geometry_weight / geometry,
+                self.geometry_priority * self.local_geometry_weight / geometry,
                 0.0,
                 0.0,
                 0.0,
@@ -157,6 +165,8 @@ class TradeoffConfig:
     @property
     def config_hash(self) -> str:
         raw = asdict(self)
+        if self.geometry_priority == 1.0:
+            raw.pop("geometry_priority")
         if self.schema == "metric_action_tradeoff.v1":
             # Preserve historical table/checkpoint identities when adding v2 fields.
             for key in V2_CONFIG_FIELDS:
@@ -189,6 +199,27 @@ def feasible_changes(changes: Sequence[float], config: TradeoffConfig) -> bool:
     return all(component_feasibility(changes, config))
 
 
+def grouped_harm(changes: Sequence[float], config: TradeoffConfig) -> tuple[bool, bool, bool]:
+    """Local/global/any physical events, using the canonical raw-unit guards.
+
+    Requires a complete observation; missing outcomes must be excluded upstream.
+    """
+    if len(changes) != len(COMPONENT_NAMES) or not all(math.isfinite(v) for v in changes):
+        raise ValueError("grouped risk requires complete finite physical changes")
+    safe = component_feasibility(changes, config)
+    local = any(
+        not ok
+        for name, ok in zip(COMPONENT_NAMES, safe, strict=True)
+        if name in LOCAL_RISK_COMPONENT_NAMES
+    )
+    global_ = any(
+        not ok
+        for name, ok in zip(COMPONENT_NAMES, safe, strict=True)
+        if name not in LOCAL_RISK_COMPONENT_NAMES
+    )
+    return local, global_, local or global_
+
+
 def utility_coefficients(scales: Sequence[float], config: TradeoffConfig) -> tuple[float, ...]:
     """Common train-fitted scales across actions preserve component units."""
     if len(scales) != len(COMPONENT_NAMES) or any(not math.isfinite(s) or s <= 0 for s in scales):
@@ -213,8 +244,8 @@ def outcome_utility_tensor(
 ) -> torch.Tensor:
     """Differentiable canonical score for [...,12] raw-unit metric changes.
 
-    v2 bounds each normalized gain before weighting: geometry and render each
-    have a total weight of one. Local/outside RGB stay raw-unit constraints.
+    v2 bounds each normalized gain before weighting. Geometry has the explicit
+    geometry_priority; render has weight one. RGB stays a raw-unit constraint.
     Statistical scales remain train-only numerical references, not safety limits.
     """
     coefficients = utility_coefficients(scales, config)

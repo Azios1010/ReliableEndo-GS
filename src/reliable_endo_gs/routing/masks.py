@@ -169,10 +169,7 @@ def candidate_scores(state: RepairState, config: MaskProposalConfig) -> torch.Te
     if "cost_entropy" in evidence and "cost_margin" in evidence:
         entropy = evidence["cost_entropy"]
         margin = evidence["cost_margin"]
-        evidence_valid = (
-            entropy.shape == warp_valid.shape
-            and margin.shape == warp_valid.shape
-        )
+        evidence_valid = entropy.shape == warp_valid.shape and margin.shape == warp_valid.shape
         if evidence_valid and bool(torch.isfinite(entropy).all() & torch.isfinite(margin).all()):
             ambiguity = torch.maximum(entropy, 1 - margin)
             stereo = torch.maximum(stereo, config.ambiguity_weight * ambiguity.clamp(0, 1))

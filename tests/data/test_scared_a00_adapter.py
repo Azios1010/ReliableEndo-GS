@@ -134,6 +134,56 @@ def test_a00_deployment_load_does_not_require_ground_truth(tmp_path: Path) -> No
     assert sample.batch.left.shape == (1, 3, 4, 5)
 
 
+@pytest.mark.parametrize("output_hw", [(2, 2), (3, 3), (6, 7)])
+def test_sparse_gt_resize_uses_rgb_pixel_centres_and_same_validity_index(
+    tmp_path: Path, output_hw: tuple[int, int]
+) -> None:
+    root = _fixture(tmp_path)
+    # Crop 4x4 from a 4x5 source. A varying disparity and holes expose the
+    # old nearest offset; constant-disparity fixtures cannot detect it.
+    raw = np.arange(20, dtype=np.float32).reshape(4, 5) + 10
+    raw[0, 0], raw[1, 2], raw[3, 4] = 0, float("nan"), float("inf")
+    tifffile.imwrite(root / "dataset_1/keyframe_1/data/disparity/frame_data000000.tiff", raw)
+    manifest = build_a01_manifest(root, tmp_path / "a01.json", require_all_folds=False)
+    adapter = ScaredA00Adapter(root, manifest)
+    sample = adapter.load(
+        manifest.entries[0].sample_id,
+        crop_xy_left=(1, 0),
+        crop_xy_right=(0, 0),
+        crop_hw=(4, 4),
+        output_hw=output_hw,
+    )
+    assert sample.supervision is not None
+    # Independent inverse of u' = s*(u+0.5)-0.5. Nearest centre ties go
+    # toward the larger index, matching nearest-exact; do not call interpolate.
+    yy = np.floor((np.arange(output_hw[0]) + 0.5) * 4 / output_hw[0]).astype(int)
+    xx = np.floor((np.arange(output_hw[1]) + 0.5) * 4 / output_hw[1]).astype(int)
+    expected = raw[yy[:, None], xx[None, :] + 1]
+    valid = np.isfinite(expected) & (expected > 0)
+    expected = (expected - 1) * (output_hw[1] / 4)
+    valid &= np.isfinite(expected) & (expected > 0)
+    expected[~np.isfinite(expected)] = 0
+    torch.testing.assert_close(sample.supervision.disparity[0, 0], torch.from_numpy(expected))
+    assert torch.equal(sample.supervision.valid_mask[0, 0], torch.from_numpy(valid))
+    assert sample.calibration_metadata["input_hw"] == [4, 5]
+    assert sample.calibration_metadata["output_hw"] == list(output_hw)
+    assert sample.calibration_metadata["runtime_resampling"]["supervision"] == (
+        "nearest_exact_half_pixel_centres"
+    )
+    deployment = adapter.load(
+        manifest.entries[0].sample_id,
+        include_supervision=False,
+        crop_xy_left=(1, 0),
+        crop_xy_right=(0, 0),
+        crop_hw=(4, 4),
+        output_hw=output_hw,
+    )
+    assert deployment.supervision is None
+    assert torch.equal(deployment.batch.left, sample.batch.left)
+    assert torch.equal(deployment.batch.camera.K_L, sample.batch.camera.K_L)
+    assert deployment.calibration_metadata == sample.calibration_metadata
+
+
 def test_a01_manifest_requires_all_active_folds_by_default(tmp_path: Path) -> None:
     root = _fixture(tmp_path)
     with pytest.raises(ScaredA00SampleError, match="dataset_2"):

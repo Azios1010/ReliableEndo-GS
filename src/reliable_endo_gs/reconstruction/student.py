@@ -65,9 +65,15 @@ class StereoStudent(nn.Module):
         return self.predict_with_evidence(batch, include_evidence=False)[0]
 
     def predict_with_evidence(
-        self, batch: DeploymentStereoBatch, *, include_evidence: bool = True
+        self,
+        batch: DeploymentStereoBatch,
+        *,
+        include_evidence: bool = True,
+        include_feature_tokens: bool = False,
     ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
         """Return disparity and detached B1HW evidence from one matching pass."""
+        if include_feature_tokens and not include_evidence:
+            raise ValueError("feature tokens require explicit matching evidence")
         coarse, probabilities, features = self._matching(batch)
         residual = self.decoder(
             torch.cat((batch.left.float(), batch.right.float(), coarse / batch.left.shape[-1]), 1)
@@ -75,6 +81,8 @@ class StereoStudent(nn.Module):
         offset = (batch.camera.K_L[:, 0, 2] - batch.camera.K_R[:, 0, 2])[:, None, None, None]
         effective = self.minimum_effective_px + F.softplus(coarse + residual - offset)
         evidence = self._evidence(batch, probabilities, features) if include_evidence else {}
+        if include_feature_tokens:
+            evidence["student_features"] = features.detach()
         return offset + effective, evidence
 
     def _matching(
@@ -178,16 +186,25 @@ class StudentReconstructionResult(ReferenceReconstructionResult):
         ReferenceReconstructionResult.__post_init__(self)
         if not isinstance(self.provenance_record, StudentProvenance):
             raise TypeError("student result requires StudentProvenance")
-        if self.matching_evidence and set(self.matching_evidence) != {
-            "cost_margin",
-            "cost_entropy",
-            "feature_energy",
-        }:
+        keys = set(self.matching_evidence)
+        required = {"cost_margin", "cost_entropy", "feature_energy"}
+        if keys and (not required <= keys or keys - required - {"student_features"}):
             raise ValueError("unsupported student matching evidence schema")
-        for value in self.matching_evidence.values():
+        for name, value in self.matching_evidence.items():
+            shape = self.target.disparity.shape
+            feature_shape_ok = (
+                (
+                    value.ndim == 4
+                    and value.shape[0] == shape[0]
+                    and value.shape[1] > 0
+                    and value.shape[2:] == tuple((n + 3) // 4 for n in shape[2:])
+                )
+                if isinstance(value, torch.Tensor)
+                else False
+            )
             if (
                 not isinstance(value, torch.Tensor)
-                or value.shape != self.target.disparity.shape
+                or (not feature_shape_ok if name == "student_features" else value.shape != shape)
                 or value.device != self.target.disparity.device
                 or value.requires_grad
                 or not bool(torch.isfinite(value).all())
@@ -234,6 +251,7 @@ class StudentReconstructionModel(ReferenceReconstructionModel):
         sample_ids: Sequence[str] | None = None,
         data_role: str | None = None,
         include_matching_evidence: bool = False,
+        include_feature_tokens: bool = False,
     ) -> StudentReconstructionResult:
         """Run canonical reconstruction with explicit student output provenance."""
         if not isinstance(batch, DeploymentStereoBatch):
@@ -241,7 +259,9 @@ class StudentReconstructionModel(ReferenceReconstructionModel):
         if target is not None or alignment is not None:
             raise ValueError("student forward does not accept teacher targets/alignment")
         disparity, evidence = self.stereo_student.predict_with_evidence(
-            batch, include_evidence=include_matching_evidence
+            batch,
+            include_evidence=include_matching_evidence,
+            include_feature_tokens=include_feature_tokens,
         )
         base = self._reconstruct_prediction(
             batch,

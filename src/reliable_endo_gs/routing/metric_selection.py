@@ -52,7 +52,10 @@ class MetricRepairSelector:
 
     @torch.no_grad()
     def select(
-        self, features: torch.Tensor, costs_ms: torch.Tensor, valid: torch.Tensor,
+        self,
+        features: torch.Tensor,
+        costs_ms: torch.Tensor,
+        valid: torch.Tensor,
         remaining_ms: float,
     ) -> Decision:
         """Costs/valid [R,3] are in STOP/STEREO/GAUSSIAN enum order.
@@ -68,11 +71,19 @@ class MetricRepairSelector:
         candidate_valid = valid.clone()
         candidate_valid[:, 0] = False
         decision = select_tradeoff(
-            changes.detach().cpu().tolist(), risks.detach().cpu().tolist(),
-            costs_ms.detach().cpu().tolist(), candidate_valid.detach().cpu().tolist(),
-            remaining_ms=remaining_ms, scales=self.predictor.metric_scale.tolist(),
+            changes.detach().cpu().tolist(),
+            risks.detach().cpu().tolist(),
+            costs_ms.detach().cpu().tolist(),
+            candidate_valid.detach().cpu().tolist(),
+            remaining_ms=remaining_ms,
+            scales=self.predictor.metric_scale.tolist(),
             config=self.config,
         )
-        action = {"STOP": Action.STOP, "learned_stereo": Action.STEREO,
-                  "gaussian": Action.GAUSSIAN}[decision.action]
-        return Decision(decision.region_index, action, decision.utility, decision.estimated_action_ms)
+        action = {
+            "STOP": Action.STOP,
+            "learned_stereo": Action.STEREO,
+            "gaussian": Action.GAUSSIAN,
+        }[decision.action]
+        return Decision(
+            decision.region_index, action, decision.utility, decision.estimated_action_ms
+        )

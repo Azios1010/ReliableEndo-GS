@@ -127,9 +127,7 @@ def load_action_checkpoint(
     learner.selector_optimizer.load_state_dict(raw["selector_optimizer"])
     learner.cost_max_ms = costs.to(device)
     learner.cost_observations = observations
-    learner.cost_history = (
-        new_cost_history(device) if history is None else history.to(device)
-    )
+    learner.cost_history = new_cost_history(device) if history is None else history.to(device)
     learner.cost_history_observations = history_observations
     learner.deployment_cost_calibration = calibration
     restore_rng(rng, device)
