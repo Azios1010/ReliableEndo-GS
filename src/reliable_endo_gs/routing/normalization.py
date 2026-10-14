@@ -64,6 +64,7 @@ class TrainingNormalization(nn.Module):
         *,
         sample_id: str,
         role: str,
+        action_available: torch.Tensor | None = None,
     ) -> None:
         """Commit AFTER a successful joint update; never called by inference."""
         if role != "final_train" or sample_id.split("/")[0] not in {
@@ -77,19 +78,39 @@ class TrainingNormalization(nn.Module):
         feature_count, utility_count = int(self.counts[0]), int(self.counts[1])
         if global_gain.shape != (features.shape[0], 3) or local_gain.shape != global_gain.shape:
             raise ValueError("normalizer utility labels must be [R,3]")
+        if action_available is None:
+            action_available = torch.ones(
+                global_gain.shape, dtype=torch.bool, device=features.device
+            )
+        if (
+            action_available.shape != global_gain.shape
+            or action_available.dtype != torch.bool
+            or action_available.device != features.device
+            or not bool(action_available[:, 0].all())
+        ):
+            raise ValueError(
+                "normalizer action availability must be bool [R,3] with STOP available"
+            )
         if not bool((global_gain[:, 0] == 0).all() & (local_gain[:, 0] == 0).all()):
             raise ValueError("normalizer STOP gains must be exactly zero")
-        if feature_count + features.shape[0] > self.feature_rows.shape[0]:
-            raise ValueError("normalizer feature capacity exceeded")
         if not bool(
             torch.isfinite(features).all()
             & torch.isfinite(global_gain).all()
             & torch.isfinite(local_gain).all()
         ):
             raise ValueError("normalizer observations must be finite")
-        n = min(features.shape[0], self.feature_rows.shape[0] - feature_count)
-        self.feature_rows[feature_count : feature_count + n].copy_(features[:n].detach())
-        utilities = torch.stack((global_gain[:, 1:], local_gain[:, 1:]), -1).reshape(-1, 2).detach()
+        feature_mask = action_available[:, 1:].any(-1)
+        if not bool(feature_mask.any()):
+            return
+        observed_features = features[feature_mask]
+        if feature_count + observed_features.shape[0] > self.feature_rows.shape[0]:
+            raise ValueError("normalizer feature capacity exceeded")
+        n = min(observed_features.shape[0], self.feature_rows.shape[0] - feature_count)
+        self.feature_rows[feature_count : feature_count + n].copy_(observed_features[:n].detach())
+        utilities = torch.stack((global_gain[:, 1:], local_gain[:, 1:]), -1).reshape(-1, 2)
+        utilities = utilities[action_available[:, 1:].reshape(-1)].detach()
+        if utilities.numel() == 0:
+            return
         if utility_count + utilities.shape[0] > self.utility_rows.shape[0]:
             raise ValueError("normalizer utility capacity exceeded")
         m = utilities.shape[0]

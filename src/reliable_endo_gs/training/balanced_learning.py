@@ -189,11 +189,13 @@ def balanced_step(
         # Counterfactuals are detached supervision.  STOP is always an exact
         # zero-risk/zero-gain reference; only repair actions carry risk labels.
         harms = features.new_tensor([[float(row.harmful) for row in table] for table in tables])
-        label_available = torch.tensor(
-            [all(row.metric_observed for row in table) for table in tables],
+        action_available = torch.tensor(
+            [[row.metric_observed for row in table] for table in tables],
             device=features.device,
             dtype=torch.bool,
         )
+        action_available[:, 0] = True
+        label_available = action_available[:, 1:].any(-1)
         # Only labels/features are batched. Every historical sample is run again
         # with this exact current actor snapshot; no stale outcome replay.
         fit_features = [features]
@@ -203,7 +205,7 @@ def balanced_step(
         fit_risk = (
             [_risk_components(tables, features)] if cfg.selector_risk_mode == "local_global" else []
         )
-        fit_available = [label_available]
+        fit_available = [action_available]
         context_diagnostics = []
         if selector_context:
             from reliable_endo_gs.training.student_learning import evaluation_mode
@@ -241,27 +243,29 @@ def balanced_step(
                             )
                             for r in context_regions
                         ]
-                        context_global = features.new_tensor(
+                        context_global = context_features.new_tensor(
                             [[row.utility for row in t] for t in context_tables]
                         )
                         context_local = features.new_tensor(
                             [[row.local_gain for row in t] for t in context_tables]
                         )
-                        context_harms = features.new_tensor(
+                        context_harms = context_features.new_tensor(
                             [[float(row.harmful) for row in t] for t in context_tables]
                         )
-                        context_available = torch.tensor(
-                            [all(row.metric_observed for row in t) for t in context_tables],
+                        context_action_available = torch.tensor(
+                            [[row.metric_observed for row in t] for t in context_tables],
                             device=features.device,
                             dtype=torch.bool,
                         )
+                        context_action_available[:, 0] = True
+                        context_available = context_action_available[:, 1:].any(-1)
                         fit_features.append(context_features)
                         fit_global.append(context_global)
                         fit_local.append(context_local)
                         fit_harms.append(context_harms)
                         if cfg.selector_risk_mode == "local_global":
-                            fit_risk.append(_risk_components(context_tables, features))
-                        fit_available.append(context_available)
+                            fit_risk.append(_risk_components(context_tables, context_features))
+                        fit_available.append(context_action_available)
                         context_diagnostics.append(
                             {
                                 "sample_id": context_sample.sample_id,
@@ -284,6 +288,7 @@ def balanced_step(
                                 if cfg.selector_risk_mode == "local_global"
                                 else None,
                                 "label_available": context_available.cpu().tolist(),
+                                "action_available": context_action_available.cpu().tolist(),
                             }
                         )
             finally:
@@ -294,10 +299,12 @@ def balanced_step(
         snapshot_local = torch.cat(fit_local).detach()
         snapshot_harms = torch.cat(fit_harms).detach()
         snapshot_risk = torch.cat(fit_risk).detach() if fit_risk else None
-        snapshot_available = torch.cat(fit_available)
+        snapshot_action_available = torch.cat(fit_available)
+        snapshot_available = snapshot_action_available[:, 1:].any(-1)
         selector_training_ready = selector_training_ready and bool(snapshot_available.any())
         diag["selector_snapshot_context"] = context_diagnostics
         diag["selector_snapshot_known_regions"] = int(snapshot_available.sum())
+        diag["selector_snapshot_known_actions"] = int(snapshot_action_available[:, 1:].sum())
         diag["selector_snapshot_frames"] = 1 + len(context_diagnostics)
         diag["selector_snapshot_protocol"] = "fresh_current_actor_multi_frame.v1"
         diag["selector_observed_regions"] = int(label_available.sum())
@@ -317,6 +324,7 @@ def balanced_step(
                 risk_components=None
                 if snapshot_risk is None
                 else snapshot_risk[snapshot_available],
+                action_available=snapshot_action_available[snapshot_available],
                 train_harm=not cfg.selector_gain_only_refinement
                 or cfg.selector_updates_per_snapshot == 1,
             )
@@ -337,12 +345,21 @@ def balanced_step(
             else "global_decision_local_auxiliary"
         )
         repair_terms = []
+        geometry_stereo_global_pixels = 0
+        geometry_stereo_local_pixels = 0
         for region, table in zip(regions, tables, strict=True):
             before = table[0].components_before
             for action in (Action.STEREO, Action.GAUSSIAN):
                 outcome = learner.actions.execute(state, region, action, learner.model)
                 if cfg.geometry_supervision_weight and action == Action.STEREO:
                     assert metric_truth is not None
+                    global_depth = metric_depth_objective(
+                        outcome.disparity,
+                        state.batch,
+                        metric_truth,
+                        sample_id=sample.sample_id,
+                        scale_mm=cfg.geometry_loss_scale_mm,
+                    )
                     local_depth = metric_depth_objective(
                         outcome.disparity,
                         state.batch,
@@ -351,8 +368,17 @@ def balanced_step(
                         scale_mm=cfg.geometry_loss_scale_mm,
                         region_mask=region.mask(state.batch.left),
                     )
-                    if local_depth.pixels:
-                        geometry_repairs.append(local_depth.loss)
+                    if global_depth.pixels or local_depth.pixels:
+                        # Keep both full-frame preservation and local repair
+                        # support in the action objective.  Missing support is
+                        # an explicit zero contribution, never a new label.
+                        geometry_repairs.append(
+                            cfg.stereo_repair_geometry_weight
+                            * (global_depth.loss + local_depth.loss)
+                            / (2 if global_depth.pixels and local_depth.pixels else 1)
+                        )
+                    geometry_stereo_global_pixels += global_depth.pixels
+                    geometry_stereo_local_pixels += local_depth.pixels
                 quality_components = measure_quality(state, outcome, region)
                 local = (
                     quality_components.local_rgb / cfg.rgb_scale
@@ -373,6 +399,10 @@ def balanced_step(
                     + cfg.collateral_weight * outside
                 )
         repair = torch.stack(repair_terms).mean()
+        diag.update(
+            geometry_stereo_global_pixels=geometry_stereo_global_pixels,
+            geometry_stereo_local_pixels=geometry_stereo_local_pixels,
+        )
         cost_rows = features.new_tensor([[row.cost_ms for row in table] for table in tables])
         # Persist component labels from the same before-update snapshot, not only scalar utility.
         diag["interventions"] = [
@@ -434,10 +464,11 @@ def balanced_step(
     )
     if cfg.geometry_supervision_weight:
         local_geometry = torch.stack(geometry_repairs).mean() if geometry_repairs else geometry * 0
-        geometry = geometry + cfg.stereo_repair_geometry_weight * local_geometry
+        geometry = geometry + local_geometry
         terms += (geometry,)
         diag.update(
             geometry_stereo_local_loss=float(local_geometry.detach()),
+            geometry_stereo_action_loss=float(local_geometry.detach()),
             geometry_stereo_observed_regions=len(geometry_repairs),
         )
     pending = None
@@ -499,6 +530,7 @@ def balanced_step(
                 risk_components=None
                 if snapshot_risk is None
                 else snapshot_risk[snapshot_available],
+                action_available=snapshot_action_available[snapshot_available],
                 train_harm=not cfg.selector_gain_only_refinement
                 or refinement == cfg.selector_updates_per_snapshot - 2,
             )
@@ -526,7 +558,12 @@ def balanced_step(
                 local_targets[label_available],
                 sample_id=sample.sample_id,
                 role=sample.data_role,
+                action_available=action_available[label_available],
             )
+        # Metric availability is independent of measured execution time.  An
+        # unknown GT outcome still has a valid timing sample when the action
+        # executed successfully; only action precondition failures emit zero
+        # cost rows from the harness.
         learner.record_action_costs(cost_rows)
     if joint and selector_training_ready:
         assert selector_pending is not None

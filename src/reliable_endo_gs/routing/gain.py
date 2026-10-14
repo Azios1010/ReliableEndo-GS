@@ -88,6 +88,7 @@ def signed_gain_losses(
     targets: torch.Tensor,
     scale: torch.Tensor,
     row_weights: torch.Tensor | None = None,
+    action_available: torch.Tensor | None = None,
 ) -> dict[str, torch.Tensor]:
     """Per-action [2] proper sign BCE and conditional magnitude mean-squared loss.
 
@@ -118,6 +119,15 @@ def signed_gain_losses(
         ):
             raise ValueError("signed gain row weights must be positive finite [R]")
         weights = row_weights[:, None].detach()
+    if action_available is None:
+        action_available = torch.ones_like(targets, dtype=torch.bool)
+    if (
+        action_available.shape != targets.shape
+        or action_available.dtype != torch.bool
+        or action_available.device != targets.device
+    ):
+        raise ValueError("signed gain action availability must be bool [R,2]")
+    weights = weights * action_available.detach()
     positive = targets.detach() > 0
     sign = F.binary_cross_entropy_with_logits(
         prediction.positive_logits, positive.float(), reduction="none"
@@ -137,9 +147,9 @@ def signed_gain_losses(
         )
 
     return {
-        "probability": (sign * weights).sum(0) / weights.sum(0),
+        "probability": (sign * weights).sum(0) / weights.sum(0).clamp_min(1e-12),
         "positive": conditional(positive_error, positive),
         "negative": conditional(negative_error, ~positive),
-        "positive_count": positive.sum(0),
-        "negative_count": (~positive).sum(0),
+        "positive_count": (positive & action_available).sum(0),
+        "negative_count": ((~positive) & action_available).sum(0),
     }

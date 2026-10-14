@@ -161,6 +161,17 @@ def test_allocator_highest_gain_once_cost_budget_harm_and_stop():
         select_repairability(gains, harm, cost, valid, float("nan"), cfg)
 
 
+def test_allocator_can_penalize_measured_latency_after_budget_gate():
+    cfg = InterventionConfig(cost_weight_per_ms=0.01)
+    gains = torch.tensor([[0.0, 0.10, 0.11]])
+    harm = torch.zeros_like(gains)
+    costs = torch.tensor([[0.0, 1.0, 10.0]])
+    valid = torch.tensor([True])
+    # Raw Gaussian gain is larger, but its measured latency penalty makes
+    # stereo the expected-utility winner.
+    assert select_repairability(gains, harm, costs, valid, 100.0, cfg).action == Action.STEREO
+
+
 def test_features_detached_no_gt_and_matching_zero_identity(setup):
     learner, sample, _ = setup
     state = learner.state(sample)

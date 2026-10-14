@@ -142,8 +142,8 @@ def test_grouped_risk_bounds_stop_and_binary_supervision():
         head.objective(x, gain, gain, torch.zeros_like(harms), risk_components=components)
     with pytest.raises(ValueError, match="exact OR"):
         head.objective(x, gain, gain, harms)
-    with pytest.raises(ValueError, match="event-aware"):
-        CalibratedSelector(head, head.config, {}, "mask")
+    calibrated = CalibratedSelector(head, head.config, {}, "mask")
+    assert calibrated.head.config.selector_risk_mode == "local_global"
 
 
 def test_grouped_risk_learns_local_global_and_union_on_synthetic_evidence():

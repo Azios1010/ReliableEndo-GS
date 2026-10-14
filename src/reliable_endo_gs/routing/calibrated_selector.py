@@ -33,12 +33,12 @@ class CalibratedSelector(nn.Module):
         mask_identity: str,
     ) -> None:
         super().__init__()
-        if head.config.selector_gain_mode != "regression":
-            raise ValueError("signed expected gain requires component-aware calibration")
-        if head.config.selector_risk_mode != "union":
-            raise ValueError(
-                "local/global/any risk requires event-aware calibration; scalar Platt artifacts are incompatible"
-            )
+        # Calibration is applied to the deployment-facing global gain and
+        # ``any_guard_violation`` logit.  Signed gain heads already expose an
+        # expected global utility, while grouped local/global heads expose the
+        # learned any-event logit through ``utility_and_risk_logits``.  The
+        # auxiliary local/global logits remain available for diagnostics and
+        # are not used as the safety gate.
         self.head = head.eval().requires_grad_(False)
         self.config = decision_config
         self.action_identity = dict(action_identity)
@@ -93,6 +93,10 @@ class CalibratedSelector(nn.Module):
             "metric_scales",
             "stereo_utility_multiplier",
             "gaussian_guard_multiplier",
+            "repair_max_disparity_px",
+            "cost_weight_per_ms",
+            "maximum_stereo_harm_probability",
+            "maximum_gaussian_harm_probability",
         ):
             if getattr(self.head.config, key) != getattr(self.config, key):
                 raise ValueError(

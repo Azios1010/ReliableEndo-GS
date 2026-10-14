@@ -153,9 +153,16 @@ class StudentLearner:
         self.actions = RepairActions(
             model,
             width=routing.width,
-            max_disparity_px=routing.max_disparity_px
-            if intervention_config is None
-            else float(intervention_config.search_radius_px),
+            # Matching search is evidence collection; it must never widen the
+            # physical disparity correction bound.  Legacy callers without an
+            # intervention protocol retain the routing bound, while v2 may
+            # declare an explicit action bound.
+            max_disparity_px=(
+                routing.max_disparity_px
+                if intervention_config is None
+                or intervention_config.repair_max_disparity_px is None
+                else intervention_config.repair_max_disparity_px
+            ),
             composition_alpha_epsilon=routing.composition_alpha_epsilon,
             matching_head=matching_head,
             effective_fraction=0.25
@@ -298,9 +305,21 @@ class StudentLearner:
             p._version for m in (self.model, self.actions) for p in m.parameters()
         )
 
-    def record_action_costs(self, costs_ms: torch.Tensor) -> None:
+    def record_action_costs(
+        self, costs_ms: torch.Tensor, action_available: torch.Tensor | None = None
+    ) -> None:
         """Persist measured full-frame action costs for robust allocation."""
         rows = costs_ms.reshape(-1, 3)
+        if action_available is not None:
+            available = action_available.reshape(-1, 3)
+            if available.shape != rows.shape or available.dtype != torch.bool:
+                raise ValueError("action cost availability must be bool [R,3]")
+            # A cost row is only a complete timing observation when both real
+            # repairs were actually executed.  Never turn an unavailable action
+            # into a zero-latency sample.
+            rows = rows[available.all(1)]
+            if rows.numel() == 0:
+                return
         self.cost_max_ms = torch.maximum(self.cost_max_ms, rows.detach().amax(0))
         self.cost_history_observations = record_costs(
             self.cost_history, rows, self.cost_history_observations

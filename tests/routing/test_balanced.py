@@ -116,6 +116,34 @@ def test_stereo_priority_after_balance_survives_inverse_norm():
         balance.weighted_loss(losses, torch.tensor([float("nan"), 1.0]), pending)
 
 
+def test_action_specific_availability_masks_unknown_repair_labels():
+    cfg = InterventionConfig(
+        schema="intervention_selection.v2",
+        selector_architecture="separate_action_heads",
+        selector_balance_mode="per_action",
+    )
+    head = BalancedSelector(8, cfg)
+    features = torch.randn(4, len(BALANCED_FEATURE_NAMES))
+    targets = torch.zeros(4, 3)
+    harms = torch.zeros(4, 3)
+    available = torch.tensor(
+        [[True, True, False], [True, True, False], [True, True, False], [True, True, False]]
+    )
+    losses, _ = head.objective(
+        features,
+        targets,
+        targets,
+        harms,
+        action_available=available,
+    )
+    losses["gaussian_global"].backward()
+    assert all(
+        parameter.grad is not None
+        and bool(torch.equal(parameter.grad, torch.zeros_like(parameter.grad)))
+        for parameter in head.gain_network.branches["gaussian"].parameters()
+    )
+
+
 def test_component_targets_global_is_independent_of_local_aux():
     cfg = InterventionConfig(schema="intervention_selection.v2")
     base = dict(

@@ -247,10 +247,12 @@ def select_repairability(
         & (gains > config.minimum_gain)
     )
     allowed[:, 0] = False
-    # Append a STOP sentinel. All permitted gains exceed a nonnegative minimum,
-    # so STOP wins only when no repair is permitted. Transfer validation,
-    # winning index/gain/cost together instead of six separate host readbacks.
-    scores = torch.cat((gains.new_zeros(1), torch.where(allowed, gains, -torch.inf).flatten()))
+    # Cost remains a hard budget constraint.  An optional measured-latency
+    # penalty also participates in the ranking so an expensive action cannot
+    # win solely because its raw gain is marginally larger.  The default zero
+    # keeps historical gain-only semantics for legacy configurations.
+    utility = gains - config.cost_weight_per_ms * costs_ms
+    scores = torch.cat((gains.new_zeros(1), torch.where(allowed, utility, -torch.inf).flatten()))
     winner = scores.argmax()
     selected_gain = torch.cat((gains.new_zeros(1), gains.flatten()))[winner]
     selected_cost = torch.cat((costs_ms.new_zeros(1), costs_ms.flatten()))[winner]

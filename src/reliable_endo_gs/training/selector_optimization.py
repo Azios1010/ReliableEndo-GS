@@ -37,6 +37,7 @@ def selector_objective(
     train_harm: bool = True,
     row_weights: torch.Tensor | None = None,
     risk_components: torch.Tensor | None = None,
+    action_available: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor, dict[str, object]]:
     """Prepare [R,F] -> [R,3] supervision; commit EMA after optimizer success.
 
@@ -50,6 +51,7 @@ def selector_objective(
         harms.detach(),
         row_weights=row_weights,
         risk_components=None if risk_components is None else risk_components.detach(),
+        action_available=None if action_available is None else action_available.detach(),
     )
     names, groups = _balance_layout(selector.config)
     if balancer.names != names or balancer.groups != groups:

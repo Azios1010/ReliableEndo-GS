@@ -129,3 +129,14 @@ def test_freeze_opt_in_keeps_historical_hash_and_rejects_incompatible_schedule(s
         )
     with pytest.raises(ValueError, match="mode"):
         replace(cfg, student_update_mode="depth_only")
+
+
+def test_matching_search_radius_never_widens_repair_bound(setup):
+    old, _, _ = setup
+    cfg = replace(old.intervention_config, search_radius_px=16, repair_max_disparity_px=None)
+    learner = StudentLearner(old.model, old.config, old.routing, intervention_config=cfg)
+    assert learner.actions.max_disparity_px == pytest.approx(old.routing.max_disparity_px)
+
+    explicit = replace(cfg, repair_max_disparity_px=2.0)
+    bounded = StudentLearner(old.model, old.config, old.routing, intervention_config=explicit)
+    assert bounded.actions.max_disparity_px == pytest.approx(2.0)

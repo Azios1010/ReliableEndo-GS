@@ -8,7 +8,7 @@ from typing import Any
 
 import torch
 
-from reliable_endo_gs.actions.repair import Action, RepairActions, RepairState
+from reliable_endo_gs.actions.repair import Action, RepairActions, RepairState, action_eligible
 from reliable_endo_gs.reconstruction.model import ReferenceReconstructionModel
 from reliable_endo_gs.regions.grid import Region
 from reliable_endo_gs.training.metric_quality import (
@@ -64,6 +64,36 @@ class BalancedHarness(RepairabilityHarness):
                     after = before
                     elapsed = 0.0
                 else:
+                    if not action_eligible(state, region, action):
+                        # Keep the action in the fixed [STOP, stereo, Gaussian]
+                        # table, but mark only this action unavailable.  A
+                        # missing action outcome must not be converted into a
+                        # safe zero label or invalidate the other action.
+                        rows.append(
+                            BalancedIntervention(
+                                action,
+                                before["global_rgb"],
+                                before["global_rgb"],
+                                before["local_rgb"],
+                                before["local_rgb"],
+                                0.0,
+                                0.0,
+                                before["global_warp"],
+                                before["global_warp"],
+                                before["outside_rgb"],
+                                before["outside_rgb"],
+                                False,
+                                0.0,
+                                before,
+                                before,
+                                None,
+                                False,
+                                {"unavailable": "action_precondition"},
+                                None,
+                                None,
+                            )
+                        )
+                        continue
                     device = state.batch.left.device
                     if device.type == "cuda":
                         torch.cuda.synchronize(device)
@@ -103,8 +133,9 @@ class BalancedHarness(RepairabilityHarness):
                         key: label[key] for key in ("metric_support", "metric_unavailable_reasons")
                     }
                     observed = changes is not None
-                    # Unknown outcomes carry no selector label. The training
-                    # caller excludes their entire region from supervision.
+                    # Unknown outcomes carry no selector label for this action;
+                    # the training caller masks the action while preserving
+                    # any independently observed alternative.
                     gain, local, harm = (
                         metric_targets(changes, self.config, int(action))
                         if changes is not None

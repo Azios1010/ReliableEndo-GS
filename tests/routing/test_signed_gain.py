@@ -102,8 +102,8 @@ def test_signed_expected_gain_units_negative_cost_and_component_packing():
     gain.sum().backward()
     assert x.grad is None
     assert all(p.grad is None for p in head.harm_network.parameters())
-    with pytest.raises(ValueError, match="component-aware"):
-        CalibratedSelector(head, head.config, {}, "mask")
+    calibrated = CalibratedSelector(head, head.config, {}, "mask")
+    assert calibrated.head.config.selector_gain_mode == "signed_expectation"
 
 
 def test_gain_readout_expansion_preserves_risk_trunks_and_rng_stream():

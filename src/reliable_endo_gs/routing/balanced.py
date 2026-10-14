@@ -244,6 +244,7 @@ class BalancedSelector(RepairabilitySelector):
         *,
         row_weights: torch.Tensor | None = None,
         risk_components: torch.Tensor | None = None,
+        action_available: torch.Tensor | None = None,
     ) -> tuple[dict[str, torch.Tensor], dict[str, object]]:
         """Return component losses; the training layer owns gradient balancing."""
         global_prediction, local_prediction, event_logits, gain_components = (
@@ -275,11 +276,30 @@ class BalancedSelector(RepairabilitySelector):
         ):
             raise ValueError("selector row weights must be positive finite [R]")
 
-        def reduce_rows(values: torch.Tensor) -> torch.Tensor:
-            if row_weights is None:
-                return values.mean()
-            rows = values.reshape(features.shape[0], -1).mean(1)
-            return (rows * row_weights.detach()).sum() / row_weights.detach().sum()
+        if action_available is None:
+            action_available = torch.ones_like(global_target, dtype=torch.bool)
+        if (
+            action_available.shape != global_target.shape
+            or action_available.dtype != torch.bool
+            or action_available.device != features.device
+            or not bool(action_available[:, 0].all())
+        ):
+            raise ValueError("selector action availability must be bool [R,3] with STOP available")
+        available = action_available[:, 1:]
+
+        def reduce_rows(values: torch.Tensor, mask: torch.Tensor | None = None) -> torch.Tensor:
+            if mask is None:
+                mask = torch.ones_like(values, dtype=torch.bool)
+            if mask.shape != values.shape:
+                if values.ndim == 2 and mask.shape == (values.shape[0],):
+                    mask = mask[:, None].expand_as(values)
+                else:
+                    raise ValueError("selector reduction mask shape mismatch")
+            weights = mask.to(values.dtype)
+            if row_weights is not None:
+                weights = weights * row_weights.detach().reshape(-1, *([1] * (values.ndim - 1)))
+            denominator = weights.sum()
+            return (values * weights).sum() / denominator.clamp_min(1e-12)
 
         g = global_prediction / global_scale
         local_normalized = local_prediction / local_scale
@@ -287,12 +307,18 @@ class BalancedSelector(RepairabilitySelector):
         gain_terms = None
         if gain_components is None:
             global_errors = F.smooth_l1_loss(g[:, 1:], t[:, 1:], reduction="none")
-            global_action_losses = torch.stack([reduce_rows(global_errors[:, i]) for i in (0, 1)])
-            global_loss = reduce_rows(global_errors)
+            global_action_losses = torch.stack(
+                [reduce_rows(global_errors[:, i], available[:, i]) for i in (0, 1)]
+            )
+            global_loss = reduce_rows(global_errors, available)
             gain_probability_loss = global_prediction.new_zeros(())
         else:
             gain_terms = signed_gain_losses(
-                gain_components, global_target[:, 1:], global_scale, row_weights
+                gain_components,
+                global_target[:, 1:],
+                global_scale,
+                row_weights,
+                available,
             )
             # Sign BCE stays outside the magnitude/local gradient balancer.
             global_action_losses = (gain_terms["positive"] + gain_terms["negative"]) / 2
@@ -303,7 +329,7 @@ class BalancedSelector(RepairabilitySelector):
             local_target.detach()[:, 1:] / local_scale,
             reduction="none",
         )
-        local_loss = reduce_rows(local_errors)
+        local_loss = reduce_rows(local_errors, available)
         # Ranking units are explicit in the config.  Raw units preserve the
         # historical objective; train_scale compares labels after the common
         # TRAIN-fitted gain transform.  This avoids changing old checkpoint
@@ -343,8 +369,12 @@ class BalancedSelector(RepairabilitySelector):
                 torch.as_tensor(separation, device=g.device, dtype=g.dtype),
             )
             error = (separation - normalized_margin.sign() * (g[:, a] - g[:, b])).clamp_min(0)
-            rank_terms.append(reduce_rows(error * weight * informative))
-            informative_pairs.append(informative.float().mean())
+            pair_available = action_available[:, a] & action_available[:, b]
+            rank_terms.append(reduce_rows(error * weight * informative, pair_available))
+            informative_pairs.append(
+                (informative & pair_available).float().sum()
+                / pair_available.float().sum().clamp_min(1)
+            )
         ranking = torch.stack(rank_terms).mean()
         # Use logits directly rather than probability BCE for numerical stability.
         harm_errors = F.binary_cross_entropy_with_logits(
@@ -370,12 +400,12 @@ class BalancedSelector(RepairabilitySelector):
             event_errors = torch.cat((local_global_errors, harm_errors[..., None]), -1)
             # Fixed mean over three dimensionless events, retaining total harm weight.
             harm_errors = event_errors.mean(-1)
-        harm_loss = reduce_rows(harm_errors)
+        harm_loss = reduce_rows(harm_errors, available)
         action_losses = {}
         for i, action in enumerate(("stereo", "gaussian")):
             action_losses[f"{action}_global"] = global_action_losses[i]
-            action_losses[f"{action}_local"] = reduce_rows(local_errors[:, i])
-            action_losses[f"{action}_harm"] = reduce_rows(harm_errors[:, i])
+            action_losses[f"{action}_local"] = reduce_rows(local_errors[:, i], available[:, i])
+            action_losses[f"{action}_harm"] = reduce_rows(harm_errors[:, i], available[:, i])
             if gain_terms is not None:
                 action_losses[f"{action}_gain_probability"] = gain_terms["probability"][i]
         diagnostics = {
@@ -389,7 +419,10 @@ class BalancedSelector(RepairabilitySelector):
             "selector_ranking_margin_units": self.config.ranking_margin_units,
             "selector_ranking_margin": float(self.config.ranking_margin),
             "selector_ranking_gap_fraction": self.config.ranking_gap_fraction,
-            "selector_harm_positive_fraction": float(harms[:, 1:].detach().mean()),
+            "selector_harm_positive_fraction": float(
+                (harms[:, 1:] * available.to(harms.dtype)).sum()
+                / available.to(harms.dtype).sum().clamp_min(1)
+            ),
             # Local gain is deliberately an auxiliary target.  Global gain is
             # the sole decision utility; local supervision shapes the shared
             # encoder without counting the same render reward twice.
@@ -427,11 +460,13 @@ class BalancedSelector(RepairabilitySelector):
                     }
                 )
                 action_metrics[f"selector_{action}_harm_brier"] = reduce_rows(
-                    (logits[:, i].sigmoid() - harms[:, i + 1]).square()
+                    (logits[:, i].sigmoid() - harms[:, i + 1]).square(), available[:, i]
                 )
-                action_metrics[f"selector_{action}_harm_rate"] = reduce_rows(harms[:, i + 1])
+                action_metrics[f"selector_{action}_harm_rate"] = reduce_rows(
+                    harms[:, i + 1], available[:, i]
+                )
                 action_metrics[f"selector_{action}_global_gain_mae"] = reduce_rows(
-                    (global_prediction[:, i + 1] - global_target[:, i + 1]).abs()
+                    (global_prediction[:, i + 1] - global_target[:, i + 1]).abs(), available[:, i]
                 )
                 if gain_terms is not None:
                     assert gain_components is not None
@@ -440,9 +475,11 @@ class BalancedSelector(RepairabilitySelector):
                     for name in ("probability", "positive", "negative"):
                         action_metrics[f"selector_{action}_gain_{name}_loss"] = gain_terms[name][i]
                     action_metrics[f"selector_{action}_gain_positive_brier"] = reduce_rows(
-                        (probability - positive).square()
+                        (probability - positive).square(), available[:, i]
                     )
-                    action_metrics[f"selector_{action}_gain_positive_rate"] = reduce_rows(positive)
+                    action_metrics[f"selector_{action}_gain_positive_rate"] = reduce_rows(
+                        positive, available[:, i]
+                    )
                     for sign in ("positive", "negative"):
                         action_metrics[f"selector_{action}_gain_{sign}_count"] = gain_terms[
                             f"{sign}_count"
@@ -452,13 +489,14 @@ class BalancedSelector(RepairabilitySelector):
                     event_target = torch.cat((risk_components[:, i + 1], harms[:, i + 1, None]), -1)
                     for j, name in enumerate(("local", "global", "any")):
                         action_metrics[f"selector_{action}_risk_{name}_loss"] = reduce_rows(
-                            event_errors[:, i, j]
+                            event_errors[:, i, j], available[:, i]
                         )
                         action_metrics[f"selector_{action}_risk_{name}_brier"] = reduce_rows(
-                            (event_logits[:, i, j].sigmoid() - event_target[:, j]).square()
+                            (event_logits[:, i, j].sigmoid() - event_target[:, j]).square(),
+                            available[:, i],
                         )
                         action_metrics[f"selector_{action}_risk_{name}_rate"] = reduce_rows(
-                            event_target[:, j]
+                            event_target[:, j], available[:, i]
                         )
             values = torch.stack(tuple(action_metrics.values())).detach().cpu().tolist()
             diagnostics.update(dict(zip(action_metrics, values, strict=True)))

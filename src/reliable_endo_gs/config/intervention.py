@@ -19,6 +19,10 @@ class InterventionConfig:
     matching_width: int = 8
     search_radius_px: int = 16
     search_step_px: int = 2
+    # Candidate-search extent is independent from the maximum correction that
+    # a stereo repair may write into the canonical disparity grid. ``None``
+    # keeps the routing config as the owner for legacy callers.
+    repair_max_disparity_px: float | None = None
     matching_temperature: float = 0.05
     max_effective_fraction: float = 0.5
     kd_min_depth_m: float = 0.01
@@ -39,6 +43,9 @@ class InterventionConfig:
     maximum_harm_probability: float = 0.5
     minimum_gain: float = 0.0
     total_budget_ms: float = 1000.0
+    # Optional measured-latency penalty used after the hard remaining-budget
+    # check. Zero preserves historical gain-only ranking.
+    cost_weight_per_ms: float = 0.0
     # v2 optimization settings; v1 config hashes omit these fields.
     normalization_frames: int = 32
     normalization_rows: int = 256
@@ -218,6 +225,10 @@ class InterventionConfig:
         ):
             if type(getattr(self, name)) is not int or getattr(self, name) < 1:
                 raise ValueError(f"{name} must be a positive integer")
+        if self.repair_max_disparity_px is not None and (
+            not math.isfinite(self.repair_max_disparity_px) or self.repair_max_disparity_px <= 0
+        ):
+            raise ValueError("repair_max_disparity_px must be finite and positive when provided")
         if self.search_radius_px % self.search_step_px:
             raise ValueError("search step must divide radius")
         if self.schema == "intervention_selection.v2" and self.normalization_rows < 2:
@@ -238,6 +249,7 @@ class InterventionConfig:
                     "selector_feature_mode",
                     "selector_risk_mode",
                     "selector_gain_mode",
+                    "repair_max_disparity_px",
                 }
                 or value is None
             ):
@@ -325,6 +337,8 @@ class InterventionConfig:
             ("selector_risk_mode", "union"),
             ("selector_gain_mode", "regression"),
             ("gain_probability_weight", 1.0),
+            ("repair_max_disparity_px", None),
+            ("cost_weight_per_ms", 0.0),
         ):
             if data.get(key) == neutral:
                 data.pop(key, None)
@@ -371,6 +385,8 @@ V2_FIELDS = frozenset(
         "selector_risk_mode",
         "selector_gain_mode",
         "gain_probability_weight",
+        "repair_max_disparity_px",
+        "cost_weight_per_ms",
     }
 )
 
