@@ -282,7 +282,7 @@ def test_frozen_collection_is_gt_separate_and_hashes_actual_canonical_labels(set
         metric_changes=None,
     )
     content = json.dumps(unknown) + "\n"
-    (out / "samples.jsonl").write_text(content)
+    (out / "samples.jsonl").write_bytes(content.encode("utf-8"))
     meta = json.loads((out / "result.json").read_text())
     meta["samples_sha256"] = hashlib.sha256(content.encode()).hexdigest()
     (out / "result.json").write_text(json.dumps(meta))
@@ -297,7 +297,7 @@ def test_frozen_collection_is_gt_separate_and_hashes_actual_canonical_labels(set
     assert rows["interventions"][0]["actions"][1]["metric_diagnostics"] is not None
     rows["interventions"][0]["actions"][1]["global_gain"] += 1
     content = json.dumps(rows) + "\n"
-    (out / "samples.jsonl").write_text(content)
+    (out / "samples.jsonl").write_bytes(content.encode("utf-8"))
     meta = json.loads((out / "result.json").read_text())
     meta["samples_sha256"] = hashlib.sha256(content.encode()).hexdigest()
     (out / "result.json").write_text(json.dumps(meta))

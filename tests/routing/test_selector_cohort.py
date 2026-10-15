@@ -308,7 +308,7 @@ def test_sharded_resume_reuses_completed_work_and_preserves_unknown_partial_evid
                 }
             )
         content = "".join(json.dumps(r) + "\n" for r in rows)
-        (output_dir / "samples.jsonl").write_text(content)
+        (output_dir / "samples.jsonl").write_bytes(content.encode("utf-8"))
         meta = {
             **provenance,
             "schema": "frozen_selector_outcomes.v1",

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 from collections.abc import Mapping
 from dataclasses import asdict
 from pathlib import Path
@@ -81,6 +82,7 @@ def save_student_checkpoint(
                 "action_optimizer": learner.action_optimizer.state_dict(),
                 "selector_optimizer": learner.selector_optimizer.state_dict(),
                 "optimizer_update_counts": dict(learner.optimizer_update_counts),
+                "action_update_counts": dict(learner.action_update_counts),
                 "cost_max_ms": learner.cost_max_ms,
                 "cost_observations": learner.cost_observations,
                 "cost_history": learner.cost_history,
@@ -109,15 +111,22 @@ def read_student_checkpoint(path: Path) -> dict[str, Any]:
     return raw
 
 
-def initialize_student_model(path: Path, learner: StudentLearner) -> dict[str, str]:
+def initialize_student_model(
+    path: Path, learner: StudentLearner, *, require_trained: bool = False
+) -> dict[str, str]:
     """Explicit weights-only warm start; new repairs, selector, RNG and Adam.
 
     It is a new experiment, never a resume. Scientific construction and model
     tensor shapes must match. Historical source identity is recorded separately.
     """
-    import hashlib
-
     raw = read_student_checkpoint(path)
+    if require_trained:
+        updates, cursor = raw.get("optimizer_update_counts", {}), raw.get("cursor", {})
+        if not isinstance(updates, dict) or not isinstance(cursor, dict):
+            raise ValueError("invalid frozen initialization update provenance")
+        model_updates = updates.get("model", cursor.get("optimizer_steps", 0))
+        if type(model_updates) is not int or model_updates < 1:
+            raise ValueError("frozen initialization requires a trained Phase I model checkpoint")
     if raw.get("construction_config") != learner.model.config.to_dict():
         raise ValueError("warm-start scientific construction mismatch")
     architecture = raw.get("student_config")
@@ -143,11 +152,96 @@ def initialize_student_model(path: Path, learner: StudentLearner) -> dict[str, s
             or not bool(torch.isfinite(value).all())
         ):
             raise ValueError("warm-start student tensor mismatch")
-    learner.model.load_state_dict(state, strict=True)
-    return {
+    if require_trained:
+        adam = raw.get("model_optimizer", {})
+        moments = adam.get("state", {}) if isinstance(adam, dict) else {}
+        parameters = list(learner.model.parameters())
+        groups = adam.get("param_groups", []) if isinstance(adam, dict) else []
+        if not isinstance(groups, list) or any(
+            not isinstance(group, dict) or not isinstance(group.get("params"), list)
+            for group in groups
+        ):
+            raise ValueError("invalid frozen initialization model Adam groups")
+        ids = [index for group in groups for index in group.get("params", [])]
+        if (
+            not isinstance(moments, dict)
+            or len(ids) != len(parameters)
+            or len(set(ids)) != len(ids)
+            or set(moments) != set(ids)
+        ):
+            raise ValueError("frozen initialization requires trained model Adam state")
+        for index, parameter in zip(ids, parameters, strict=True):
+            entry = moments[index]
+            if not isinstance(entry, dict) or set(entry) != {"step", "exp_avg", "exp_avg_sq"}:
+                raise ValueError("invalid frozen initialization model Adam state")
+            step = entry["step"]
+            if (
+                not isinstance(step, torch.Tensor)
+                or step.numel() != 1
+                or float(step) != model_updates
+                or any(
+                    not isinstance(entry[name], torch.Tensor)
+                    or entry[name].shape != parameter.shape
+                    or not bool(torch.isfinite(entry[name]).all())
+                    for name in ("exp_avg", "exp_avg_sq")
+                )
+            ):
+                raise ValueError("invalid frozen initialization model Adam state")
+    recorded = raw.get("identity")
+    source = recorded.get("source_sha256") if isinstance(recorded, dict) else None
+    if not isinstance(source, str) or not source.strip():
+        raise ValueError("warm-start checkpoint requires source_sha256 provenance")
+    provenance = {
+        "mode": "checkpoint_model_only",
+        "checkpoint_path": str(path.resolve()),
         "checkpoint_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
-        "source_sha256": str(raw["identity"]["source_sha256"]),
+        "source_sha256": source,
     }
+    validate_model_initialization(provenance)
+    learner.model.load_state_dict(state, strict=True)
+    return provenance
+
+
+def validate_model_initialization(value: object) -> dict[str, str]:
+    """Validate immutable model ancestry, including historical two-field records.
+
+    Resume restores ancestry from its own checkpoint. It does not reload the
+    original warm-start file, which may have moved after the experiment began.
+    The original digest and source remain part of the strict run identity.
+    """
+    required = {"checkpoint_sha256", "source_sha256"}
+    optional = {"mode", "checkpoint_path"}
+    if (
+        not isinstance(value, dict)
+        or not required <= value.keys()
+        or value.keys() - required - optional
+        or any(not isinstance(v, str) or not v.strip() for v in value.values())
+    ):
+        raise ValueError("invalid model_initialization provenance")
+    digest = value["checkpoint_sha256"]
+    if len(digest) != 64 or any(c not in "0123456789abcdef" for c in digest):
+        raise ValueError("invalid model_initialization checkpoint SHA-256")
+    if "mode" in value and value["mode"] != "checkpoint_model_only":
+        raise ValueError("invalid model_initialization mode")
+    if ("mode" in value) != ("checkpoint_path" in value):
+        raise ValueError("incomplete model_initialization checkpoint provenance")
+    return dict(value)
+
+
+def restore_model_initialization(path: Path, identity: Mapping[str, object]) -> dict[str, object]:
+    """Restore ONLY model ancestry; source/config/data checks remain strict."""
+    recorded = read_student_checkpoint(path).get("identity")
+    if not isinstance(recorded, dict):
+        raise ValueError("missing student checkpoint identity")
+    restored = dict(identity)
+    if "model_initialization" in recorded:
+        provenance = validate_model_initialization(recorded["model_initialization"])
+        if "model_initialization" in identity and identity["model_initialization"] != provenance:
+            raise ValueError("model_initialization identity mismatch")
+        restored["model_initialization"] = provenance
+    elif "model_initialization" in identity:
+        raise ValueError("model_initialization missing from resume checkpoint")
+    return restored
 
 
 def import_frozen_student_actions(
@@ -252,6 +346,8 @@ def load_student_checkpoint(
     recorded = raw.get("identity")
     if not isinstance(recorded, dict):
         raise ValueError("missing student checkpoint identity")
+    if "model_initialization" in recorded:
+        validate_model_initialization(recorded["model_initialization"])
     if resume:
         compatible = recorded == dict(identity)
     else:
@@ -328,17 +424,39 @@ def load_student_checkpoint(
             "actions": observations,
             "selector": observations,
         }
+    context_labels = (
+        learner.intervention_config is not None
+        and learner.intervention_config.selector_context_frames > 1
+    )
     if (
         not isinstance(update_counts, dict)
         or set(update_counts) != {"model", "actions", "selector"}
         or any(type(value) is not int or value < 0 for value in update_counts.values())
         or update_counts["model"] != expected_model_updates
-        or update_counts["actions"] != observations
-        or update_counts["selector"] > update_counts["actions"] * updates_per_snapshot
+        or update_counts["actions"] < observations
+        or update_counts["actions"] > cursor["samples_seen"]
+        or update_counts["selector"]
+        > (cursor["samples_seen"] if context_labels else update_counts["actions"])
+        * updates_per_snapshot
         or update_counts["selector"] % updates_per_snapshot != 0
-        or (not burn_in and update_counts["selector"] != observations * updates_per_snapshot)
+        or (
+            "action_update_counts" not in raw
+            and not burn_in
+            and update_counts["selector"] != observations * updates_per_snapshot
+        )
     ):
         raise ValueError("invalid student optimizer update counts")
+    action_counts = raw.get(
+        "action_update_counts", dict.fromkeys(("stereo", "gaussian"), update_counts["actions"])
+    )
+    if (
+        not isinstance(action_counts, dict)
+        or set(action_counts) != {"stereo", "gaussian"}
+        or any(type(v) is not int or v < 0 for v in action_counts.values())
+        or max(action_counts.values()) > update_counts["actions"]
+        or sum(action_counts.values()) < update_counts["actions"]
+    ):
+        raise ValueError("invalid per-action optimizer update counts")
     history = raw.get("cost_history")
     history_observations = raw.get("cost_history_observations", 0)
     if history is not None and (
@@ -415,11 +533,14 @@ def load_student_checkpoint(
         probe_selector = copy.deepcopy(learner.selector)
         probe_selector.load_state_dict(raw["selector"], strict=True)
         probe_selector.validate_state()
-        if int(probe_selector.normalization.counts[2]) > observations:
+        if int(probe_selector.normalization.counts[2]) > update_counts["actions"]:
             raise ValueError("normalization cursor mismatch")
         if burn_in:
+            # Fresh context may train the selector on a sample whose current
+            # repairs cannot execute. Those labels do not step repair Adam.
+            snapshots = cursor["samples_seen"] if context_labels else update_counts["actions"]
             maximum_selector_updates = (
-                observations - int(probe_selector.normalization.counts[2])
+                snapshots - int(probe_selector.normalization.counts[2])
             ) * updates_per_snapshot
             physical_labels = (
                 learner.intervention_config is not None
@@ -475,7 +596,13 @@ def load_student_checkpoint(
             for group in test_optimizer.param_groups
             for p in group["params"]
         }
-        if len(test_optimizer.state) != (len(group_ids) if expected_steps else 0):
+        if owner == "actions":
+            action_names = [name.split(".", 1)[0] for name, _ in learner.actions.named_parameters()]
+            parameters = [p for group in test_optimizer.param_groups for p in group["params"]]
+            parameter_steps = {
+                p: action_counts[action] for p, action in zip(parameters, action_names, strict=True)
+            }
+        if len(test_optimizer.state) != sum(steps > 0 for steps in parameter_steps.values()):
             raise ValueError(f"incomplete student optimizer parameter state: {name}")
         for parameter, state in test_optimizer.state.items():
             if not isinstance(parameter, torch.Tensor) or set(state) != {
@@ -489,6 +616,7 @@ def load_student_checkpoint(
                 not isinstance(step, torch.Tensor)
                 or step.numel() != 1
                 or not bool(torch.isfinite(step).all())
+                or parameter_steps[parameter] <= 0
                 or float(step) != parameter_steps[parameter]
             ):
                 raise ValueError(f"invalid student Adam step: {name}")
@@ -521,6 +649,7 @@ def load_student_checkpoint(
         ):
             optimizer.load_state_dict(raw[name])
         learner.optimizer_update_counts = dict(update_counts)
+        learner.action_update_counts = dict(action_counts)
         learner.frozen_student_start_step = frozen_start if learner.student_frozen else None
         restore_rng(rng, device)
     learner.cost_max_ms = costs.to(device)

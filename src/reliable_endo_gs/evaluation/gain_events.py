@@ -5,6 +5,8 @@ from __future__ import annotations
 import statistics
 from typing import Any
 
+from reliable_endo_gs.evaluation.risk_events import validate_prediction_rows
+
 
 def gain_event_metrics(records: list[dict[str, Any]]) -> dict[str, Any]:
     """Score complete valid candidates; oracle opportunities are offline diagnostics.
@@ -13,6 +15,18 @@ def gain_event_metrics(records: list[dict[str, Any]]) -> dict[str, Any]:
     are excluded. No equal-action quota or development-fitted scale is used.
     """
     result: dict[str, Any] = {}
+    for record in records:
+        components = record.get("predicted_gain_components")
+        if not isinstance(components, dict):
+            raise ValueError("gain event metrics require recorded raw sign/magnitude predictions")
+        for component in ("positive_probability", "positive_gain", "negative_cost"):
+            validate_prediction_rows(
+                components.get(component),
+                len(record["valid_regions"]),
+                (3,),
+                name=f"predicted_gain_components.{component}",
+                probability=component == "positive_probability",
+            )
     for name, ai in (("STEREO", 1), ("GAUSSIAN", 2)):
         pairs = []
         opportunities = 0
@@ -42,6 +56,7 @@ def gain_event_metrics(records: list[dict[str, Any]]) -> dict[str, Any]:
         positive = [row for row in pairs if row[3] > 0]
         nonpositive = [row for row in pairs if row[3] <= 0]
         result[name] = {
+            "prediction_space": "raw_head_sign_and_magnitudes",
             "known_candidates": len(pairs),
             "positive_gain_rate": statistics.mean(row[3] > 0 for row in pairs) if pairs else None,
             "positive_and_safe_rate": statistics.mean(row[3] > 0 and not row[4] for row in pairs)

@@ -25,7 +25,7 @@ from reliable_endo_gs.training.repairability import RepairabilityHarness, Select
 class BalancedIntervention(SelectionIntervention):
     local_gain: float
     components_before: dict[str, float]
-    components_after: dict[str, float]
+    components_after: dict[str, float] | None
     metric_changes: list[float] | None = None
     metric_observed: bool = True
     metric_diagnostics: dict[str, Any] | None = None
@@ -76,7 +76,7 @@ class BalancedHarness(RepairabilityHarness):
                                 before["global_rgb"],
                                 before["local_rgb"],
                                 before["local_rgb"],
-                                0.0,
+                                None,
                                 0.0,
                                 before["global_warp"],
                                 before["global_warp"],
@@ -85,12 +85,14 @@ class BalancedHarness(RepairabilityHarness):
                                 False,
                                 0.0,
                                 before,
-                                before,
+                                None,
                                 None,
                                 False,
-                                {"unavailable": "action_precondition"},
                                 None,
                                 None,
+                                None,
+                                action_available=False,
+                                unavailable_reason="action_precondition",
                             )
                         )
                         continue

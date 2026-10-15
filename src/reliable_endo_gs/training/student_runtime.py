@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import hashlib
 import time
 from dataclasses import replace
@@ -120,10 +121,6 @@ def run_student_command(arguments: argparse.Namespace) -> dict[str, object]:
             raise ValueError("populated KD cache must be outside the repository")
     if output.exists():
         raise FileExistsError(f"refusing to overwrite output directory: {output}")
-    if not torch.cuda.is_available() or torch.cuda.device_count() != 1:
-        raise ValueError(
-            "real student rendering requires one visible GPU; use CPU synthetic tests locally"
-        )
     device = torch.device("cuda:0")
     raw = read_student_checkpoint(arguments.checkpoint) if infer else None
     intervention_path = getattr(arguments, "intervention_config", None)
@@ -189,10 +186,23 @@ def run_student_command(arguments: argparse.Namespace) -> dict[str, object]:
                 raise ValueError(
                     "bounded burn-in smoke needs normalization_frames <= 2; use the remediation smoke config"
                 )
-        if smoke and (config.student_epochs != 1 or config.joint_epochs != expected_joint):
+        if (
+            intervention_config is not None
+            and intervention_config.student_update_mode == "frozen"
+            and initialize_from is None
+            and arguments.checkpoint is None
+        ):
             raise ValueError(
-                f"bounded smoke requires one student and {expected_joint} joint updates"
+                "frozen training requires --initialize-model-from a Phase I checkpoint"
             )
+        if smoke and (config.student_epochs not in (0, 1) or config.joint_epochs != expected_joint):
+            raise ValueError(
+                f"bounded smoke requires zero or one student and {expected_joint} joint updates"
+            )
+    if not torch.cuda.is_available() or torch.cuda.device_count() != 1:
+        raise ValueError(
+            "real student rendering requires one visible GPU; use CPU synthetic tests locally"
+        )
     if construction.runtime.device != "cuda:0" or construction.data_role != "final_train":
         raise ValueError("native student construction must pin cuda:0 and final_train")
     if construction.runtime.precision != "fp32":
@@ -277,7 +287,9 @@ def run_student_command(arguments: argparse.Namespace) -> dict[str, object]:
             matching_evidence_protocol="student_matching_shared_pass.v1",
         )
     if initialize_from is not None:
-        identity["model_initialization"] = initialize_student_model(initialize_from, learner)
+        identity["model_initialization"] = initialize_student_model(
+            initialize_from, learner, require_trained=learner.student_frozen
+        )
     if infer:
         assert arguments.checkpoint is not None
         load_student_checkpoint(arguments.checkpoint, learner, identity, len(dataset), resume=False)
@@ -478,6 +490,8 @@ def run_student_command(arguments: argparse.Namespace) -> dict[str, object]:
                 }
                 for name, module in smoke_modules.items()
             }
+            before_model_state = copy.deepcopy(model.state_dict())
+            before_model_adam = copy.deepcopy(learner.model_optimizer.state_dict())
             torch.cuda.synchronize(device)
             torch.cuda.reset_peak_memory_stats(device)
             started = time.perf_counter()
@@ -486,7 +500,7 @@ def run_student_command(arguments: argparse.Namespace) -> dict[str, object]:
             learner,
             identity,
             output,
-            max_steps=1 + config.joint_epochs if smoke else arguments.max_steps,
+            max_steps=config.student_epochs + config.joint_epochs if smoke else arguments.max_steps,
             resume=arguments.checkpoint,
             target_provider=target_provider,
             metric_truth_provider=metric_truth_provider,
@@ -504,11 +518,45 @@ def run_student_command(arguments: argparse.Namespace) -> dict[str, object]:
                 )
                 for name, module in smoke_modules.items()
             }
-            if not all(changed.values()):
+            expected_changes = {
+                name: not learner.student_frozen if name in ("student", "head") else True
+                for name in smoke_modules
+            }
+            model_state_unchanged = _state_equal(before_model_state, model.state_dict())
+            model_adam_unchanged = _state_equal(
+                before_model_adam, learner.model_optimizer.state_dict()
+            )
+            if changed != expected_changes or (
+                learner.student_frozen and not (model_state_unchanged and model_adam_unchanged)
+            ):
                 raise ValueError(
-                    f"smoke failed to update every scheduled parameter group: {changed}"
+                    "smoke parameter/Adam ownership mismatch: "
+                    f"changed={changed}, expected={expected_changes}, "
+                    f"model_state_unchanged={model_state_unchanged}, "
+                    f"model_adam_unchanged={model_adam_unchanged}"
                 )
             report["parameters_changed"] = changed
+            report["model_state_unchanged"] = model_state_unchanged
+            report["model_adam_unchanged"] = model_adam_unchanged
             report["zero_repair_render_errors"] = zero_repair_render_errors
     write_json_atomic(output / "result.json", report)
     return report
+
+
+def _state_equal(first: object, second: object) -> bool:
+    """Exact nested tensor equality for smoke ownership checks, including Adam."""
+    if isinstance(first, torch.Tensor):
+        return isinstance(second, torch.Tensor) and torch.equal(first, second)
+    if isinstance(first, dict):
+        return (
+            isinstance(second, dict)
+            and first.keys() == second.keys()
+            and all(_state_equal(value, second[key]) for key, value in first.items())
+        )
+    if isinstance(first, (list, tuple)):
+        return (
+            type(first) is type(second)
+            and len(first) == len(second)
+            and all(_state_equal(a, b) for a, b in zip(first, second, strict=True))
+        )
+    return first == second

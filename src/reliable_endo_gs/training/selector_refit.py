@@ -156,12 +156,6 @@ def run_selector_refit(
     config = StudentLearningConfig(**raw["student_config"])
     routing = RoutingConfig(**raw["routing_config"])
     intervention = InterventionConfig(**raw["intervention_config"])
-    if intervention.selector_gain_mode != "regression":
-        raise ValueError("scalar selector-refit requires component-aware signed gain calibration")
-    if intervention.selector_risk_mode != "union":
-        raise ValueError(
-            "scalar selector-refit calibration does not support local/global/any risk; use joint training and event evaluation"
-        )
     mask_config = MaskProposalConfig(**raw["mask_config"])
     masks = TargetMaskIndex(target_mask_index)
     if masks.identity != work.get("target_mask_index_sha256"):
@@ -409,7 +403,7 @@ def run_selector_refit(
                 _cpu_tree(
                     {
                         **provenance,
-                        "schema": "calibrated_selector.v1",
+                        "schema": calibrated.artifact_schema,
                         "width": routing.width,
                         "head_config": head.config.to_dict(),
                         "decision_config": intervention.to_dict(),

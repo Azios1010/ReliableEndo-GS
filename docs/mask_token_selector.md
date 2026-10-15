@@ -116,9 +116,10 @@ Preserve previous checkpoints and output directories.
 - Stationary head fitting can consume these tensors. Native intervention
   assessment reports per-event candidate/selected Brier, means and harm rates,
   with unknowns excluded. Existing depth/render/utility/guard/cost reports remain.
-- The old scalar Platt calibration/refit artifact is **incompatible** with this
-  event model and fails early. Event-aware CAL fitting is not implemented in
-  this pass. The separate historical 61-feature OutcomePredictor cannot be
+- The subsequent [joint/frozen remediation](joint_frozen_remediation_validation.md)
+  implements event-aware CAL fitting and records support for local/global/any
+  separately. Historical scalar calibration artifacts remain incompatible with
+  the event model. The separate historical 61-feature OutcomePredictor cannot be
   attached to a token selector. Neither path silently substitutes an old head.
 
 ## Next bounded command template — not executed in this pass

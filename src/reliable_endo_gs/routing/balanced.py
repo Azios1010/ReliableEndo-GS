@@ -146,10 +146,10 @@ class BalancedSelector(RepairabilitySelector):
         self, features: torch.Tensor
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Historical output interface; extra gain components are explicit elsewhere."""
-        global_gain, local_gain, harm, _ = self._encoded_outputs_with_gain(features)
+        global_gain, local_gain, harm, _ = self.outputs_with_logits(features)
         return global_gain, local_gain, harm
 
-    def _encoded_outputs_with_gain(
+    def outputs_with_logits(
         self, features: torch.Tensor
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, SignedGainPrediction | None]:
         """Single encoding; grouped risk logits [R,2,3] in local/global/any order.
@@ -206,7 +206,7 @@ class BalancedSelector(RepairabilitySelector):
         torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor | None, SignedGainPrediction | None
     ]:
         """One encode for decision gains, risks and optional sign/magnitude outputs."""
-        global_gain, local_gain, logits, components = self._encoded_outputs_with_gain(features)
+        global_gain, local_gain, logits, components = self.outputs_with_logits(features)
         if self.config.selector_risk_mode == "local_global":
             events = torch.cat((logits.new_zeros((logits.shape[0], 1, 3)), logits.sigmoid()), 1)
             return global_gain, local_gain, events[:, :, 2], events, components
@@ -232,6 +232,8 @@ class BalancedSelector(RepairabilitySelector):
         gains: torch.Tensor,
         harms: torch.Tensor,
         config: InterventionConfig,
+        *,
+        action_available: torch.Tensor | None = None,
     ) -> torch.Tensor:
         raise ValueError("balanced selector requires explicit local/global component targets")
 
@@ -248,7 +250,7 @@ class BalancedSelector(RepairabilitySelector):
     ) -> tuple[dict[str, torch.Tensor], dict[str, object]]:
         """Return component losses; the training layer owns gradient balancing."""
         global_prediction, local_prediction, event_logits, gain_components = (
-            self._encoded_outputs_with_gain(features)
+            self.outputs_with_logits(features)
         )
         grouped = self.config.selector_risk_mode == "local_global"
         logits = event_logits[:, :, 2] if grouped else event_logits

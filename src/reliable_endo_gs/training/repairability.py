@@ -14,6 +14,7 @@ from reliable_endo_gs.actions.repair import (
     ActionResult,
     RepairActions,
     RepairState,
+    action_eligible,
     eligible,
 )
 from reliable_endo_gs.config.intervention import InterventionConfig
@@ -27,6 +28,7 @@ from reliable_endo_gs.training.distillation import stereo_distillation
 from reliable_endo_gs.training.interventions import (
     Intervention,
     InterventionHarness,
+    intervention_costs,
     reconstruction_loss,
 )
 
@@ -141,6 +143,26 @@ class RepairabilityHarness(InterventionHarness):
                 )
             ]
             for action in (Action.STEREO, Action.GAUSSIAN):
+                if not action_eligible(state, region, action):
+                    rows.append(
+                        SelectionIntervention(
+                            action,
+                            rgb,
+                            rgb,
+                            local,
+                            local,
+                            None,
+                            0.0,
+                            stereo,
+                            stereo,
+                            outside,
+                            outside,
+                            False,
+                            action_available=False,
+                            unavailable_reason="action_precondition",
+                        )
+                    )
+                    continue
                 device = state.batch.left.device
                 if device.type == "cuda":
                     torch.cuda.synchronize(device)
@@ -238,9 +260,15 @@ def repairability_step(
             learner.actions.requires_grad_(True)
         gains = features.new_tensor([[r.utility for r in rows]])
         harms = features.new_tensor([[float(r.harmful) for r in rows]])
-        selector_loss = learner.selector.loss(features, gains, harms, cfg)
+        costs, action_available = intervention_costs(rows, features)
+        selector_ready = bool(action_available[1:].any())
+        selector_loss = learner.selector.loss(
+            features, gains, harms, cfg, action_available=action_available.unsqueeze(0)
+        )
         repair_losses = []
         for action in (Action.STEREO, Action.GAUSSIAN):
+            if not action_eligible(state, full, action):
+                continue
             outcome = learner.actions.execute(state, full, action, learner.model)
             repair_losses.append(
                 reconstruction_loss(state, outcome) / cfg.rgb_scale
@@ -248,8 +276,7 @@ def repairability_step(
                 * stereo_consistency_loss(state, outcome.disparity)
                 / cfg.stereo_scale
             )
-        repair = torch.stack(repair_losses).mean()
-        costs = features.new_tensor([r.cost_ms for r in rows])
+        repair = torch.stack(repair_losses).mean() if repair_losses else rgb * 0
         diagnostics.update({f"gain_{r.action.name.lower()}": r.utility for r in rows})
         diagnostics.update({f"harm_{r.action.name.lower()}": float(r.harmful) for r in rows})
     loss = (
@@ -261,11 +288,21 @@ def repairability_step(
     if not bool(torch.isfinite(loss) & torch.isfinite(selector_loss)):
         raise ValueError("nonfinite repairability loss")
     loss.backward()
-    if joint:
+    if joint and selector_ready:
         selector_loss.backward()
-    diagnostics.update(learner.commit_gradients(joint))
+    diagnostics.update(
+        learner.commit_gradients(
+            joint,
+            update_selector=joint and selector_ready,
+            active_repairs=tuple(
+                action
+                for action in (Action.STEREO, Action.GAUSSIAN)
+                if joint and action_eligible(state, full, action)
+            ),
+        )
+    )
     if joint:
-        learner.record_action_costs(costs)
+        learner.record_action_costs(costs, action_available)
     return {
         "loss": float(loss.detach()),
         "reconstruction": float(rgb.detach()),

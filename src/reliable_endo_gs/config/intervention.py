@@ -226,9 +226,19 @@ class InterventionConfig:
             if type(getattr(self, name)) is not int or getattr(self, name) < 1:
                 raise ValueError(f"{name} must be a positive integer")
         if self.repair_max_disparity_px is not None and (
-            not math.isfinite(self.repair_max_disparity_px) or self.repair_max_disparity_px <= 0
+            isinstance(self.repair_max_disparity_px, bool)
+            or not isinstance(self.repair_max_disparity_px, (int, float))
+            or not math.isfinite(self.repair_max_disparity_px)
+            or self.repair_max_disparity_px <= 0
         ):
             raise ValueError("repair_max_disparity_px must be finite and positive when provided")
+        if (
+            isinstance(self.cost_weight_per_ms, bool)
+            or not isinstance(self.cost_weight_per_ms, (int, float))
+            or not math.isfinite(self.cost_weight_per_ms)
+            or self.cost_weight_per_ms < 0
+        ):
+            raise ValueError("cost_weight_per_ms must be finite and nonnegative")
         if self.search_radius_px % self.search_step_px:
             raise ValueError("search step must divide radius")
         if self.schema == "intervention_selection.v2" and self.normalization_rows < 2:
@@ -301,7 +311,7 @@ class InterventionConfig:
         return hashlib.sha256(json.dumps(self.to_dict(), sort_keys=True).encode()).hexdigest()
 
     def to_dict(self) -> dict[str, object]:
-        """Preserve historical v1 serialization and identity exactly."""
+        """Keep legacy defaults stable; retain repair bounds and latency penalties."""
         data = asdict(self)
         if self.schema == "intervention_selection.v1":
             data = {k: v for k, v in data.items() if k not in V2_FIELDS}
@@ -385,8 +395,6 @@ V2_FIELDS = frozenset(
         "selector_risk_mode",
         "selector_gain_mode",
         "gain_probability_weight",
-        "repair_max_disparity_px",
-        "cost_weight_per_ms",
     }
 )
 

@@ -56,6 +56,45 @@ class TrainingNormalization(nn.Module):
         return transformed.clamp(-self.config.feature_clip, self.config.feature_clip)
 
     @torch.no_grad()
+    def diagnostics(self, values: torch.Tensor) -> dict[str, object]:
+        """Read-only clipping/drift counts for finite raw features [R,F].
+
+        Clipping fractions use all feature entries as the denominator. Changes
+        in inactive columns are reported separately because their fitted
+        transform discards those values instead of clipping them. These are
+        normalization diagnostics, not calibrated uncertainty estimates.
+        """
+        self(values)  # Keep input validation identical to the deployed transform.
+        fitted = bool(self.fitted)
+        clipped = torch.zeros_like(values, dtype=torch.bool)
+        inactive_changed = torch.zeros_like(clipped)
+        outside_fit = None
+        if fitted:
+            raw = values.float()
+            clipped = self.active & (
+                ((raw - self.center) / self.scale).abs() > self.config.feature_clip
+            )
+            inactive_changed = ~self.active & (
+                (raw - self.center).abs() > self.config.normalization_floor
+            )
+            observed = self.feature_rows[: int(self.counts[0])]
+            outside_fit = int(((raw < observed.amin(0)) | (raw > observed.amax(0))).sum())
+        clipped_count = int(clipped.sum())
+        return {
+            "fitted": fitted,
+            "snapshots_observed": int(self.counts[2]),
+            "rows": values.shape[0],
+            "features": values.shape[1],
+            "active_features": int(self.active.sum()) if fitted else None,
+            "feature_clip": self.config.feature_clip,
+            "clipped_values": clipped_count,
+            "clipped_fraction": clipped_count / values.numel() if values.numel() else 0.0,
+            "clipped_values_per_feature": clipped.sum(0).cpu().tolist(),
+            "inactive_changed_values": int(inactive_changed.sum()),
+            "outside_fit_range_values": outside_fit,
+        }
+
+    @torch.no_grad()
     def observe(
         self,
         features: torch.Tensor,

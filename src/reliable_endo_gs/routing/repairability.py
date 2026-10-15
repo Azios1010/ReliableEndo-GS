@@ -170,26 +170,42 @@ class RepairabilitySelector(ActionSelector):
         gains: torch.Tensor,
         harms: torch.Tensor,
         config: InterventionConfig,
+        *,
+        action_available: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """Detached counterfactual targets; ranking weights measured gain margins."""
         if gains.shape != (features.shape[0], 3) or harms.shape != gains.shape:
             raise ValueError("selector targets must be [R,3]")
+        if action_available is None:
+            action_available = torch.ones_like(gains, dtype=torch.bool)
+        if action_available.shape != gains.shape or action_available.dtype != torch.bool:
+            raise ValueError("selector action availability must be bool [R,3]")
         raw = self.network(features.float())
         prediction = torch.cat((torch.zeros_like(raw[:, :1]), raw[:, :2]), 1)
         gain_target = gains.detach()
-        regression = nn.functional.smooth_l1_loss(prediction[:, 1:], gain_target[:, 1:])
+        available = action_available[:, 1:]
+        regression = (
+            nn.functional.smooth_l1_loss(prediction[:, 1:], gain_target[:, 1:], reduction="none")
+            * available
+        ).sum() / available.sum().clamp_min(1)
         rank_terms = []
         for i, j in ((0, 1), (0, 2), (1, 2)):
             margin = gain_target[:, i] - gain_target[:, j]
-            informative = margin.abs() > config.ranking_margin
+            pair_available = action_available[:, i] & action_available[:, j]
+            informative = (margin.abs() > config.ranking_margin) & pair_available
             error = (
                 config.ranking_margin - margin.sign() * (prediction[:, i] - prediction[:, j])
             ).clamp_min(0)
-            rank_terms.append((error * margin.abs() * informative).mean())
+            rank_terms.append(
+                (error * margin.abs() * informative).sum() / pair_available.sum().clamp_min(1)
+            )
         ranking = torch.stack(rank_terms).mean()
-        harm = nn.functional.binary_cross_entropy_with_logits(
-            raw[:, 2:], harms.detach()[:, 1:].float()
-        )
+        harm = (
+            nn.functional.binary_cross_entropy_with_logits(
+                raw[:, 2:], harms.detach()[:, 1:].float(), reduction="none"
+            )
+            * available
+        ).sum() / available.sum().clamp_min(1)
         return regression + config.ranking_weight * ranking + config.harm_weight * harm
 
 

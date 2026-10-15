@@ -68,7 +68,11 @@ from reliable_endo_gs.teachers import AlignedTeacherTarget
 from reliable_endo_gs.training.a04_reference import _move_batch
 from reliable_endo_gs.training.distillation import stereo_distillation
 from reliable_endo_gs.training.gradient_balance import GradientBalance
-from reliable_endo_gs.training.interventions import InterventionHarness, reconstruction_loss
+from reliable_endo_gs.training.interventions import (
+    InterventionHarness,
+    intervention_costs,
+    reconstruction_loss,
+)
 from reliable_endo_gs.training.metric_quality import OfflineMetricTruth
 from reliable_endo_gs.training.selector_optimization import make_selector_balancer
 from reliable_endo_gs.training.student_config import StudentLearningConfig
@@ -219,6 +223,7 @@ class StudentLearner:
                 else intervention_config.selector_weight_decay,
             )
         self.optimizer_update_counts = {"model": 0, "actions": 0, "selector": 0}
+        self.action_update_counts = {"stereo": 0, "gaussian": 0}
         self.harness: InterventionHarness = InterventionHarness(routing.cost_weight_per_ms)
         if intervention_config is not None:
             from reliable_endo_gs.training.repairability import RepairabilityHarness
@@ -500,16 +505,20 @@ class StudentLearner:
             finally:
                 self.actions.requires_grad_(True)
             labels = features.new_tensor([[row.utility for row in rows]])
-            selector_loss = F.mse_loss(self.selector(features)[:, 1:], labels[:, 1:])
-            repair = torch.stack(
-                [
-                    reconstruction_loss(
-                        state, self.actions.execute(state, full, action, self.model)
-                    )
-                    for action in (Action.STEREO, Action.GAUSSIAN)
-                ]
-            ).mean()
-            costs = features.new_tensor([row.cost_ms for row in rows])
+            costs, action_available = intervention_costs(rows, features)
+            selector_ready = bool(action_available[1:].any())
+            selector_error = F.mse_loss(
+                self.selector(features)[:, 1:], labels[:, 1:], reduction="none"
+            )
+            selector_loss = (selector_error * action_available[1:]).sum() / (
+                action_available[1:].sum().clamp_min(1)
+            )
+            repair_losses = [
+                reconstruction_loss(state, self.actions.execute(state, full, action, self.model))
+                for action in (Action.STEREO, Action.GAUSSIAN)
+                if action_eligible(state, full, action)
+            ]
+            repair = torch.stack(repair_losses).mean() if repair_losses else rgb * 0
             diagnostics.update({f"utility_{row.action.name.lower()}": row.utility for row in rows})
         loss = (
             self.config.reconstruction_weight * rgb
@@ -519,11 +528,21 @@ class StudentLearner:
         if not bool(torch.isfinite(loss)):
             raise ValueError("nonfinite student loss")
         loss.backward()
-        if joint:
+        if joint and selector_ready:
             selector_loss.backward()
-        diagnostics.update(self.commit_gradients(joint))
+        diagnostics.update(
+            self.commit_gradients(
+                joint,
+                update_selector=joint and selector_ready,
+                active_repairs=tuple(
+                    action
+                    for action in (Action.STEREO, Action.GAUSSIAN)
+                    if joint and action_eligible(state, full, action)
+                ),
+            )
+        )
         if joint:
-            self.record_action_costs(costs)
+            self.record_action_costs(costs, action_available)
         return {
             "loss": float(loss.detach()),
             "reconstruction": float(rgb.detach()),
@@ -534,7 +553,12 @@ class StudentLearner:
         }
 
     def commit_gradients(
-        self, joint: bool, *, update_selector: bool = True, selector_only: bool = False
+        self,
+        joint: bool,
+        *,
+        update_selector: bool = True,
+        selector_only: bool = False,
+        active_repairs: tuple[Action, ...] | None = None,
     ) -> dict[str, float]:
         """One shared finite-gradient/ownership/update path for both protocols."""
         update_selector = joint and update_selector
@@ -546,8 +570,23 @@ class StudentLearner:
         groups: list[tuple[nn.Module, torch.optim.Adam]] = (
             [] if self.student_frozen else [(self.model, self.model_optimizer)]
         )
+        if active_repairs is None:
+            active_repairs = (Action.STEREO, Action.GAUSSIAN) if joint else ()
+        if len(set(active_repairs)) != len(active_repairs) or any(
+            action not in (Action.STEREO, Action.GAUSSIAN) for action in active_repairs
+        ):
+            raise ValueError("active repairs must be unique stereo/Gaussian actions")
+        repair_components = {
+            name: module
+            for action, name, module in (
+                (Action.STEREO, "stereo", self.actions.stereo),
+                (Action.GAUSSIAN, "gaussian", self.actions.gaussian),
+            )
+            if joint and action in active_repairs
+        }
         if joint:
-            groups.append((self.actions, self.action_optimizer))
+            if repair_components:
+                groups.append((self.actions, self.action_optimizer))
             if update_selector:
                 groups.append((self.selector, self.selector_optimizer))
         components = (
@@ -560,8 +599,7 @@ class StudentLearner:
         )
         if joint:
             components.update(
-                stereo_repair=self.actions.stereo,
-                gaussian_repair=self.actions.gaussian,
+                {f"{name}_repair": module for name, module in repair_components.items()}
             )
             if update_selector:
                 components["selector"] = self.selector
@@ -648,8 +686,10 @@ class StudentLearner:
             # Model gradients exist solely for matched balancing probes and
             # input derivatives through the frozen head. Never step its Adam.
             self.model_optimizer.zero_grad(set_to_none=True)
-        if joint and not selector_only:
+        if joint and repair_components and not selector_only:
             self.optimizer_update_counts["actions"] += 1
+            for name in repair_components:
+                self.action_update_counts[name] += 1
         if update_selector:
             self.optimizer_update_counts["selector"] += 1
         return diagnostics

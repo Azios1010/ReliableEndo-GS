@@ -12,7 +12,13 @@ from typing import Any
 
 import torch
 
-from reliable_endo_gs.actions.repair import Action, ActionResult, eligible
+from reliable_endo_gs.actions.repair import (
+    Action,
+    ActionResult,
+    RepairState,
+    action_eligible,
+    eligible,
+)
 from reliable_endo_gs.config.intervention import InterventionConfig
 from reliable_endo_gs.data.scared_a00 import ScaredA00Adapter, load_a01_manifest
 from reliable_endo_gs.data.target_masks import TargetMaskIndex
@@ -22,13 +28,14 @@ from reliable_endo_gs.evaluation.rendering import psnr, windowed_ssim
 from reliable_endo_gs.evaluation.risk_events import risk_event_metrics
 from reliable_endo_gs.reconstruction import ReferenceConfig
 from reliable_endo_gs.reconstruction.student import StudentReconstructionModel
-from reliable_endo_gs.regions.grid import grid_regions
+from reliable_endo_gs.regions.grid import Region, grid_regions
 from reliable_endo_gs.regions.masks import MaskRegion
 from reliable_endo_gs.rendering.production import ProductionFieldRenderer
 from reliable_endo_gs.routing.balanced import BalancedSelector
 from reliable_endo_gs.routing.calibrated_selector import CalibratedSelector
 from reliable_endo_gs.routing.config import RoutingConfig
 from reliable_endo_gs.routing.cost import load_cost_calibration
+from reliable_endo_gs.routing.gain import SignedGainPrediction
 from reliable_endo_gs.routing.masks import MaskProposalConfig
 from reliable_endo_gs.routing.metric_selection import module_state_sha256
 from reliable_endo_gs.routing.repairability import (
@@ -56,6 +63,29 @@ from reliable_endo_gs.training.student_checkpoint import (
 from reliable_endo_gs.training.student_config import StudentLearningConfig
 from reliable_endo_gs.training.student_learning import StudentLearner, evaluation_mode
 from reliable_endo_gs.utils.io import write_json_atomic
+
+
+def _selection_outputs(
+    predictor: BalancedSelector | CalibratedSelector | RepairabilitySelector,
+    features: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None, SignedGainPrediction | None]:
+    """Keep complete diagnostics in the same prediction space as the decision."""
+    if isinstance(predictor, (BalancedSelector, CalibratedSelector)):
+        gains, _, harms, events, components = predictor.outputs_with_components(features)
+        return gains, harms, events, components
+    gains, harms = predictor.predict(features)
+    return gains, harms, None, None
+
+
+def _action_availability(
+    state: RepairState, regions: tuple[Region | MaskRegion, ...]
+) -> torch.Tensor:
+    """Deployment preconditions [R,3], independent of offline GT availability."""
+    return torch.tensor(
+        [[action_eligible(state, region, action) for action in Action] for region in regions],
+        device=state.batch.left.device,
+        dtype=torch.bool,
+    ).reshape(-1, 3)
 
 
 def _weights(learner: StudentLearner) -> str:
@@ -236,7 +266,7 @@ def _evaluate_intervention_selection(
         learner.load_refit_selector(selector_refit_path, source_sha256(repo))
     refit = learner.metric_selector
     if refit is not None and not isinstance(refit, CalibratedSelector):
-        raise ValueError("intervention evaluator requires the calibrated scalar selector")
+        raise ValueError("intervention evaluator requires the calibrated selector")
     refit_before = None if refit is None else module_state_sha256(refit)
     if (
         cfg.metric_quality is not None
@@ -290,10 +320,13 @@ def _evaluate_intervention_selection(
             )
         )
         warm_regions = learner.candidate_regions(warm, ids[0])
-        warm_region = next((r for r in warm_regions if eligible(warm, r)), None)
-        if warm_region is not None and not base_only:
+        if not base_only:
             for action in (Action.STEREO, Action.GAUSSIAN):
-                learner.actions.execute(warm, warm_region, action, model)
+                warm_region = next(
+                    (r for r in warm_regions if action_eligible(warm, r, action)), None
+                )
+                if warm_region is not None:
+                    learner.actions.execute(warm, warm_region, action, model)
         del warm
         for index, sid in enumerate(ids):
             sample = adapter.load(
@@ -312,18 +345,15 @@ def _evaluate_intervention_selection(
             valid = torch.tensor(
                 [eligible(state, r) for r in regions], device=device, dtype=torch.bool
             )
+            executable = _action_availability(state, regions)
             event_predictions = None
             gain_components = None
             if regions:
                 features = learner.selection_features(state, regions)
-                if refit is None and isinstance(learner.selector, BalancedSelector):
-                    gains, _, harms, event_predictions, gain_components = (
-                        learner.selector.outputs_with_components(features)
-                    )
-                else:
-                    gains, harms = (refit if refit is not None else learner.selector).predict(
-                        features
-                    )
+                predictor = refit if refit is not None else learner.selector
+                gains, harms, event_predictions, gain_components = _selection_outputs(
+                    predictor, features
+                )
             else:
                 features = (
                     state.batch.left.new_empty((0, len(learner.selector.normalization.center)))
@@ -341,9 +371,9 @@ def _evaluate_intervention_selection(
             routing_ms = (time.perf_counter() - t0) * 1000
             remaining = max(0.0, cfg.total_budget_ms - base_ms - routing_ms)
             decision = (
-                refit.select(features, costs, valid, remaining)
+                refit.select(features, costs, executable, remaining)
                 if refit is not None
-                else select_repairability(gains, harms, costs, valid, remaining, cfg)
+                else select_repairability(gains, harms, costs, executable, remaining, cfg)
             )
             torch.cuda.synchronize(device)
             routing_ms = (time.perf_counter() - t0) * 1000
@@ -362,7 +392,8 @@ def _evaluate_intervention_selection(
             }
             actual_gains = torch.zeros_like(gains)
             actual_harms = torch.zeros_like(harms)
-            actual_available = torch.ones_like(harms, dtype=torch.bool)
+            actual_available = executable.clone()
+            skipped_actions = []
             for ri in eligible_ids:
                 region = regions[ri]
                 stereo_before = float(stereo_consistency_loss(state, stop.disparity, region))
@@ -373,6 +404,23 @@ def _evaluate_intervention_selection(
                     else None
                 )
                 for action in (Action.STEREO, Action.GAUSSIAN):
+                    if not bool(executable[ri, int(action)]):
+                        skipped_actions.append(
+                            {
+                                "region_id": ri,
+                                "action": action.name,
+                                "action_available": False,
+                                "action_executed": False,
+                                "action_unavailable_reason": "action_precondition",
+                                "selector_label_available": False,
+                                "action_ms": None,
+                                "estimated_action_ms": None,
+                                "within_estimated_budget": False,
+                                "metric_changes": None,
+                                "metric_feasible": None,
+                            }
+                        )
+                        continue
                     torch.cuda.synchronize(device)
                     t0 = time.perf_counter()
                     outcome = learner.actions.execute(state, region, action, model)
@@ -408,21 +456,35 @@ def _evaluate_intervention_selection(
                         "harm": harm,
                         "action_ms": elapsed,
                         "rgb_loss": rgb_after,
+                        "action_available": True,
+                        "action_executed": True,
                         **component_record,
                     }
                     actual_gains[ri, int(action)] = gain
                     actual_harms[ri, int(action)] = float(harm)
-            oracle = select_repairability(actual_gains, actual_harms, costs, valid, remaining, cfg)
+            oracle = select_repairability(
+                actual_gains,
+                actual_harms,
+                costs,
+                executable,
+                remaining,
+                cfg,
+                risk_available=actual_available,
+            )
             selected_key = (decision.region_index, int(decision.action))
             oracle_key = (oracle.region_index, int(oracle.action))
             policies = {"base": (None, 0), "selector": selected_key, "oracle": oracle_key}
             fixed = eligible_ids[index % len(eligible_ids)] if eligible_ids else None
             policies.update(
                 fixed_stereo=(fixed, 1)
-                if fixed is not None and 0 < float(costs[fixed, 1]) <= remaining
+                if fixed is not None
+                and bool(executable[fixed, 1])
+                and 0 < float(costs[fixed, 1]) <= remaining
                 else (None, 0),
                 fixed_gaussian=(fixed, 2)
-                if fixed is not None and 0 < float(costs[fixed, 2]) <= remaining
+                if fixed is not None
+                and bool(executable[fixed, 2])
+                and 0 < float(costs[fixed, 2]) <= remaining
                 else (None, 0),
             )
             for name, action_id in (
@@ -430,7 +492,10 @@ def _evaluate_intervention_selection(
                 ("gaussian_predicted_region", 2),
             ):
                 allowed = [
-                    ri for ri in eligible_ids if 0 < float(costs[ri, action_id]) <= remaining
+                    ri
+                    for ri in eligible_ids
+                    if bool(executable[ri, action_id])
+                    and 0 < float(costs[ri, action_id]) <= remaining
                 ]
                 ri = max(allowed, key=lambda ri: float(gains[ri, action_id])) if allowed else None
                 policies[name] = (ri, action_id) if ri is not None else (None, 0)
@@ -489,7 +554,7 @@ def _evaluate_intervention_selection(
                     actual_gains,
                     actual_harms,
                     costs,
-                    valid,
+                    executable,
                     remaining,
                     cfg,
                     risk_available=actual_available,
@@ -553,12 +618,28 @@ def _evaluate_intervention_selection(
                 "remaining_ms": remaining,
                 "predicted_gains": gains.tolist(),
                 "predicted_harms": harms.tolist(),
+                "prediction_metadata": refit.prediction_metadata()
+                if refit is not None
+                else {
+                    "source": "raw_joint_head",
+                    "global_gain": "raw_expected_utility",
+                    "risk_any": "raw_probability",
+                    "risk_events": "raw_probabilities",
+                    "gain_components": "raw_head_sign_and_magnitudes",
+                    "gain_components_reconstruct": "predicted_gains",
+                },
                 "actual_gains": actual_gains.tolist(),
                 "actual_harms": actual_harms.tolist(),
                 "actual_label_available": actual_available.tolist(),
+                "action_available": executable.tolist(),
                 "oracle_agreement": selected_key == oracle_key,
                 "valid_regions": valid.tolist(),
                 "features_raw": features.detach().cpu().tolist(),
+                "feature_normalization": (
+                    refit.head if refit is not None else learner.selector
+                ).normalization.diagnostics(features)
+                if isinstance(learner.selector, BalancedSelector)
+                else None,
                 "safe_gain_regret": None
                 if not observed[selected_key].get("selector_label_available", True)
                 else observed[oracle_key]["gain"]
@@ -582,12 +663,18 @@ def _evaluate_intervention_selection(
                         "region_id": key[0],
                         "action": Action(key[1]).name,
                         "action_ms": observed[key]["action_ms"],
+                        "action_available": True,
+                        "action_executed": True,
+                        "selector_label_available": observed[key].get(
+                            "selector_label_available", True
+                        ),
                         "estimated_action_ms": float(costs[key[0], key[1]]),
                         "within_estimated_budget": 0 < float(costs[key[0], key[1]]) <= remaining,
                         **value,
                     }
                     for key, value in metric_outcomes.items()
-                ],
+                ]
+                + skipped_actions,
             }
             if cfg.selector_risk_mode == "local_global":
                 record["predicted_risk_events"] = (
@@ -741,6 +828,7 @@ def _evaluate_intervention_selection(
         if any(r["safe_gain_regret"] is not None for r in records)
         else None,
         "harm_calibration": calibration,
+        "prediction_metadata": records[0]["prediction_metadata"],
         "risk_event_calibration": risk_event_metrics(records, cfg)
         if cfg.selector_risk_mode == "local_global"
         else None,

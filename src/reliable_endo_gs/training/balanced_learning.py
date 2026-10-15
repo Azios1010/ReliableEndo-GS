@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 
 import torch
 
-from reliable_endo_gs.actions.repair import Action, eligible
+from reliable_endo_gs.actions.repair import Action, action_eligible, eligible
 from reliable_endo_gs.data.scared_a00 import ScaredA00Sample
 from reliable_endo_gs.regions.grid import grid_regions
 from reliable_endo_gs.regions.masks import MaskRegion
@@ -16,7 +16,7 @@ from reliable_endo_gs.routing.balanced import BalancedSelector
 from reliable_endo_gs.teachers import AlignedTeacherTarget
 from reliable_endo_gs.training.balanced_interventions import BalancedHarness, BalancedIntervention
 from reliable_endo_gs.training.distillation import stereo_distillation
-from reliable_endo_gs.training.interventions import reconstruction_loss
+from reliable_endo_gs.training.interventions import intervention_costs, reconstruction_loss
 from reliable_endo_gs.training.metric_objective import metric_depth_objective
 from reliable_endo_gs.training.metric_quality import OfflineMetricTruth
 from reliable_endo_gs.training.quality_components import measure_quality
@@ -190,7 +190,7 @@ def balanced_step(
         # zero-risk/zero-gain reference; only repair actions carry risk labels.
         harms = features.new_tensor([[float(row.harmful) for row in table] for table in tables])
         action_available = torch.tensor(
-            [[row.metric_observed for row in table] for table in tables],
+            [[row.action_available and row.metric_observed for row in table] for table in tables],
             device=features.device,
             dtype=torch.bool,
         )
@@ -253,7 +253,10 @@ def balanced_step(
                             [[float(row.harmful) for row in t] for t in context_tables]
                         )
                         context_action_available = torch.tensor(
-                            [[row.metric_observed for row in t] for t in context_tables],
+                            [
+                                [row.action_available and row.metric_observed for row in t]
+                                for t in context_tables
+                            ],
                             device=features.device,
                             dtype=torch.bool,
                         )
@@ -288,7 +291,11 @@ def balanced_step(
                                 if cfg.selector_risk_mode == "local_global"
                                 else None,
                                 "label_available": context_available.cpu().tolist(),
-                                "action_available": context_action_available.cpu().tolist(),
+                                "selector_label_available": context_action_available.cpu().tolist(),
+                                "action_available": [
+                                    [row.action_available for row in table]
+                                    for table in context_tables
+                                ],
                             }
                         )
             finally:
@@ -350,6 +357,8 @@ def balanced_step(
         for region, table in zip(regions, tables, strict=True):
             before = table[0].components_before
             for action in (Action.STEREO, Action.GAUSSIAN):
+                if not action_eligible(state, region, action):
+                    continue
                 outcome = learner.actions.execute(state, region, action, learner.model)
                 if cfg.geometry_supervision_weight and action == Action.STEREO:
                     assert metric_truth is not None
@@ -398,12 +407,16 @@ def balanced_step(
                     + cfg.global_repair_weight * global_loss
                     + cfg.collateral_weight * outside
                 )
-        repair = torch.stack(repair_terms).mean()
+        repair = torch.stack(repair_terms).mean() if repair_terms else rgb * 0
         diag.update(
             geometry_stereo_global_pixels=geometry_stereo_global_pixels,
             geometry_stereo_local_pixels=geometry_stereo_local_pixels,
         )
-        cost_rows = features.new_tensor([[row.cost_ms for row in table] for table in tables])
+        timing_rows = [intervention_costs(table, features) for table in tables]
+        cost_rows = torch.stack([row[0] for row in timing_rows])
+        execution_available = torch.stack([row[1] for row in timing_rows])
+        diag["repair_executed_actions"] = int(execution_available[:, 1:].sum())
+        diag["action_unavailable_count"] = int((~execution_available[:, 1:]).sum())
         # Persist component labels from the same before-update snapshot, not only scalar utility.
         diag["interventions"] = [
             {
@@ -420,6 +433,9 @@ def balanced_step(
                     {
                         "action": row.action.name,
                         "cost_ms": row.cost_ms,
+                        "action_available": row.action_available,
+                        "action_executed": row.action_available,
+                        "action_unavailable_reason": row.unavailable_reason,
                         "global_gain": row.utility if row.metric_observed else None,
                         "local_gain": row.local_gain if row.metric_observed else None,
                         "harm": row.harmful if row.metric_observed else None,
@@ -544,7 +560,17 @@ def balanced_step(
         if joint and selector_training_ready
         else 0
     )
-    diag.update(learner.commit_gradients(joint, update_selector=selector_training_ready))
+    diag.update(
+        learner.commit_gradients(
+            joint,
+            update_selector=selector_training_ready,
+            active_repairs=tuple(
+                action
+                for action in (Action.STEREO, Action.GAUSSIAN)
+                if joint and bool(execution_available[:, int(action)].any())
+            ),
+        )
+    )
     if pending is not None:
         learner.objective_balancer.commit(pending)
     if joint:
@@ -562,9 +588,8 @@ def balanced_step(
             )
         # Metric availability is independent of measured execution time.  An
         # unknown GT outcome still has a valid timing sample when the action
-        # executed successfully; only action precondition failures emit zero
-        # cost rows from the harness.
-        learner.record_action_costs(cost_rows)
+        # executed successfully. Skipped actions have no timing observation.
+        learner.record_action_costs(cost_rows, execution_available)
     if joint and selector_training_ready:
         assert selector_pending is not None
         learner.selector_balancer.commit(selector_pending)

@@ -90,6 +90,7 @@ def test_frozen_continuation_preserves_existing_model_adam_and_anchor(setup, tmp
     for name in ("model_optimizer", "action_optimizer", "selector_optimizer"):
         getattr(frozen, name).load_state_dict(getattr(parent, name).state_dict())
     frozen.optimizer_update_counts = dict(parent.optimizer_update_counts)
+    frozen.action_update_counts = dict(parent.action_update_counts)
     frozen.cost_observations = parent.cost_observations
     frozen.cost_max_ms.copy_(parent.cost_max_ms)
     frozen.cost_history.copy_(parent.cost_history)

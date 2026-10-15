@@ -4,21 +4,30 @@ These tests do not certify the compiled CUDA renderer or server assets. They
 exercise the startup/config/cache paths missed by learner-only unit tests.
 """
 
-from dataclasses import replace
+import copy
+from dataclasses import asdict, replace
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 import torch
+import yaml
 
 from reliable_endo_gs.cli.student import build_parser
+from reliable_endo_gs.config.intervention import load_intervention_config
 from reliable_endo_gs.data.scared_a00 import ScaredA00Sample
 from reliable_endo_gs.reconstruction import ReferenceConfig, load_reference_config
 from reliable_endo_gs.reconstruction.student import StudentReconstructionModel
+from reliable_endo_gs.routing.config import load_routing_config
 from reliable_endo_gs.teachers.base import LazyTeacherAdapter
 from reliable_endo_gs.training import student_runtime
 from reliable_endo_gs.training.a04_reference import A04ReferenceTrainer
-from reliable_endo_gs.training.student_checkpoint import read_student_checkpoint
+from reliable_endo_gs.training.student_checkpoint import (
+    read_student_checkpoint,
+    save_student_checkpoint,
+)
+from reliable_endo_gs.training.student_config import StudentLearningConfig
+from reliable_endo_gs.training.student_learning import StudentLearner
 from tests.architecture.test_a04_reference_reconstruction import _batch, _FakeTeacher, _target
 from tests.routing.test_frozen_a04 import AnalyticRenderer
 
@@ -140,6 +149,7 @@ def test_bounded_smoke_rejects_full_burn_in_schedule(tmp_path, cpu_native_runtim
         ("smoke", True, False, True),
         ("smoke", True, False, "priority"),
         ("smoke", True, False, "remediation"),
+        ("smoke", True, False, "frozen"),
     ],
 )
 def test_cached_cli_updates_without_loading_teacher(
@@ -181,6 +191,21 @@ def test_cached_cli_updates_without_loading_teacher(
         # Only the runtime's native device transfer is substituted. Learner,
         # losses, actions, parameter updates, checkpoints and configs are real.
         monkeypatch.setattr(model, "to", lambda _: model)
+        if balanced == "frozen":
+            # A real model Adam update makes this a trained synthetic Phase I
+            # fixture. The new frozen run imports only its model weights.
+            parent = StudentLearner(
+                copy.deepcopy(model),
+                StudentLearningConfig(),
+                load_routing_config(Path("configs/routing/frozen_a04.yaml")),
+            )
+            parent.step(sample, joint=False, teacher_target=target)
+            save_student_checkpoint(
+                tmp_path / "phase1.pt",
+                parent,
+                {"source_sha256": "synthetic-phase1-source"},
+                {"epoch": 1, "next_sample_index": 0, "samples_seen": 1, "optimizer_steps": 1},
+            )
         return model
 
     monkeypatch.setattr(student_runtime, "StudentReconstructionModel", construct)
@@ -250,6 +275,24 @@ def test_cached_cli_updates_without_loading_teacher(
             if balanced == "priority"
             else "configs/routing/intervention_balanced_smoke.yaml",
         ]
+    if balanced == "frozen":
+        training = replace(StudentLearningConfig(), student_epochs=0, joint_epochs=3)
+        training_path = tmp_path / "frozen-training.yaml"
+        training_path.write_text(yaml.safe_dump(asdict(training)), encoding="utf-8")
+        intervention = replace(
+            load_intervention_config(Path("configs/routing/intervention_remediation_smoke.yaml")),
+            student_update_mode="frozen",
+        )
+        intervention_path = tmp_path / "frozen-routing.yaml"
+        intervention_path.write_text(yaml.safe_dump(intervention.to_dict()), encoding="utf-8")
+        argv += [
+            "--config",
+            str(training_path),
+            "--intervention-config",
+            str(intervention_path),
+            "--initialize-model-from",
+            str(tmp_path / "phase1.pt"),
+        ]
     arguments = build_parser().parse_args(argv)
     if not cache_hit and not populate:
         with pytest.raises(ValueError, match="missing pinned KD cache item"):
@@ -273,7 +316,7 @@ def test_cached_cli_updates_without_loading_teacher(
         assert raw["construction_config"]["runtime"]["precision"] == "fp32"
         assert ReferenceConfig.from_dict(raw["construction_config"]).runtime.precision == "fp32"
         assert raw["cost_observations"] == (
-            3 if balanced == "remediation" else 2 if balanced else 1
+            3 if balanced in ("remediation", "frozen") else 2 if balanced else 1
         )
         if balanced:
             assert raw["schema"] == "student_joint_intervention_checkpoint.v2"
@@ -285,9 +328,26 @@ def test_cached_cli_updates_without_loading_teacher(
                 assert all(
                     int(state["step"]) == 1 for state in raw["selector_optimizer"]["state"].values()
                 )
+            if balanced == "frozen":
+                assert raw["optimizer_update_counts"] == {"model": 0, "actions": 3, "selector": 1}
+                assert raw["model_optimizer"]["state"] == {}
+                initialization = raw["identity"]["model_initialization"]
+                assert initialization["checkpoint_path"] == str((tmp_path / "phase1.pt").resolve())
+                assert initialization["mode"] == "checkpoint_model_only"
+                assert len(initialization["checkpoint_sha256"]) == 64
         assert (output / "result.json").exists()
         if command == "smoke":
-            assert all(report["parameters_changed"].values())
+            if balanced == "frozen":
+                assert report["parameters_changed"] == {
+                    "student": False,
+                    "head": False,
+                    "stereo_repair": True,
+                    "gaussian_repair": True,
+                    "selector": True,
+                }
+                assert report["model_state_unchanged"] and report["model_adam_unchanged"]
+            else:
+                assert all(report["parameters_changed"].values())
             assert report["elapsed_training_seconds"] > 0
             assert report["peak_allocated_bytes"] == report["peak_reserved_bytes"] == 0
         else:

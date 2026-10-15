@@ -14,6 +14,7 @@ import torch
 
 from reliable_endo_gs.config.intervention import InterventionConfig
 from reliable_endo_gs.config.selector_refit import SelectorRefitConfig
+from reliable_endo_gs.contracts.interventions import RISK_EVENT_NAMES
 from reliable_endo_gs.routing.balanced import BalancedSelector
 from reliable_endo_gs.routing.calibrated_selector import CalibratedSelector
 from reliable_endo_gs.training.outcome_calibration import fit_platt_risk
@@ -401,7 +402,12 @@ def calibrate_selector(
     *,
     excluded_keyframes: set[str],
 ) -> dict[str, Any]:
-    """Separate TRAIN calibration role; unsupported actions remain unavailable."""
+    """Separate TRAIN calibration; signed expectation and each physical risk event.
+
+    Gain affine calibration acts on E[utility], preserving raw sign/magnitude
+    diagnostics. Each event needs independent safe/harm keyframe support; only
+    supported any-event calibration permits action selection.
+    """
     if table.metadata.get("collection_role") != "train":
         raise ValueError("calibration requires TRAIN outcomes")
     if not excluded_keyframes or excluded_keyframes & {
@@ -413,32 +419,78 @@ def calibrate_selector(
     model.gain_bias.zero_()
     model.risk_temperature.fill_(1)
     model.risk_bias.zero_()
+    grouped = model.config.selector_risk_mode == "local_global"
+    if grouped:
+        model.event_temperature.fill_(1)
+        model.event_bias.zero_()
+        model.event_calibration_available.zero_()
     device = next(model.parameters()).device
     x, y, h = (t.to(device) for t in (table.features, table.global_gain, table.harms))
     weight = keyframe_weights(table, device)
     with torch.no_grad():
-        gain, _, logits = model.head.utility_and_risk_logits(x)
+        gain, _, logits, _ = model.head.outputs_with_logits(x)
+    if grouped:
+        components = table.risk_components
+        if (
+            components is None
+            or components.shape != (*h.shape, 2)
+            or not bool(torch.isfinite(components).all())
+            or not bool(((components == 0) | (components == 1)).all())
+            or not torch.equal(components.bool().any(-1).to(h), h)
+        ):
+            raise ValueError(
+                "event calibration requires local/global labels consistent with any harm"
+            )
+        labels = torch.cat((components.to(device), h[..., None]), -1)
+    else:
+        labels, logits = h[..., None], logits[..., None]
     report = {}
     for ai, name in ((1, "STEREO"), (2, "GAUSSIAN")):
-        groups = {
-            label: {
-                s.rsplit("/", 1)[0]
-                for i, s in enumerate(table.sample_ids)
-                if int(h[i, ai]) == label
+        event_report = {}
+        for j, event in enumerate(RISK_EVENT_NAMES if grouped else (RISK_EVENT_NAMES[-1],)):
+            target, prediction = labels[:, ai, j], logits[:, ai - 1, j]
+            groups = {
+                label: {
+                    s.rsplit("/", 1)[0]
+                    for i, s in enumerate(table.sample_ids)
+                    if int(target[i]) == label
+                }
+                for label in (0, 1)
             }
-            for label in (0, 1)
-        }
-        supported = (
-            len(table.sample_ids) >= policy.calibration_min_observations
-            and min(map(len, groups.values())) >= policy.calibration_min_class_groups
-        )
-        row: dict[str, Any] = {
-            "observations": len(table.sample_ids),
-            "safe_keyframes": len(groups[0]),
-            "unsafe_keyframes": len(groups[1]),
-            "supported": supported,
-        }
-        if supported:
+            supported = (
+                len(table.sample_ids) >= policy.calibration_min_observations
+                and min(map(len, groups.values())) >= policy.calibration_min_class_groups
+            )
+            row: dict[str, Any] = {
+                "observations": len(table.sample_ids),
+                "safe_keyframes": len(groups[0]),
+                "unsafe_keyframes": len(groups[1]),
+                "supported": supported,
+                "output": "platt_probability" if supported else "raw_identity_transform",
+            }
+            if supported:
+                t, bias = fit_platt_risk(
+                    prediction, target, weight, regularization=policy.calibration_regularization
+                )
+                if grouped and j < 2:
+                    model.event_temperature[ai - 1, j] = t
+                    model.event_bias[ai - 1, j] = bias
+                    model.event_calibration_available[ai - 1, j] = True
+                else:
+                    model.risk_temperature[ai - 1] = t
+                    model.risk_bias[ai - 1] = bias
+                    model.calibration_available[ai - 1] = True
+                row.update(
+                    risk_temperature=t,
+                    risk_bias=bias,
+                    raw_brier=float(((prediction.sigmoid() - target).square() * weight).sum()),
+                    calibrated_brier=float(
+                        (((prediction / t + bias).sigmoid() - target).square() * weight).sum()
+                    ),
+                )
+            event_report[event] = row
+        row = dict(event_report[RISK_EVENT_NAMES[-1]])
+        if bool(model.calibration_available[ai - 1]):
             a, b = fit_gain_affine(
                 gain[:, ai],
                 y[:, ai],
@@ -446,27 +498,11 @@ def calibrate_selector(
                 model.head.normalization.gain_scales[0],
                 policy.gain_regularization,
             )
-            t, bias = fit_platt_risk(
-                logits[:, ai - 1],
-                h[:, ai],
-                weight,
-                regularization=policy.calibration_regularization,
-            )
             model.gain_slope[ai - 1] = a
             model.gain_bias[ai - 1] = b
-            model.risk_temperature[ai - 1] = t
-            model.risk_bias[ai - 1] = bias
-            model.calibration_available[ai - 1] = True
-            row.update(
-                gain_slope=a,
-                gain_bias=b,
-                risk_temperature=t,
-                risk_bias=bias,
-                raw_brier=float(((logits[:, ai - 1].sigmoid() - h[:, ai]).square() * weight).sum()),
-                calibrated_brier=float(
-                    (((logits[:, ai - 1] / t + bias).sigmoid() - h[:, ai]).square() * weight).sum()
-                ),
-            )
+            row.update(gain_slope=a, gain_bias=b)
+        if grouped:
+            row["events"] = event_report
         report[name] = row
     model.validate_state()
     return {
@@ -475,4 +511,7 @@ def calibrate_selector(
         "development_used_for_calibration": False,
         "label_observations": table.observation_summary(),
         "safety_guarantee": False,
+        "prediction_metadata": model.prediction_metadata(),
+        "event_calibration": "independent_marginals" if grouped else "any_event_only",
+        "joint_event_consistency_guaranteed": False,
     }

@@ -13,7 +13,9 @@ from reliable_endo_gs.training.harness import TrainingLog, TrainingSignals
 from reliable_endo_gs.training.metric_quality import OfflineMetricTruth
 from reliable_endo_gs.training.student_checkpoint import (
     load_student_checkpoint,
+    restore_model_initialization,
     save_student_checkpoint,
+    validate_model_initialization,
 )
 from reliable_endo_gs.training.student_learning import StudentLearner
 from reliable_endo_gs.utils.io import write_json_atomic
@@ -49,6 +51,12 @@ def run_student_training(
     """
     if max_steps is not None and (type(max_steps) is not int or max_steps < 1):
         raise ValueError("max_steps must be a positive integer")
+    if resume is not None:
+        identity = restore_model_initialization(resume, identity)
+    if learner.student_frozen:
+        if "model_initialization" not in identity:
+            raise ValueError("frozen training requires an explicit Phase I model checkpoint")
+        validate_model_initialization(identity["model_initialization"])
     size = len(samples)
     if not size:
         raise ValueError("empty student training manifest")
@@ -188,6 +196,7 @@ def run_student_training(
     destination = output_dir / ("final.pt" if cursor["epoch"] == total else "stopped.pt")
     save_student_checkpoint(destination, learner, identity, cursor)
     return {
+        "model_initialization": identity.get("model_initialization"),
         "cursor": cursor,
         "checkpoint": str(destination),
         "schedule_complete": cursor["epoch"] == total,

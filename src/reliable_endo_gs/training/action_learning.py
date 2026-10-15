@@ -7,7 +7,13 @@ from dataclasses import asdict
 
 import torch
 
-from reliable_endo_gs.actions.repair import Action, RepairActions, RepairState, eligible
+from reliable_endo_gs.actions.repair import (
+    Action,
+    RepairActions,
+    RepairState,
+    action_eligible,
+    eligible,
+)
 from reliable_endo_gs.reconstruction.model import ReferenceReconstructionModel
 from reliable_endo_gs.reconstruction.student import StudentReconstructionModel
 from reliable_endo_gs.regions.grid import Region, grid_regions
@@ -23,6 +29,7 @@ from reliable_endo_gs.routing.cost import (
 from reliable_endo_gs.routing.selector import ActionSelector, region_features, select_action
 from reliable_endo_gs.training.interventions import (
     InterventionHarness,
+    intervention_costs,
     reconstruction_loss,
     utility,
 )
@@ -72,9 +79,18 @@ class ActionLearner:
             )
         self.deployment_cost_calibration = calibration
 
-    def _record_costs(self, costs_ms: torch.Tensor) -> None:
+    def _record_costs(
+        self, costs_ms: torch.Tensor, action_available: torch.Tensor | None = None
+    ) -> None:
         """Update max diagnostics and rolling robust allocation calibration."""
         rows = costs_ms.reshape(-1, 3)
+        if action_available is not None:
+            available = action_available.reshape(-1, 3)
+            if available.shape != rows.shape or available.dtype != torch.bool:
+                raise ValueError("action cost availability must be bool [R,3]")
+            rows = rows[available.all(1)]
+            if rows.numel() == 0:
+                return
         vector = rows.detach().amax(0)
         self.cost_max_ms = torch.maximum(self.cost_max_ms, vector)
         self.cost_history_observations = record_costs(
@@ -115,13 +131,16 @@ class ActionLearner:
         self.action_optimizer.zero_grad(set_to_none=True)
         losses: dict[str, float] = {}
         for action in (Action.STEREO, Action.GAUSSIAN):
+            if not action_eligible(state, full, action):
+                continue
             outcome = self.actions.execute(state, full, action, self.reference)
             loss = reconstruction_loss(state, outcome)
             if not bool(torch.isfinite(loss)) or not loss.requires_grad:
                 raise ValueError("repair loss must be finite and differentiable")
             loss.backward()
             losses[action.name.lower()] = float(loss.detach())
-        self._step(self.actions, self.action_optimizer)
+        if losses:
+            self._step(self.actions, self.action_optimizer)
         return {"repair_losses": losses}
 
     def check_zero_repairs(self, state: RepairState) -> dict[str, float]:
@@ -174,19 +193,24 @@ class ActionLearner:
         features = region_features(state, (region,))  # BEFORE actions/outcomes
         rows = self.harness.collect(state, region, self.actions, self.reference)
         labels = features.new_tensor([[row.utility for row in rows]])
+        costs, action_available = intervention_costs(rows, features)
         self.selector_optimizer.zero_grad(set_to_none=True)
         prediction = self.selector(features)
         # Only the non-STOP outputs are learned; STOP is the exact zero anchor.
-        loss = torch.nn.functional.mse_loss(prediction[:, 1:], labels[:, 1:])
-        loss.backward()
-        self._step(self.selector, self.selector_optimizer)
-        self._record_costs(features.new_tensor([row.cost_ms for row in rows]))
+        error = torch.nn.functional.mse_loss(prediction[:, 1:], labels[:, 1:], reduction="none")
+        loss = (error * action_available[1:]).sum() / action_available[1:].sum().clamp_min(1)
+        if bool(action_available[1:].any()):
+            loss.backward()
+            self._step(self.selector, self.selector_optimizer)
+        self._record_costs(costs, action_available)
         return {
             "selector_loss": float(loss.detach()),
             "region": index,
             "features": features.detach().cpu().tolist(),
             "interventions": [asdict(row) for row in rows],
-            "oracle_action": int(labels.argmax(dim=1).item()),
+            "oracle_action": int(
+                labels.masked_fill(~action_available, -torch.inf).argmax(1).item()
+            ),
             "action_parameters_frozen": True,
         }
 

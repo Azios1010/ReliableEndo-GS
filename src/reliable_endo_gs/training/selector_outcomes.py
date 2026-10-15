@@ -50,6 +50,7 @@ class SelectorOutcomes:
         """
         counts: dict[str, Counter[str]] = {}
         unknown_reasons: dict[str, Counter[str]] = {}
+        unavailable_actions: dict[str, Counter[str]] = {}
         for record in self.records:
             key = record["sample_id"].rsplit("/", 1)[0]
             count = counts.setdefault(key, Counter())
@@ -63,6 +64,14 @@ class SelectorOutcomes:
             for region in regions:
                 for action in region["actions"]:
                     if not action["selector_label_available"]:
+                        if action.get("action_available") is False:
+                            unavailable_actions.setdefault(action["action"], Counter()).update(
+                                [
+                                    action.get("action_unavailable_reason")
+                                    or "not_recorded_in_artifact"
+                                ]
+                            )
+                            continue
                         diagnostics = action.get("metric_diagnostics") or {}
                         unknown_reasons.setdefault(action["action"], Counter()).update(
                             diagnostics.get("metric_unavailable_reasons")
@@ -76,6 +85,7 @@ class SelectorOutcomes:
             "known_training_rows": len(self.sample_ids),
             "by_keyframe": {k: dict(v) for k, v in sorted(counts.items())},
             "unknown_reasons": {k: dict(v) for k, v in sorted(unknown_reasons.items())},
+            "unavailable_actions": {k: dict(v) for k, v in sorted(unavailable_actions.items())},
             "unknown_is_safe": False,
             "coverage_is_deployment_feature": False,
         }
@@ -224,6 +234,9 @@ def collect_selector_outcomes(
                                     "selector_label_available": row.metric_observed,
                                     "metric_diagnostics": row.metric_diagnostics,
                                     "cost_ms": row.cost_ms,
+                                    "action_available": row.action_available,
+                                    "action_executed": row.action_available,
+                                    "action_unavailable_reason": row.unavailable_reason,
                                 }
                                 for row in table
                             ],
@@ -326,6 +339,19 @@ def load_selector_outcomes(
             triples = [(0.0, 0.0, False)]
             known = True
             for ai, row in enumerate(rows):
+                if "action_available" in row:
+                    available = row["action_available"]
+                    if (
+                        type(available) is not bool
+                        or row.get("action_executed") is not available
+                        or (
+                            not available
+                            and (row["cost_ms"] is not None or row["selector_label_available"])
+                        )
+                        or (available and row["cost_ms"] is None)
+                        or (ai == 0 and not available)
+                    ):
+                        raise ValueError("invalid action execution/timing availability")
                 if not row["selector_label_available"]:
                     if any(
                         row[k] is not None

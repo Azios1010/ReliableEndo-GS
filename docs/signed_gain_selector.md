@@ -86,8 +86,10 @@ They differ only in student update mode. Use the common
 Strict resume rejects historical head topology before mutation. A new run may
 use `--initialize-model-from` to warmstart model weights with fresh repairs,
 gain/risk heads and Adam; this is not full-state resume. Keep old checkpoints.
-Historical scalar gain/risk calibration is incompatible and fails early. New
-component-aware probability/calibration fitting is not implemented here.
+The subsequent [joint/frozen remediation](joint_frozen_remediation_validation.md)
+adds signed expected-gain fitting and local/global/any risk calibration. Its
+affine expected-gain output is distinguished from raw sign/magnitude components;
+historical union-risk artifacts cannot substitute for an event-aware artifact.
 
 ## Evidence limits
 

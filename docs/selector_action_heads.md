@@ -65,6 +65,17 @@ norms for each of the four MLPs. The new scalar diagnostics are read back togeth
 to avoid a separate GPU synchronization for every added metric. No performance
 improvement is claimed without a benchmark.
 
+Execution availability is separate from offline metric-label availability.
+The canonical action preconditions are checked before both counterfactual
+collection and differentiable repair loss. A skipped repair retains its fixed
+table position with `action_available: false`, `cost_ms: null`, no after-action
+measurement and an execution reason. Missing GT instead retains the executed
+action and its measured timing, with unavailable metric labels. Incomplete
+execution rows do not enter the existing complete-row cost history. Repair
+optimizers step only components with gradients; checkpoints retain separate
+stereo/Gaussian update counts so a skipped component and its Adam state remain
+unchanged.
+
 ## Activation and checkpoint identity
 
 Use this configuration in the existing student CLI:
