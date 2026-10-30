@@ -8,7 +8,7 @@ Plan 07 owns the covariance fields carried by :class:`RendererRequest`.
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from importlib import import_module
 from math import isfinite
 from typing import Any, Protocol
@@ -23,6 +23,8 @@ from reliable_endo_gs.rendering.protocol import (
     CovarianceRequest,
     RendererRequest,
 )
+from reliable_endo_gs.utils.inference_mode import camera_settings_reuse_enabled
+from reliable_endo_gs.utils.readback import raise_first_failure, read_scalars
 
 GRAPHDECO_RASTERIZER_REVISION = "59f5f77e3ddbac3ed9db93ec2cfe99ed6c5d121d"
 GRAPHDECO_COVARIANCE_ORDER = ("xx", "xy", "xz", "yy", "yz", "zz")
@@ -124,8 +126,16 @@ def native_camera_batch_from_rectified(
     height, width = image_hw
     fx, fy = intrinsics[:, 0, 0], intrinsics[:, 1, 1]
     cx, cy = intrinsics[:, 0, 2], intrinsics[:, 1, 2]
-    if not bool((fx > 0).all() and (fy > 0).all()):
-        raise NativeRendererConfigurationError("A00 focal lengths must be strictly positive")
+    raise_first_failure(
+        [
+            (
+                (fx > 0).all() & (fy > 0).all(),
+                lambda: NativeRendererConfigurationError(
+                    "A00 focal lengths must be strictly positive"
+                ),
+            )
+        ]
+    )
     near_fx = znear / fx
     near_fy = znear / fy
     left = -(float(width) - cx) * near_fx
@@ -197,6 +207,10 @@ class NativeCameraBatch:
     prefiltered: bool = False
     debug: bool = False
     native_units_per_metre: float = 1.0
+    # host copies of tanfov per batch index, filled only inside reuse_camera_settings() (see utils.inference_mode)
+    _host_tanfov: dict[int, tuple[float, float]] = field(
+        default_factory=dict, init=False, repr=False, compare=False
+    )
 
     def __post_init__(self) -> None:
         tensors = {
@@ -208,6 +222,7 @@ class NativeCameraBatch:
             "background": (self.background, (3,)),
         }
         batch_size: int | None = None
+        finite_flags: list[tuple[str, torch.Tensor]] = []
         for name, (value, trailing) in tensors.items():
             if not isinstance(value, torch.Tensor):
                 raise TypeError(f"{name} must be a torch.Tensor")
@@ -225,8 +240,13 @@ class NativeCameraBatch:
                 raise ValueError("native camera settings must share device")
             if value.dtype != self.viewmatrix.dtype:
                 raise TypeError("native camera settings must share dtype")
-            if not bool(torch.isfinite(value).all()):
-                raise ValueError(f"{name} must be finite")
+            finite_flags.append((name, torch.isfinite(value).all()))
+        raise_first_failure(
+            [
+                (flag, lambda n=name: ValueError(f"{n} must be finite"))
+                for name, flag in finite_flags
+            ]
+        )
         if batch_size is None or batch_size < 1:
             raise ValueError("native camera settings batch must be non-empty")
         if self.sh_degree < 0:
@@ -248,8 +268,13 @@ class NativeCameraBatch:
         if index < 0 or index >= self.batch_size:
             raise IndexError(f"camera settings index {index} is out of range")
         height, width = image_size
-        tanfovx = float(self.tanfovx[index].item())
-        tanfovy = float(self.tanfovy[index].item())
+        cached = self._host_tanfov.get(index) if camera_settings_reuse_enabled() else None
+        if cached is None:
+            tanfovx, tanfovy = read_scalars([self.tanfovx[index], self.tanfovy[index]])
+            if camera_settings_reuse_enabled():
+                self._host_tanfov[index] = (tanfovx, tanfovy)
+        else:
+            tanfovx, tanfovy = cached
         if tanfovx <= 0 or tanfovy <= 0:
             raise NativeRendererConfigurationError("tanfovx and tanfovy must be positive")
         return NativeRasterizationSettings(
@@ -418,18 +443,27 @@ class ProductionRenderer:
             raise NativeRendererConfigurationError(
                 "CameraRequest tensors must share dtype/device with renderer request"
             )
-        if not bool(torch.isfinite(camera_request.camera.intrinsics).all()) or not bool(
-            torch.isfinite(camera_request.camera.world_from_camera).all()
-        ):
-            raise NativeRendererConfigurationError("CameraRequest tensors must be finite")
         if request.colors is None:
             raise NativeRendererInputError(
                 "production Graphdeco rendering requires 3-channel colors_precomp"
             )
         if request.colors.shape[-1] != 3:
             raise NativeRendererInputError("native colors_precomp must have exactly 3 channels")
-        if not bool(torch.isfinite(request.colors[request.valid_mask]).all()):
-            raise NativeRendererInputError("colors must be finite on valid primitives")
+        raise_first_failure(
+            [
+                (
+                    torch.isfinite(camera_request.camera.intrinsics).all()
+                    & torch.isfinite(camera_request.camera.world_from_camera).all(),
+                    lambda: NativeRendererConfigurationError(
+                        "CameraRequest tensors must be finite"
+                    ),
+                ),
+                (
+                    (torch.isfinite(request.colors) | ~request.valid_mask.unsqueeze(-1)).all(),
+                    lambda: NativeRendererInputError("colors must be finite on valid primitives"),
+                ),
+            ]
+        )
         self._validate_variant(request)
         camera_settings = self._resolve_camera_settings(camera_request)
         if camera_settings.batch_size != request.means3d.shape[0]:
@@ -566,14 +600,23 @@ class ProductionRenderer:
             rotations = request.rotations[batch_index, valid_indices].contiguous()
             scales = request.scales[batch_index, valid_indices].contiguous()
             rotation_norm = torch.linalg.vector_norm(rotations, dim=-1)
-            if not bool(torch.isfinite(rotations).all()) or not bool(
-                (rotation_norm > torch.finfo(rotations.dtype).eps).all()
-            ):
-                raise NativeRendererInputError(
-                    "valid baseline rotations must be finite and non-zero"
-                )
-            if not bool(torch.isfinite(scales).all()) or not bool((scales > 0).all()):
-                raise NativeRendererInputError("valid baseline scales must be finite and positive")
+            raise_first_failure(
+                [
+                    (
+                        torch.isfinite(rotations).all()
+                        & (rotation_norm > torch.finfo(rotations.dtype).eps).all(),
+                        lambda: NativeRendererInputError(
+                            "valid baseline rotations must be finite and non-zero"
+                        ),
+                    ),
+                    (
+                        torch.isfinite(scales).all() & (scales > 0).all(),
+                        lambda: NativeRendererInputError(
+                            "valid baseline scales must be finite and positive"
+                        ),
+                    ),
+                ]
+            )
             return scales, rotations, None
         if request.covariance is None:
             raise NativeRendererInputError("covariance variant requires canonical covariance")
@@ -605,8 +648,16 @@ class ProductionRenderer:
             )
         if color.dtype != dtype or color.device != device:
             raise RuntimeError("native rasterizer color must preserve request dtype/device")
-        if not torch.is_floating_point(color) or not bool(torch.isfinite(color).all()):
+        if not torch.is_floating_point(color):
             raise RuntimeError("native rasterizer color must be finite floating-point")
+        raise_first_failure(
+            [
+                (
+                    torch.isfinite(color).all(),
+                    lambda: RuntimeError("native rasterizer color must be finite floating-point"),
+                )
+            ]
+        )
         if radii.ndim != 1 or radii.shape[0] != expected_count:
             raise RuntimeError(
                 f"native rasterizer radii must have shape [{expected_count}], got {tuple(radii.shape)}"
@@ -641,6 +692,8 @@ class ProductionFieldRenderer:
         self.znear_m = znear_m
         self.zfar_m = zfar_m
         self.native_units_per_metre = GRAPHDECO_NEAR_THRESHOLD / znear_m
+        # (camera tensors are kept alive so their id/storage cannot be recycled while an entry exists)
+        self._camera_cache: dict[tuple[object, ...], tuple[tuple[torch.Tensor, ...], NativeCameraBatch]] = {}
         self.identity = (
             f"graphdeco_{GRAPHDECO_RASTERIZER_REVISION[:7]}_a00_camera_v2"
             f"_near_{znear_m:.17g}m_far_{zfar_m:.17g}m"
@@ -657,6 +710,36 @@ class ProductionFieldRenderer:
     def native_available(self) -> bool:
         return self.backend is not None or native_renderer_available()
 
+    def _native_camera(
+        self, camera: RectifiedStereoCamera, image_hw: tuple[int, int], view: CameraView
+    ) -> NativeCameraBatch:
+        """Native settings for ``camera``; reused inside ``reuse_camera_settings()`` while its tensors are unchanged."""
+
+        def build() -> NativeCameraBatch:
+            return native_camera_batch_from_rectified(
+                camera,
+                image_hw,
+                view,
+                znear=self.znear_m,
+                zfar=self.zfar_m,
+                native_units_per_metre=self.native_units_per_metre,
+            )
+
+        if not camera_settings_reuse_enabled():
+            return build()
+        tensors = (camera.K_L, camera.K_R, camera.T_R_from_L)
+        key = (view.value, tuple(image_hw)) + tuple(
+            (id(t), t.data_ptr(), t._version, tuple(t.shape), t.dtype, str(t.device)) for t in tensors
+        )
+        hit = self._camera_cache.get(key)
+        if hit is not None:
+            return hit[1]
+        value = build()
+        if len(self._camera_cache) >= 16:
+            self._camera_cache.pop(next(iter(self._camera_cache)))
+        self._camera_cache[key] = (tensors, value)
+        return value
+
     def render(self, request: object) -> RenderOutput:
         from reliable_endo_gs.rendering.field import ExistingRendererBridge, FieldRenderRequest
 
@@ -668,14 +751,7 @@ class ProductionFieldRenderer:
                 "install the pinned CUDA extension before native rendering"
             )
         view = CameraView(request.view)
-        settings = native_camera_batch_from_rectified(
-            request.camera,
-            request.image_hw,
-            view,
-            znear=self.znear_m,
-            zfar=self.zfar_m,
-            native_units_per_metre=self.native_units_per_metre,
-        )
+        settings = self._native_camera(request.camera, request.image_hw, view)
         renderer = ProductionRenderer({view: settings}, backend=self.backend)
         return ExistingRendererBridge(renderer).render(request)
 

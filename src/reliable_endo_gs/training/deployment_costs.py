@@ -105,6 +105,8 @@ def calibrate_student_costs(
         {
             "collection_role": "train",
             "frozen_action_identity": identity,
+            "operative_action_identity": learner.operative_action_identity(),
+            "candidate_protocol_identity": learner.candidate_protocol_identity(),
             "training_identity": dict(training_identity),
             "training_manifest_hash": training_identity["manifest_hash"],
             "sample_ids_sha256": hashlib.sha256(json.dumps(ids).encode()).hexdigest(),

@@ -7,6 +7,65 @@ student reconstruction learning followed by joint student/head/repair learning
 and supervised utility selection. It does not certify Gate I or Gate II,
 establish calibrated uncertainty, or replace the frozen A04 experiment.
 
+### User correction — 2026-10-20
+
+The requested sequence is frozen-teacher disparity KD into the stereo student
+with RGB reconstruction learning for student/head, output-quality evaluation,
+explicit student/head freeze, and then Phase II repair-action learning.
+The teacher remains frozen during KD;
+student/head weights and buffers remain fixed during subsequent action learning.
+Selector training follows the action/oracle evidence and existing gate rules.
+Do not automatically chain training stages or launch training without an
+explicit user instruction to run it.
+
+The opt-in stronger stereo architecture, its compact controls and bounded KD
+evidence are documented in [Student capacity](student_capacity.md). Architecture
+selection does not itself approve student freezing or a full-data run.
+
+`configs/training/student_kd.yaml` prepares positive-KD student-only training
+with `kd_weight: 1.0`, `joint_epochs: 0`, and the existing ten-epoch LR horizon.
+Use the canonical RGB plus teacher-disparity KD path without an intervention
+configuration for this first stage. The epoch horizon does not certify quality
+or convergence. The full-data candidate uses all 22,950 original TRAIN 1–7
+samples; final test 8–9 remains excluded from optimization and model selection.
+Any former development validation frames included in that full-data manifest
+are training diagnostics thereafter, not held-out evidence. A genuine held-out
+development run must record its smaller FIT manifest explicitly.
+
+The three-epoch `student_quality` run used `kd_weight: 0.0` and TRAIN-GT geometry
+supervision. Preserve it as a no-KD diagnostic; it does not establish teacher
+transfer, KD student readiness, or approval to freeze a KD artifact. Its earlier
+asset-search failure is not evidence that the teacher is unavailable: the
+external installation must be rechecked. Changing KD/objective/manifest starts
+a separately identified experiment, not an implicit resume or relabeling of
+the no-KD checkpoint.
+
+### User objective clarification — 2026-10-17
+
+The objective is better final reconstruction output on the baseline task.
+Improving the stereo student is a possible means, not an acceptance criterion.
+Compare the final deployed Gaussian/rendering output with a matched control,
+using identical stereo inputs, target cameras/images, frame lists, resolution,
+masks, metric implementations and aggregation. The original left/self-view
+reconstruction remains the primary rendering task; report right/cross-view
+results separately. Keep original SCARED TRAIN 1–7 and final test 8–9, and use
+TRAIN-only held-out data for development decisions.
+
+Assess final-image PSNR/SSIM and LPIPS when a verified backend is available,
+alongside supported Gaussian/3D quality and coverage. Stereo depth errors are
+component diagnostics; they do not substitute for Gaussian or rendered-depth
+quality. Missing output metrics remain unavailable. Student freezing or
+updating must be justified by final-output comparisons, preserving the existing
+research gates and stage boundaries.
+
+The 2026-10-16 no-KD qualification workflow selects eligible epochs by smallest
+stereo depth MAE against initialization. That legacy rule does not establish
+this output-quality objective or improvement over a reproduced baseline. Its
+metrics/checkpoints remain diagnostic evidence. A matched output comparison
+and a declared output-based selection rule are required before promoting that
+recipe to the full-data production candidate; do not silently relabel a resume
+as implementing the revised objective.
+
 This document describes the legacy utility experiment. The user-approved
 opt-in gain/harm selector, correspondence-aware repair, screened KD and
 model-only initialization are specified in
@@ -58,6 +117,35 @@ existing canonical implementations. Hard support, sampling, region choice,
 and detached stereo-repair bounds do not receive gradients.
 
 ## Parameters, losses and schedule
+
+Training and smoke runs may opt into `--gpu-input`: PNG/TIFF decoding stays on
+CPU, followed by transfer of decoded arrays to CUDA. RGB normalization, crop,
+resize, disparity/mask preparation and camera crop/resize use CUDA. Byte RGB
+normalization uses a device lookup rounded once to FP32, matching the canonical
+CPU mapping. The CUDA RGB resize supports unchanged dimensions and exactly
+twofold reduction (including 1280x1024 to 640x512). It explicitly accumulates the
+four quarter-weight products from top left to bottom right to retain the
+single-thread CPU RGB kernel's rounding. Use `OMP_NUM_THREADS=1`, as in the
+existing run; a different reference thread count is explicitly rejected for
+CUDA twofold resizing because CPU dispatch can change the rounding expression.
+Other CUDA resize scales raise an error; there is no CPU image-processing fallback.
+The separate offline-truth reader reuses the deployment sample's verified
+source/crop binding without decoding RGB again; GT remains outside deployment
+inputs. Camera, crop, nearest-exact GT resampling, FP32, losses and sample order
+retain their existing definitions. CPU loading remains the default. RGB and
+GT equivalence and downstream rendering must be checked on representative data
+before migrating an existing run. The generic CUDA bilinear implementation was
+rejected after small input roundoff exceeded the declared downstream disparity
+error bound; the restricted expression above addresses that rounding difference.
+
+The selected pipeline is recorded in checkpoint identity. A legacy checkpoint
+cannot silently resume with this option: an explicit, separately recorded
+identity migration must preserve every model/optimizer tensor, RNG state,
+configuration and cursor. Preserve the original checkpoint and source snapshot
+and record synchronized end-to-end timing before adopting the CUDA path.
+The current device pipeline identity is `cuda_a00_input.v2`; it is incompatible
+with the earlier CPU-RGB/CUDA-GT candidate identity. Verification does not
+authorize starting or resuming training; that requires an explicit user request.
 
 Default parameter counts (width 32, attribute head width 128):
 
@@ -127,6 +215,26 @@ identity verification; this is not a portable cache identity migration.
 `kd_weight: 0` permits reconstruction-only training with no teacher.
 
 ## Recovery, inference and frozen compatibility
+
+The opt-in `configs/training/student_quality.yaml` is a user-approved ten-epoch
+student-only, no-KD qualification schedule. Use the existing metric geometry
+intervention config for separate TRAIN-GT depth supervision; no repair or
+selector optimizer is stepped in this student-only schedule. It is not the
+teacher-backed experiment or a reproduction of the paper's training protocol.
+
+`model_lr_schedule: cosine_epochs` decreases model Adam LR from 0.001 in epoch 0
+to 0.0001 in epoch 9, holding that floor thereafter. The canonical formula is
+in `training/student_schedule.py`. Its explicit ten-epoch decay horizon remains
+fixed if validation selects a shorter final run, so full-data training uses the
+same LR prefix. Action and selector LRs retain their existing owners. Frozen
+student mode requires constant model Adam settings.
+
+LR is applied before each sample update. A checkpoint on an epoch boundary
+contains the LR of its last committed update; strict loading validates that LR
+from the saved cursor before restoring Adam. Constant-mode config serialization
+omits neutral schedule fields and retains historical config hashes. Changing
+an active experiment's epoch budget or source requires an explicit new artifact
+with preserved ancestry, not in-place editing or a weakened resume check.
 
 `student_joint_checkpoint.v1` stores owned weights, resolved construction,
 student and routing configs/hashes, all Adam states, measured costs, RNG and

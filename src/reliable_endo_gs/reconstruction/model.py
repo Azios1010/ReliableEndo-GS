@@ -44,6 +44,7 @@ from reliable_endo_gs.teachers import (
     coerce_teacher_prediction,
 )
 from reliable_endo_gs.teachers.roles import DEFAULT_A01_SCARED_ROLES
+from reliable_endo_gs.utils.readback import raise_first_failure, read_diagnostic_scalars
 
 
 class ReferenceModelError(ValueError):
@@ -565,8 +566,14 @@ class ReferenceReconstructionModel(nn.Module):
             )
         if output.image.device != render_field.means3d.device:
             raise ReferenceModelError("renderer output must remain on the field device")
-        if not bool(torch.isfinite(output.image).all()):
-            raise ReferenceModelError("renderer output image must be finite")
+        raise_first_failure(
+            [
+                (
+                    torch.isfinite(output.image).all(),
+                    lambda: ReferenceModelError("renderer output image must be finite"),
+                )
+            ]
+        )
         return output
 
     def forward(
@@ -724,19 +731,35 @@ class ReferenceReconstructionModel(nn.Module):
             supervision_views=self.config.supervision_views,
             assessment_views=self.config.assessment_views,
         )
+        # One host transfer for every diagnostic scalar of this frame (was one synchronisation each).
+        scalars = read_diagnostic_scalars(
+            [
+                target.support.sum(),
+                support.sum(),
+                target.validity.sum(),
+                field.valid_mask.sum(),
+                torch.isfinite(render_left.image).all(),
+                *([] if render_right is None else [torch.isfinite(render_right.image).all()]),
+            ]
+        )
+        support_count, supported_valid_count, teacher_valid_count, valid_gaussians = (
+            int(x) for x in scalars[:4]
+        )
+        left_finite = bool(scalars[4])
+        right_finite = None if render_right is None else bool(scalars[5])
         stereo = StereoPrediction(
             disparity=target.disparity,
             valid_mask=target.validity,
             diagnostics={
-                "support_count": int(target.support.sum().item()),
-                "supported_valid_count": int(support.sum().item()),
+                "support_count": support_count,
+                "supported_valid_count": supported_valid_count,
                 "target_source": target_source,
             },
         )
         diagnostics: dict[str, object] = {
-            "teacher_valid_count": int(target.validity.sum().item()),
-            "support_count": int(target.support.sum().item()),
-            "supported_valid_count": int(support.sum().item()),
+            "teacher_valid_count": teacher_valid_count,
+            "support_count": support_count,
+            "supported_valid_count": supported_valid_count,
             "geometry_prior": {
                 "eligible_count": geometry_prior.diagnostics.eligible_count,
                 "selected_count": geometry_prior.diagnostics.selected_count,
@@ -746,16 +769,12 @@ class ReferenceReconstructionModel(nn.Module):
             "provenance_hash": provenance_record.provenance_hash,
         }
         metrics: dict[str, object] = {
-            "valid_gaussian_count": int(field.valid_mask.sum().item()),
+            "valid_gaussian_count": valid_gaussians,
             "gaussian_count": field.gaussian_count,
-            "coverage_fraction": float(
-                field.valid_mask.sum().item() / max(field.valid_mask.numel(), 1)
-            ),
+            "coverage_fraction": float(valid_gaussians / max(field.valid_mask.numel(), 1)),
             "render_views": tuple(self.config.assessment_views),
-            "render_left_finite": bool(torch.isfinite(render_left.image).all()),
-            "render_right_finite": (
-                None if render_right is None else bool(torch.isfinite(render_right.image).all())
-            ),
+            "render_left_finite": left_finite,
+            "render_right_finite": right_finite,
             "quality_target_status": "not_assessed_without_declared_observation_metric",
         }
         return ReferenceReconstructionResult(

@@ -103,7 +103,12 @@ def screen_geometry_candidates(
     ):
         raise ValueError("checkpoint training/role identity mismatch")
     cfg = raw["student_config"]
-    model = StereoStudent(cfg["width"], cfg["bins"], cfg["minimum_effective_px"])
+    model = StereoStudent(
+        cfg["width"],
+        cfg["bins"],
+        cfg["minimum_effective_px"],
+        architecture=cfg.get("stereo_architecture", "compact"),
+    )
     model.load_state_dict(
         {
             k.removeprefix("stereo_student."): v

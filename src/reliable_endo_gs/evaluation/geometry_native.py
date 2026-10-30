@@ -196,6 +196,7 @@ def evaluate_native_geometry_candidates(
         width=learning.width,
         bins=learning.bins,
         minimum_effective_px=learning.minimum_effective_px,
+        stereo_architecture=learning.stereo_architecture,
     ).to(device)
     learner = StudentLearner(model, learning, routing, intervention_config=protocol)
     imported = import_frozen_student_actions(

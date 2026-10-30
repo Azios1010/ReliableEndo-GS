@@ -16,6 +16,8 @@ from reliable_endo_gs.contracts.gaussians import GaussianField
 from reliable_endo_gs.gaussians.priors import GeometryPrior, rotation_matrix_to_quaternion
 from reliable_endo_gs.gaussians.residual_head import AttributeResiduals, ResidualBounds
 from reliable_endo_gs.gaussians.support_covariance import build_surface_covariance
+from reliable_endo_gs.utils.inference_mode import compiled_when_enabled, surface_covariance_skipped
+from reliable_endo_gs.utils.readback import raise_first_failure, read_ints
 
 
 @dataclass(frozen=True, slots=True)
@@ -50,7 +52,7 @@ class ComposedGaussianAttributes:
     scales: torch.Tensor
     opacities: torch.Tensor
     valid_mask: torch.Tensor
-    cov_surface: torch.Tensor
+    cov_surface: torch.Tensor | None  # None only inside skip_unread_surface_covariance()
     diagnostics: CompositionDiagnostics
 
 
@@ -85,6 +87,7 @@ def _skew(vector: torch.Tensor) -> torch.Tensor:
     ).reshape(*vector.shape[:-1], 3, 3)
 
 
+@compiled_when_enabled
 def stable_axis_angle_exp(delta_rotation: torch.Tensor) -> torch.Tensor:
     """Compute ``Exp([delta_rotation]x)`` with stable small-angle series.
 
@@ -132,15 +135,54 @@ def stable_axis_angle_exp(delta_rotation: torch.Tensor) -> torch.Tensor:
 
 def _safe_prior_frame(prior: GeometryPrior, valid: torch.Tensor) -> torch.Tensor:
     frame = prior.R0
-    if not bool(torch.isfinite(frame[valid]).all()):
-        raise ValueError("valid GeometryPrior frames must be finite")
+    raise_first_failure(
+        [
+            (
+                (torch.isfinite(frame) | ~valid.unsqueeze(-1).unsqueeze(-1)).all(),
+                lambda: ValueError("valid GeometryPrior frames must be finite"),
+            )
+        ]
+    )
     identity = torch.eye(3, dtype=frame.dtype, device=frame.device)
     identity = identity.expand(frame.shape[0], frame.shape[1], 3, 3)
     return torch.where(valid.unsqueeze(-1).unsqueeze(-1), frame, identity)
 
 
-def _saturation_count(value: torch.Tensor, bound: float, valid: torch.Tensor) -> int:
-    return int(((value.abs() >= bound - 1.0e-6) & valid.unsqueeze(-1)).sum().item())
+def _saturation_count(value: torch.Tensor, bound: float, valid: torch.Tensor) -> torch.Tensor:
+    """Device count of saturated valid residuals; the caller reads all counts back at once."""
+    return ((value.abs() >= bound - 1.0e-6) & valid.unsqueeze(-1)).sum()
+
+
+@compiled_when_enabled
+def _compose_scales_and_opacity(
+    prior_scales: torch.Tensor,
+    prior_alpha: torch.Tensor,
+    valid: torch.Tensor,
+    delta_log_scale: torch.Tensor,
+    delta_alpha: torch.Tensor,
+    work_dtype: torch.dtype,
+    min_scale_m: float,
+    max_scale_m: float,
+    alpha_logit_epsilon: float,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """``S = clamp(S0 * exp(delta_s))`` and ``alpha = sigmoid(logit(clamp(alpha0)) + delta_a)``; invalid slots get placeholders."""
+    scales0 = torch.where(
+        valid.unsqueeze(-1),
+        prior_scales,
+        prior_scales.new_full(prior_scales.shape, min_scale_m),
+    ).to(dtype=work_dtype)
+    scales = scales0 * torch.exp(delta_log_scale.to(dtype=work_dtype))
+    scales = scales.clamp(min=min_scale_m, max=max_scale_m)
+    scales = torch.where(valid.unsqueeze(-1), scales, scales.new_full(scales.shape, min_scale_m))
+
+    alpha0 = prior_alpha.to(dtype=work_dtype).clamp(
+        min=alpha_logit_epsilon, max=1.0 - alpha_logit_epsilon
+    )
+    alpha = torch.sigmoid(torch.logit(alpha0) + delta_alpha.to(dtype=work_dtype)).clamp(
+        min=0.0, max=1.0
+    )
+    alpha = torch.where(valid.unsqueeze(-1), alpha, torch.zeros_like(alpha))
+    return scales, alpha
 
 
 def compose_gaussian_attributes(
@@ -186,53 +228,53 @@ def compose_gaussian_attributes(
     composed_frame = frame @ local_rotation
     composed_frame = torch.where(valid.unsqueeze(-1).unsqueeze(-1), composed_frame, frame)
 
-    scales0 = torch.where(
-        valid.unsqueeze(-1),
+    scales, alpha = _compose_scales_and_opacity(
         prior.S0,
-        prior.S0.new_full(prior.S0.shape, resolved.min_scale_m),
-    ).to(dtype=work_dtype)
-    scales = scales0 * torch.exp(delta_log_scale.to(dtype=work_dtype))
-    scales = scales.clamp(min=resolved.min_scale_m, max=resolved.max_scale_m)
-    scales = torch.where(
-        valid.unsqueeze(-1), scales, scales.new_full(scales.shape, resolved.min_scale_m)
+        prior.alpha0,
+        valid,
+        delta_log_scale,
+        delta_alpha,
+        work_dtype,
+        resolved.min_scale_m,
+        resolved.max_scale_m,
+        resolved.alpha_logit_epsilon,
     )
-
-    alpha0 = prior.alpha0.to(dtype=work_dtype).clamp(
-        min=resolved.alpha_logit_epsilon, max=1.0 - resolved.alpha_logit_epsilon
-    )
-    alpha = torch.sigmoid(torch.logit(alpha0) + delta_alpha.to(dtype=work_dtype)).clamp(
-        min=0.0, max=1.0
-    )
-    alpha = torch.where(valid.unsqueeze(-1), alpha, torch.zeros_like(alpha))
 
     rotations = rotation_matrix_to_quaternion(composed_frame)
     rotations = rotations / torch.linalg.vector_norm(rotations, dim=-1, keepdim=True).clamp_min(
         1.0e-12
     )
-    covariance_result = build_surface_covariance(rotations, scales, valid_mask=valid)
-    covariance = torch.where(
-        valid.unsqueeze(-1).unsqueeze(-1),
-        covariance_result.cov_surface,
-        torch.zeros_like(covariance_result.cov_surface),
-    )
+    covariance: torch.Tensor | None = None
+    if not surface_covariance_skipped():
+        covariance_result = build_surface_covariance(rotations, scales, valid_mask=valid)
+        covariance = torch.where(
+            valid.unsqueeze(-1).unsqueeze(-1),
+            covariance_result.cov_surface,
+            torch.zeros_like(covariance_result.cov_surface),
+        )
 
     output_dtype = prior.mu.dtype
+    valid_count, invalid_count, rotation_saturated, log_scale_saturated, alpha_saturated = (
+        read_ints(
+            valid.sum(),
+            (~valid).sum(),
+            _saturation_count(delta_rotation, resolved.max_rotation_rad, valid),
+            _saturation_count(delta_log_scale, resolved.max_log_scale, valid),
+            _saturation_count(delta_alpha, resolved.max_alpha_logit, valid),
+        )
+    )
     return ComposedGaussianAttributes(
         rotations=rotations.to(dtype=output_dtype),
         scales=scales.to(dtype=output_dtype),
         opacities=alpha.to(dtype=output_dtype),
         valid_mask=valid,
-        cov_surface=covariance.to(dtype=output_dtype),
+        cov_surface=None if covariance is None else covariance.to(dtype=output_dtype),
         diagnostics=CompositionDiagnostics(
-            valid_count=int(valid.sum().item()),
-            invalid_count=int((~valid).sum().item()),
-            rotation_saturated_count=_saturation_count(
-                delta_rotation, resolved.max_rotation_rad, valid
-            ),
-            log_scale_saturated_count=_saturation_count(
-                delta_log_scale, resolved.max_log_scale, valid
-            ),
-            alpha_saturated_count=_saturation_count(delta_alpha, resolved.max_alpha_logit, valid),
+            valid_count=valid_count,
+            invalid_count=invalid_count,
+            rotation_saturated_count=rotation_saturated,
+            log_scale_saturated_count=log_scale_saturated,
+            alpha_saturated_count=alpha_saturated,
             fp32_stabilized=work_dtype is torch.float32
             and prior.mu.dtype in (torch.float16, torch.bfloat16),
         ),

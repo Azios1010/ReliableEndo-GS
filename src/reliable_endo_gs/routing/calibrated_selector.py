@@ -45,6 +45,7 @@ class CalibratedSelector(nn.Module):
         self.config = decision_config
         self.action_identity = dict(action_identity)
         self.mask_identity = mask_identity
+        self.operating_point_available = True
         self.register_buffer("gain_slope", torch.ones(2))
         self.register_buffer("gain_bias", torch.zeros(2))
         self.register_buffer("risk_temperature", torch.ones(2))
@@ -137,6 +138,8 @@ class CalibratedSelector(nn.Module):
         available = torch.cat(
             (self.calibration_available.new_ones(1), self.calibration_available)
         ).expand_as(risks)
+        if not self.operating_point_available:
+            available = torch.zeros_like(available)
         return select_repairability(
             gains, risks, costs_ms, valid, remaining_ms, self.config, risk_available=available
         )
@@ -155,11 +158,14 @@ class CalibratedSelector(nn.Module):
             raise ValueError("invalid calibrated selector state")
         for key in (
             "selector_architecture",
+            "selector_feature_mode",
+            "selector_token_channels",
             "selector_balance_mode",
             "selector_gain_mode",
             "selector_risk_mode",
             "metric_quality",
             "metric_scales",
+            "metric_utility_mode",
             "stereo_utility_multiplier",
             "gaussian_guard_multiplier",
             "repair_max_disparity_px",
@@ -206,6 +212,7 @@ def load_calibrated_selector(
     expected_config: InterventionConfig,
     expected_mask_identity: str,
     expected_source_sha256: str,
+    expected_candidate_identity: Mapping[str, object] | None = None,
 ) -> CalibratedSelector:
     """Validate a new immutable artifact; never resume old joint optimizer state."""
     raw: Any = torch.load(path, map_location="cpu", weights_only=True)
@@ -217,12 +224,19 @@ def load_calibrated_selector(
         or raw.get("target_mask_index_sha256") != expected_mask_identity
         or raw.get("source_sha256") != expected_source_sha256
         or raw.get("development_used_for_fitting") is not False
+        or (
+            expected_candidate_identity is not None
+            and raw.get("candidate_protocol_identity") != dict(expected_candidate_identity)
+        )
     ):
         raise ValueError("calibrated selector artifact binding mismatch")
     head = BalancedSelector(raw["width"], InterventionConfig(**raw["head_config"]))
     model = CalibratedSelector(
         head, expected_config, expected_action_identity, expected_mask_identity
     )
+    if type(raw.get("operating_point_available", True)) is not bool:
+        raise ValueError("invalid operating point availability")
+    model.operating_point_available = raw.get("operating_point_available", True)
     if raw["schema"] != model.artifact_schema:
         raise ValueError("calibrated selector event schema mismatch")
     if set(raw["state"]) != set(model.state_dict()) or any(
@@ -238,10 +252,47 @@ def load_calibrated_selector(
     partition = raw.get("partition", {})
     if (
         report.get("development_used_for_calibration") is not False
-        or report.get("cutoffs_tuned") is not False
+        or report.get("cutoffs_tuned") not in (False, True)
         or partition.get("parent_roles_changed") is not False
     ):
         raise ValueError("missing TRAIN calibration/partition provenance")
+    if report.get("cutoffs_tuned") is True:
+        point = report.get("operating_point", {})
+        selected = point.get("selected")
+        if (
+            raw.get("study_schema") != "frozen_selector_study.v1"
+            or raw.get("oracle_gate", {}).get("status") != "pass"
+            or not isinstance(raw.get("gate_a_report_sha256"), str)
+            or len(raw["gate_a_report_sha256"]) != 64
+            or point.get("schema") != "CAL_empirical_harm_budget.v1"
+            or point.get("development_used") is not False
+            or point.get("safety_guarantee") is not False
+            or point.get("calibration_outcomes_sha256") != raw.get("train_outcomes_sha256")
+            or not set(point.get("calibration_sample_ids", []))
+            <= set(partition.get("calibration_sample_ids", []))
+            or (point.get("status") == "selected") is not model.operating_point_available
+            or point.get("status") not in ("selected", "abstain")
+        ):
+            raise ValueError("invalid CAL operating point provenance")
+        if model.operating_point_available and (
+            not isinstance(selected, dict)
+            or selected.get("unknown_selected") != 0
+            or selected.get("known_selected", 0)
+            < max(8, point.get("minimum_selected_observations", 8))
+            or selected.get("selected_keyframes", 0)
+            < max(2, point.get("minimum_selected_keyframes", 2))
+            or selected.get("selected_harm_rate") is None
+            or not 0
+            <= selected["selected_harm_rate"]
+            <= point.get("effective_harm_budget", -1)
+            <= point.get("budget", -1)
+            < 1
+            or selected.get("cutoff") != model.config.maximum_stereo_harm_probability
+            or selected.get("cutoff") != model.config.maximum_gaussian_harm_probability
+        ):
+            raise ValueError("operating point exceeds its CAL harm/support budget")
+    elif not model.operating_point_available:
+        raise ValueError("legacy calibration cannot declare a tuned abstention point")
     groups = [
         set(partition.get(k + "_keyframes", [])) for k in ("fit", "validation", "calibration")
     ]

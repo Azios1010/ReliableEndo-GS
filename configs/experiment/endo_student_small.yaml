@@ -1,0 +1,230 @@
+# Bounded execution authorized by the user's subsequent tmux/run instruction.
+# The clean upstream baseline stays unchanged; the A00 adaptation is explicit.
+schema: endo_student_small.v1
+status: authorized_bounded_a00_adaptation
+execution:
+  training_authorized: true
+  inference_authorized: true
+  automatic_launch: false
+  automatic_full_data_continuation: false
+  automatic_freeze: false
+  phase_ii: false
+  repairs: false
+  selector: false
+  runner: reliable_endo_gs.baseline.training.a00_small
+
+experiment:
+  name: endo_student_small
+  purpose: compare_early_output_quality_on_the_same_small_original_scared_split
+  scientific_status: exploratory_development_only
+  seed: 20261006
+  batch_size: 1
+  final_test_used: false
+  paper_reproduction: false
+  matched_compute_claim: false
+  # Count baseline stereo pretraining within the same total update budget.
+  optimizer_updates_per_arm: 112
+  successful_update_sample_presentations_per_arm: 112
+  amp_overflow_presentations: additional_recorded_and_timed_no_optimizer_or_scheduler_update
+  order: repeat_fit_manifest_order_without_shuffle
+
+data:
+  dataset: original_SCARED_A00
+  root_env: RELIABLE_ENDO_DATA_ROOT
+  roles: configs/teachers/a01_scared.yaml
+  roles_file_sha256: 7ebebf1ec0dc96437ca277b7cab77c53b0cd3db85ee20d649879be3d86fa918d
+  role_contract_hash: 8f6752e322b2642734ebfc9c3c8f30a93c45e74773e1dc02a67bbc8debf75109
+  final_train_datasets: [1, 2, 3, 4, 5, 6, 7]
+  final_test_datasets_reserved: [8, 9]
+  # Bind to the existing immutable pilot manifests; do not choose new frames.
+  manifest_root_env: RELIABLE_ENDO_SMALL_MANIFEST_ROOT
+  manifest_source_experiment: student-capacity-20261020T093057Z
+  fit:
+    manifest: fit.json
+    file_sha256: 19c3750acebb5372db302db4673beb54889dbaaf309958e69f2165fe3dce2921
+    samples: 7
+    data_role: final_train
+  validation:
+    manifest: validation.json
+    file_sha256: ad5c4f42f5eeaa84b38a254a3572b5472853144127e319e1c560051def69eb4e
+    samples: 14
+    data_role: final_train
+    purpose: development_evaluation_only
+    checkpoint_selection: fixed_final_update_no_validation_selection
+  require_disjoint_sample_ids: true
+  require_disjoint_keyframes: true
+  resolution_hw: [512, 640]
+  paired_crop: null
+  augmentation: none
+  rgb_resize: bilinear_align_corners_false
+  supervision_resize: nearest_exact_then_scale_horizontal_disparity_once
+  calibration: a00_protocol_sidecar_required
+  pixel_center: integer
+  disparity: u_left_minus_right_current_grid_pixels
+  depth_units: m
+  report_depth_units: mm
+  rgb_metric_range: [0.0, 1.0]
+  deployment_inputs: [left_rgb, right_rgb, calibration, sensor_support]
+  ground_truth_at_inference: forbidden
+
+arms:
+  student:
+    model: StudentReconstructionModel
+    training_config: configs/training/student_kd_multiscale_pilot.yaml
+    reconstruction_config: configs/reconstruction/a04_reference.yaml
+    reconstruction_config_sha256: 91a6f8206a4be7a0e51a35d80958345dbcfdb93ca3894e419077f29da24835ba
+    initialization: fresh_seeded_no_checkpoint
+    resume: false
+    trainable: [stereo_student, gaussian_head]
+    student_precision: fp32
+    optimizer: {name: Adam, learning_rate: 0.001, weight_decay: 0.0}
+    learning_rate_schedule: constant
+    updates: 112
+    evaluate_after_updates: [0, 28, 56, 112]
+    loss:
+      teacher_disparity_smooth_l1: 1.0
+      mean_left_right_rgb_charbonnier: 1.0
+      charbonnier_epsilon: 0.001
+      kd_scale_px: 1.0
+      ground_truth_disparity: 0.0
+    teacher:
+      name: FoundationStereo
+      frozen: true
+      valid_iters: 32
+      precision: fp16
+      runtime_config_env: RELIABLE_ENDO_TEACHER_RUNTIME_CONFIG
+      identity_hash: 40b1862f12991454f97e03a9cc2e9d802d0a1af082bcaf4afe4aa5d10b09eb3c
+      cache_root_env: RELIABLE_ENDO_SMALL_TEACHER_CACHE
+      cache_mode: read_only
+      populate_cache: false
+      missing_or_mismatched_target: error
+      validation_target_use: detached_diagnostic_only_never_optimizer
+
+  endo_e2e_gs:
+    variant: a00_metric_geometry
+    model: StereoEndoModel
+    upstream_root: third_party/endo_e2e_gs
+    upstream_commit: 186fa2b4a2159b28393492f6df1aa444b54391a8
+    require_clean_upstream: true
+    initialization: fresh_seeded_no_public_or_local_pretrained_checkpoint
+    resume: false
+    upstream_architecture_and_loss: unchanged
+    train_iters: 3
+    val_iters: 3
+    freeze_raft_batchnorm_as_upstream: true
+    optimizer:
+      name: AdamW
+      learning_rate: 0.0002
+      weight_decay: 0.00001
+      eps: 0.00000001
+      gradient_clip_norm: 1.0
+    # This is a short learning diagnostic, not the paper's training schedule.
+    # Preserve released LR horizons; stop early without compressing warmup.
+    stage1:
+      upstream_config: third_party/endo_e2e_gs/config/stage1.yaml
+      upstream_config_sha256: 1a06e1b8ca189555d72956ef3e999002ca1d20ac178724c38eb31433bd90f1ae
+      updates: 56
+      precision: fp32
+      loss: upstream_sequence_loss_on_fit_gt_disparity
+      loss_weight: 1.0
+      scheduler:
+        name: OneCycleLR
+        total_steps: 100100
+        pct_start: 0.01
+        anneal_strategy: linear
+        cycle_momentum: false
+    stage2:
+      # Baseline Stage 2 is its original joint training, not research Phase II.
+      upstream_config: third_party/endo_e2e_gs/config/stage2.yaml
+      upstream_config_sha256: 6d4e9ff12d6c48369009ca9ceaa22fc533ffdce866faf706381b571b97c0d1e2
+      updates: 56
+      initialization: stereo_from_this_run_stage1_fresh_gaussian_regressor
+      optimizer_and_scheduler: fresh_as_upstream_stage_transition
+      precision: upstream_amp
+      max_amp_overflow_retries: 32
+      render_supervision_views: [left]
+      loss: {upstream_sequence_disparity: 1.0, left_rgb_l1: 0.8, left_rgb_one_minus_ssim: 0.2}
+      scheduler:
+        name: OneCycleLR
+        total_steps: 10100
+        pct_start: 0.01
+        anneal_strategy: linear
+        cycle_momentum: false
+    # Explicit separate variant: learned modules/loss unchanged, geometry adapted.
+    protocol_bridge:
+      status: explicit_a00_metric_variant_requires_adapter_tests
+      rgb_input_conversion: explicit_0_1_to_minus1_1
+      metric_depth_and_camera_alignment: canonical_reconstruct_rectified
+      upstream_per_image_depth_minmax: replaced_by_metric_depth_in_this_variant_only
+      upstream_half_pixel_backprojection: replaced_by_canonical_integer_center_backprojection
+      upstream_inference_mask: sensor_support_only_never_gt_disparity_validity
+      right_target_camera_render: same_ProductionFieldRenderer_as_student
+      upstream_source_modified: false
+      native_parity_or_paper_reproduction_claim: false
+
+comparison:
+  execute_arms: [endo_e2e_gs]
+  student_reference:
+    result: multiscale64/result.json
+    file_sha256: 86b163fdedb8c9281cadadf4901fbcf0cb78a25cd5cbcc947fbddb46985c2f9c
+    source_sha256: 53d6f12e652e35c8fc63850b86742a4c0949253141e88866c842189ca229ff07
+    use: immutable_existing_112_update_pilot_metrics
+    retrain: false
+
+evaluation:
+  final_comparison_total_updates: 112
+  views: [left, right]
+  target_cameras: calibrated_original_left_and_right
+  rgb_support: full_image_no_foreground_or_gt_mask
+  psnr: reliable_endo_gs.evaluation.rendering.psnr
+  ssim: reliable_endo_gs.evaluation.rendering.windowed_ssim
+  disparity_units: current_grid_pixels
+  geometry: reliable_endo_gs.evaluation.geometry_native._geometry_metrics
+  cloud_max_points: 256
+  cloud_chunk_size: 128
+  headline_metrics: [left_psnr, right_psnr, left_ssim, right_ssim, disparity_epe, stereo_depth_mae_mm, stereo_depth_rmse_mm]
+  report_all_other_available_canonical_metrics: true
+  report_valid_counts_and_geometry_coverage: true
+  lpips: unavailable_without_pinned_backend
+  rendered_depth: unavailable_unless_renderer_outputs_metric_depth
+  nonfinite_prediction: fail_and_preserve_failure_never_drop_silently
+  aggregation: per_image_then_mean_and_per_dataset_mean
+  save_per_image_metrics: true
+  save_prediction_examples: true
+  preserve_model_weights_and_rng_during_evaluation: true
+  primary_outcome: final_left_psnr
+  report_other_metric_tradeoffs: true
+  superiority_claim: no_paper_or_convergence_claim_from_this_pilot
+
+runtime:
+  device: physical_gpu0_logical_cuda0
+  cuda_visible_devices: GPU-b9607686-60e0-2545-b328-ca3f0e79e24c
+  touch_gpu1: false
+  omp_num_threads: 1
+  input_pipeline: cuda_a00_input.v2
+  cuda_initialization_during_config_preparation: forbidden
+  network_downloads_during_run: false
+  profiling:
+    synchronize_cuda: true
+    forward_warmup_repetitions: 3
+    model_step_warmup_presentations: 7
+    report: [forward_ms, step_ms, total_wall_seconds, peak_allocated_bytes, peak_reserved_bytes]
+    include_both_baseline_stages_in_total_cost: true
+    separate_io_cache_evaluation_checkpoint_costs: true
+    disclose_teacher_pretraining_and_target_generation_exclusion: true
+    equal_updates_do_not_imply_equal_compute: true
+
+artifacts:
+  output_root_env: RELIABLE_ENDO_RUN_ROOT
+  create_unique_run_directory_only_after_explicit_execution_request: true
+  overwrite: false
+  provenance: [project_commit, source_snapshot_and_hash, clean_upstream_commit, resolved_config_and_hash, manifest_bytes_and_hashes, role_hash, seed, checkpoint_hashes, teacher_identity, hardware_and_versions]
+
+recovery:
+  stage1_checkpoint_sha256: 0c741cf65b87672aa3699e03f0996b6f57597f49d5c0323602a53504a46851a1
+  reason: explicit_recovery_after_runner_AMP_overflow_control_fix_no_geometry_or_model_change
+  unchanged_scientific_files_sha256:
+    src/reliable_endo_gs/baseline/a00_model.py: 848f6b98086cf71f7a2a44cfe5ced64ccbc24559efbc182a7cdbcef03af1d2ab
+    src/reliable_endo_gs/baseline/evaluation/a00_small.py: 3ed15016cbfa9c90262f520c10f7edb5eb30d9446402f4032d537bb302566fc4
+    src/reliable_endo_gs/geometry/rectified.py: 0071352c8de49ae7deacaef3945ceb8668d4f71b323fea2bd337c4c5a705458c
+    src/reliable_endo_gs/rendering/production.py: 831f3b38dadcbf9447c35580e951a4c3a4154923481af59eeef1491526a70afd

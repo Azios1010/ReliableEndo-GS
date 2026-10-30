@@ -26,6 +26,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--target-mask-index", type=Path, help="External deployment ROI index; never GT masks"
     )
+    parser.add_argument(
+        "--study-protocol-path",
+        type=Path,
+        help="Explicit frozen-repair study with automatic deployment support-grid regions",
+    )
     parser.add_argument("--roles", type=Path, default=Path("configs/teachers/a01_scared.yaml"))
     parser.add_argument("--data-root", type=Path, required=True)
     parser.add_argument("--manifest", type=Path, required=True)
@@ -64,6 +69,22 @@ def build_parser() -> argparse.ArgumentParser:
         help="New run with model-only weights; repairs/selector/Adam start fresh",
     )
     parser.add_argument("--max-steps", type=int, help="Bound consumed training samples")
+    parser.add_argument(
+        "--gpu-input",
+        action="store_true",
+        help=(
+            "Prepare RGB and GT on CUDA, preserving identity/twofold CPU resize rounding "
+            "without duplicate RGB decoding (train/smoke only)"
+        ),
+    )
+    parser.add_argument(
+        "--stage-from", type=Path, help="Original data root for asynchronous byte staging"
+    )
+    parser.add_argument("--stage-inventory", type=Path, help="Pinned relative file inventory")
+    parser.add_argument("--staging-journal", type=Path, action="append", default=[])
+    parser.add_argument("--prefetch-samples", type=int, default=64)
+    parser.add_argument("--staging-workers", type=int, default=2)
+    parser.add_argument("--staging-retries", type=int, default=6)
     parser.add_argument("--sample-id")
     parser.add_argument("--data-role", choices=("final_train", "final_test"), default="final_train")
     parser.add_argument(

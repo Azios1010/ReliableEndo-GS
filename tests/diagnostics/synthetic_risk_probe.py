@@ -230,7 +230,7 @@ def run(output: Path, snapshots: int = 48, evaluation_variants: int = 12) -> dic
                 "initialization": initialization,
                 "intervention_config": config.to_dict(),
                 "config_hash": config.config_hash,
-                "student_config": asdict(learner.config),
+                "student_config": learner.config.to_dict(),
                 "routing_config": asdict(learner.routing),
                 "construction_config": learner.model.config.to_dict(),
                 "mask_config": asdict(learner.mask_config),

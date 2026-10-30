@@ -1,5 +1,6 @@
 # Opt-in TRAIN-only metric geometry objective; historical policy stays unchanged.
-# All owners learn jointly; GT is never part of deployment inputs.
+# Student is frozen; GT is never part of deployment inputs.
+# Stage B may reuse the frozen actions and fit only this selector variant.
 schema: intervention_selection.v2
 selector_architecture: separate_action_heads
 selector_balance_mode: per_action
@@ -49,5 +50,5 @@ geometry_loss_scale_mm: 1.0
 # Explicit feature/event ablation; shared utility/guards remain identical.
 selector_risk_mode: local_global
 selector_feature_mode: mask_tokens
-selector_token_channels: 32
+selector_token_channels: 64
 student_update_mode: frozen

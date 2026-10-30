@@ -128,7 +128,7 @@ def fit_selector_heads(
         s.rsplit("/", 1)[0] for s in validation.sample_ids
     ):
         raise ValueError("fit/validation keyframes overlap")
-    torch.manual_seed(policy.seed)
+    torch.manual_seed(policy.resolved_fit_seed)
     fit_ids = tuple(dict.fromkeys(fit.sample_ids))
     head_config = replace(
         config,

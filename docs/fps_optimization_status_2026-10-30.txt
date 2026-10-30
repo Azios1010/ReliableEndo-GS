@@ -1,0 +1,63 @@
+TOI UU FPS DUONG CHAY CO BO TINH CHINH L6 - TRANG THAI VA KET LUAN KHA THI (2026-10-30)
+=========================================================================================
+Doc tren terminal:   less -S /mnt/d/workspace/huann/reliableendo-gs/docs/fps_optimization_status_2026-10-30.txt
+Muc tieu cua nguoi phu trach: >= 45-50 FPS o 512x640, chat luong khong kem hon hien tai. Tieu chi chap nhan viet va hash TRUOC khi sua ma:
+results/fps/CRITERIA.txt (sha256 98f5094c...). Tham chieu R0 = duong chay hien tai (student + GroupNorm song song + CUDA graph + deferred validation
++ L6, bo qua render truong goc). Chua cham 64 khung niem phong va final_test.
+
+1. SO DO (cung mot tien trinh, ghep cap voi duong A khong co bo tinh chinh; may yen, 3 lan do, lech giua cac lan ~0.1 ms)
+------------------------------------------------------------------------------------------------------------------------
+ 512x640                                            ms     FPS    giong bit R0   ghi chu
+ A  duong chay khong co bo tinh chinh             27.67   36.1       -
+ R0 / buoc 1 (RefinedInference trong src/)         31.62   31.6      co          +3.95 ms so voi A (so +2.0 ms truoc day la do 1 lan may man)
+ thu nghiem: linalg.inv khong kiem loi tren host   31.03   32.2      co          chi -0.6 ms
+ thu nghiem: bo hiep phuong sai be mat (khong ai doc) 29.72  33.7     co          -1.9 ms
+ thu nghiem CAN TREN: bo MOI lan doc chan doan/kiem tra + inv_ex + bo hiep phuong sai   26.94  37.1   co (chi gia tri chan doan la gia)
+ xep chong khung (mang stereo khung i+1 tren luong phu)  32.2 vs 32.3 tuan tu           co          KHONG cai thien
+ (1280x1024: R0 91.3 ms = 10.95 FPS; can tren thu nghiem 85.96 ms = 11.6 FPS)
+
+2. VI SAO KHONG DEN 45 FPS DE DANG (bang chung)
+------------------------------------------------
+ * GPU chi bat ~20.5 ms/khung (chi tinh su kien kernel, khong dem trung). Khung ~31.6 ms, nghia la GPU roi ~11 ms.
+ * Moi khung phong ~2135 lan kernel va ~3300 su kien kernel; 24 lan dong bo; 70 lan copy host-device.
+ * cProfile: ~17 ms/32.8 ms la CPU cho GPU tai 16 diem dong bo (13 lan tolist, 3 lan nonzero); NHUNG dong thoi gian GPU roi khong nam o vai khoang
+   lon: khoang trong lon nhat chi 0.54 ms, con lai la HANG NGHIN khoang trong nho (geometry prior ~1500, render ~540, compose ~550).
+   => duong chay bi nghen vi phong qua nhieu kernel nho tu Python (launch-bound), khong phai vi cho mot vai diem dong bo lon.
+ * Hai do phan giai cho thay: khung ~ 11.7 ms co dinh (CPU) + 19.9 ms ti le theo so diem anh (GPU) cong don.
+ * Nhung khau ton CPU nhieu nhat (sau khi tru cho doi GPU): geometry prior (nhieu nhat), compose x2 (~2.3 ms moi lan), render x2 (~3.4 ms moi lan,
+   ca thiet lap camera + kiem tra + nonzero), mang stereo chi ~1.5 ms CPU vi da dung CUDA graph.
+
+3. KET LUAN KHA THI
+--------------------
+ * Bit-exact (khong doi dau ra) kha thi toi ~37 FPS (can tren do duoc 26.9 ms), thuc te co the ~35-37 FPS: bo hiep phuong sai khong dung (-1.9 ms),
+   dua dem chan doan ve mot lan doc cuoi khung, bo kiem tra lap lai (inv, tan fov) bang bo nho dem theo camera. Moi buoc can test giong bit.
+ * 45-50 FPS can cat HANG NGHIN kernel nho: (a) CUDA graph cho doan sau stereo va truoc rasterizer (can bo nonzero/ep kich thuoc co dinh trong
+   sample_grid, bo moi lan doc host trong doan do) - viec lon, nhieu ngay, nguy co tren cong thuc khoa hoc; hoac (b) torch.compile/hop nhat kernel
+   cho doan do - khong dam bao giong bit, can dung sai da dang ky; (c) fp16/channels_last cho stereo CHI cat phan GPU nen khong giai quyet nghen CPU.
+ * Giam so Gaussian KHONG giup nhieu o 512x640 vi nghen la CPU/launch, khong phai GPU.
+ * Tang tong FPS chu khong chi do tre tung khung: xep chong khung khong giup (da thu).
+
+4. TRANG THAI MA NGUON
+-----------------------
+ Da them (chua commit): actions/refinement.py: RefinedInference (bo qua render truong goc, giong bit voi refine_gaussian_field tren trang thai da render day du),
+ tests/architecture/test_field_refiner.py (13 test dat). Script: scripts/fps_bench.py (ref/cmp/pipe), profile_deploy.py, sync_map_B.py, stage_busy.py,
+ gaps.py, cpu_prof.py. So lieu tho: results/fps/*.json (R0 refs: refs_R0.pt).
+
+5. KET QUA PHUONG AN A (cac buoc giong bit), 2026-10-30 19:55
+-----------------------------------------------------------
+ Tieu chi ghi truoc: results/fps/CRITERIA.txt. Do ghep cap trong cung tien trinh, 3 lan, GPU0 ranh, tai CPU thap (loadavg trong results/fps/uptime_log.txt).
+ 512x640 (trung vi ms; FPS)                                              ms      FPS   giong bit R0
+ R0 / buoc 1  RefinedInference (bo render truong goc, trong src/)        31.62   31.6   co
+ buoc 4       + bo hiep phuong sai be mat khong ai doc (skip_unread_surface_covariance)   29.79   33.6   co
+ buoc 5       + dung lai thiet lap camera cho render (reuse_camera_settings)                28.17   35.5   co
+ 1280x1024:   R0 91.27 ms (10.96 FPS) -> 87.38 ms (11.4 FPS), giong bit.
+ Duong A (khong bo tinh chinh, khong dung hai pham vi tren) = 27.7-27.9 ms; so voi A, bo tinh chinh L6 hien chi them ~0.3-0.5 ms
+ (vi cac pham vi tren chi bat trong duong co bo tinh chinh; neu bat chung cho A thi A cung nhanh hon).
+ Kiem tra giong bit: 8 khung x 2 do phan giai (ban do tham chieu R0) VA 56/56 khung benchmark (mo hinh eager, duong trien khai vs duong day du:
+ anh trai, anh phai, disparity, xoay, scale, opacity, mau, tam deu giong tung bit; cov_surface la None trong duong trien khai).
+ Bo test day du: 1267 passed, 20 skipped (1 test thieu omegaconf trong moi truong, khong lien quan). Cay upstream sach.
+ Cac buoc CHUA lam (khong dat >= 1 ms tren moi cong viec): gom dem chan doan ve cuoi khung (can tren ~1.2 ms), inv_ex cho view phai trong bridge (~0.3 ms).
+
+ KET LUAN: muc tieu 45-50 FPS CHUA dat. Dat 35.5 FPS o 512x640 (+12% so voi 31.6) ma khong doi bit dau ra nao.
+ De len 45-50 can cat hang nghin kernel nho (CUDA graph cho doan giua, can bo nonzero/doc host; hoac torch.compile voi dung sai). Cau hinh duoc dong bang:
+ results/fps/FROZEN_CONFIG.txt. 64 khung niem phong va final_test CHUA bi cham.

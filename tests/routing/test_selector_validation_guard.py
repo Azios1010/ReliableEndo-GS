@@ -1,8 +1,6 @@
 """Action checkpoint tradeoffs preserve risk, ranking and historical identity."""
 
-import hashlib
-import json
-from dataclasses import asdict, replace
+from dataclasses import replace
 
 import pytest
 
@@ -84,20 +82,7 @@ def test_grouped_mode_rejects_shared_balance_and_unknown_policy():
 
 def test_default_guard_keeps_historical_config_hash_and_opt_in_changes_identity():
     default = SelectorRefitConfig()
-    historical = asdict(default)
-    historical.pop("validation_guard_mode")
-    for key in (
-        "partition_policy",
-        "max_training_samples",
-        "max_development_samples",
-        "collection_shard_size",
-    ):
-        if historical[key] == default.__dataclass_fields__[key].default:
-            historical.pop(key)
-    assert (
-        default.config_hash
-        == hashlib.sha256(json.dumps(historical, sort_keys=True).encode()).hexdigest()
-    )
+    assert default.config_hash == "059d44399fa1e9672c1e3d3fd6bc2f5d650d2d7328dc781224ad92868e9b719b"
     assert (
         replace(default, validation_guard_mode="action_objectives").config_hash
         != default.config_hash

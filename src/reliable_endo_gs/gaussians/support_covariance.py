@@ -21,6 +21,7 @@ from reliable_endo_gs.gaussians.stability import (
     DEFAULT_COVARIANCE_STABILITY_POLICY,
     CovarianceStabilityPolicy,
 )
+from reliable_endo_gs.utils.readback import raise_first_failure, read_ints
 
 SURFACE_COVARIANCE_SCHEMA_VERSION = "surface_covariance.v1"
 
@@ -77,11 +78,19 @@ def quaternion_to_rotation_matrix(
     if rotations.ndim < 1 or rotations.shape[-1] != 4:
         raise ValueError(f"rotations must have shape [..., 4]; got {tuple(rotations.shape)}")
     require_floating("rotations", rotations)
-    if not bool(torch.isfinite(rotations).all()):
-        raise ValueError("rotations must contain only finite values")
     norm = torch.linalg.vector_norm(rotations, dim=-1)
-    if not bool(torch.isfinite(norm).all()) or bool((norm <= norm_epsilon).any()):
-        raise ValueError("rotations must have a finite norm greater than norm_epsilon")
+    raise_first_failure(
+        [
+            (
+                torch.isfinite(rotations).all(),
+                lambda: ValueError("rotations must contain only finite values"),
+            ),
+            (
+                torch.isfinite(norm).all() & ~(norm <= norm_epsilon).any(),
+                lambda: ValueError("rotations must have a finite norm greater than norm_epsilon"),
+            ),
+        ]
+    )
     w, x, y, z = (rotations / norm.unsqueeze(-1)).unbind(dim=-1)
     return torch.stack(
         (
@@ -159,12 +168,21 @@ def build_surface_covariance(
     nan_covariance = torch.full_like(covariance, float("nan"))
     covariance = torch.where(valid.unsqueeze(-1).unsqueeze(-1), covariance, nan_covariance)
 
+    valid_count, invalid_count, nonfinite_count, nonpositive_scale_count, invalid_rotation_count = (
+        read_ints(
+            valid.sum(),
+            (~valid).sum(),
+            (~finite).sum(),
+            (~positive_scales).sum(),
+            (~valid_rotation).sum(),
+        )
+    )
     diagnostics = SurfaceCovarianceDiagnostics(
-        valid_count=int(valid.sum().item()),
-        invalid_count=int((~valid).sum().item()),
-        nonfinite_count=int((~finite).sum().item()),
-        nonpositive_scale_count=int((~positive_scales).sum().item()),
-        invalid_rotation_count=int((~valid_rotation).sum().item()),
+        valid_count=valid_count,
+        invalid_count=invalid_count,
+        nonfinite_count=nonfinite_count,
+        nonpositive_scale_count=nonpositive_scale_count,
+        invalid_rotation_count=invalid_rotation_count,
     )
     return SurfaceCovarianceResult(covariance, valid, diagnostics)
 

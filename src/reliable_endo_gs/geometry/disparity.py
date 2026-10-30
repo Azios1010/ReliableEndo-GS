@@ -1,11 +1,13 @@
 """Canonical disparity/depth transformations and scalar uncertainty propagation."""
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from math import isfinite
 
 import torch
 
 from reliable_endo_gs.geometry.conventions import GeometryConvention
+from reliable_endo_gs.utils.readback import raise_first_failure, read_ints
 
 
 @dataclass(frozen=True, slots=True)
@@ -208,15 +210,20 @@ def depth_uncertainty_from_disparity(
     finite_output = torch.isfinite(sigma_depth)
     valid = valid & finite_output
     sigma_depth = _nan_where_invalid(sigma_depth, valid)
+    nonfinite_sigma, negative_sigma, zero_sigma, valid_total, nonfinite_output = _counts(
+        jacobian_result.valid_mask & ~sigma_finite,
+        jacobian_result.valid_mask & sigma_finite & (sigma_d < 0),
+        jacobian_result.valid_mask & sigma_finite & (sigma_d == 0),
+        valid,
+        jacobian_result.valid_mask & sigma_finite & sigma_positive & ~finite_output,
+    )
     diagnostics = DepthUncertaintyDiagnostics(
         scalar=jacobian_result.diagnostics,
-        nonfinite_sigma_count=_count(jacobian_result.valid_mask & ~sigma_finite),
-        negative_sigma_count=_count(jacobian_result.valid_mask & sigma_finite & (sigma_d < 0)),
-        zero_sigma_count=_count(jacobian_result.valid_mask & sigma_finite & (sigma_d == 0)),
-        valid_count=_count(valid),
-        nonfinite_output_count=_count(
-            jacobian_result.valid_mask & sigma_finite & sigma_positive & ~finite_output
-        ),
+        nonfinite_sigma_count=nonfinite_sigma,
+        negative_sigma_count=negative_sigma,
+        zero_sigma_count=zero_sigma,
+        valid_count=valid_total,
+        nonfinite_output_count=nonfinite_output,
     )
     return DepthUncertaintyResult(sigma_depth, valid, diagnostics, convention)
 
@@ -251,6 +258,7 @@ def _validate_camera_scalars(
     *,
     reference: torch.Tensor,
 ) -> None:
+    value_checks: list[tuple[torch.Tensor, Callable[[], BaseException]]] = []
     for name, scalar in (("focal_length_x", focal_length_x), ("baseline", baseline)):
         if not isinstance(scalar, torch.Tensor):
             raise TypeError(f"{name} must be a torch.Tensor")
@@ -270,10 +278,16 @@ def _validate_camera_scalars(
                 f"{name} must have the same dtype as the image tensor ({reference.dtype}); "
                 f"got {scalar.dtype}"
             )
-        if not bool(torch.all(torch.isfinite(scalar))):
-            raise ValueError(f"{name} must be finite")
-        if not bool(torch.all(scalar > 0)):
-            raise ValueError(f"{name} must be positive")
+        value_checks.append(
+            (
+                torch.all(torch.isfinite(scalar)),
+                lambda name=name: ValueError(f"{name} must be finite"),
+            )
+        )
+        value_checks.append(
+            (torch.all(scalar > 0), lambda name=name: ValueError(f"{name} must be positive"))
+        )
+    raise_first_failure(value_checks)
 
 
 def _validate_sigma(sigma_d: torch.Tensor, *, reference: torch.Tensor) -> None:
@@ -307,13 +321,20 @@ def _positive_scalar_validity(
     positive = value > 0
     above_threshold = value >= min_abs_value
     valid = valid_mask & finite & positive & above_threshold
+    masked, nonfinite, wrong_sign, below_threshold, valid_total = _counts(
+        ~valid_mask,
+        valid_mask & ~finite,
+        valid_mask & finite & ~positive,
+        valid_mask & finite & positive & ~above_threshold,
+        valid,
+    )
     diagnostics = ScalarValidityDiagnostics(
         total_count=value.numel(),
-        input_masked_count=_count(~valid_mask),
-        nonfinite_input_count=_count(valid_mask & ~finite),
-        wrong_sign_count=_count(valid_mask & finite & ~positive),
-        below_threshold_count=_count(valid_mask & finite & positive & ~above_threshold),
-        valid_count=_count(valid),
+        input_masked_count=masked,
+        nonfinite_input_count=nonfinite,
+        wrong_sign_count=wrong_sign,
+        below_threshold_count=below_threshold,
+        valid_count=valid_total,
         nonfinite_output_count=0,
     )
     return valid, diagnostics
@@ -327,14 +348,17 @@ def _finalize_scalar_output(
     finite_output = torch.isfinite(output)
     final_valid_mask = valid_mask & finite_output
     finalized_output = _nan_where_invalid(output, final_valid_mask)
+    final_valid_total, nonfinite_output_total = _counts(
+        final_valid_mask, valid_mask & ~finite_output
+    )
     finalized_diagnostics = ScalarValidityDiagnostics(
         total_count=diagnostics.total_count,
         input_masked_count=diagnostics.input_masked_count,
         nonfinite_input_count=diagnostics.nonfinite_input_count,
         wrong_sign_count=diagnostics.wrong_sign_count,
         below_threshold_count=diagnostics.below_threshold_count,
-        valid_count=_count(final_valid_mask),
-        nonfinite_output_count=_count(valid_mask & ~finite_output),
+        valid_count=final_valid_total,
+        nonfinite_output_count=nonfinite_output_total,
     )
     return finalized_output, final_valid_mask, finalized_diagnostics
 
@@ -352,3 +376,8 @@ def _validate_minimum(value: float, *, name: str) -> None:
 
 def _count(mask: torch.Tensor) -> int:
     return int(mask.sum().item())
+
+
+def _counts(*masks: torch.Tensor) -> list[int]:
+    """Several mask counts with a single host transfer."""
+    return read_ints(*[mask.sum() for mask in masks])

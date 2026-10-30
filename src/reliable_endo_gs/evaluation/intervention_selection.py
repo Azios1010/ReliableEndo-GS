@@ -20,10 +20,12 @@ from reliable_endo_gs.actions.repair import (
     eligible,
 )
 from reliable_endo_gs.config.intervention import InterventionConfig
+from reliable_endo_gs.config.selector_study import load_selector_study_config
 from reliable_endo_gs.data.scared_a00 import ScaredA00Adapter, load_a01_manifest
 from reliable_endo_gs.data.target_masks import TargetMaskIndex
 from reliable_endo_gs.evaluation.benchmark_geometry import evaluate_geometry
 from reliable_endo_gs.evaluation.gain_events import gain_event_metrics
+from reliable_endo_gs.evaluation.perceptual import LPIPSAlexNet
 from reliable_endo_gs.evaluation.rendering import psnr, windowed_ssim
 from reliable_endo_gs.evaluation.risk_events import risk_event_metrics
 from reliable_endo_gs.reconstruction import ReferenceConfig
@@ -43,6 +45,7 @@ from reliable_endo_gs.routing.repairability import (
     select_repairability,
 )
 from reliable_endo_gs.routing.selector import Decision
+from reliable_endo_gs.routing.support_grid import AutomaticSupportGrid, automatic_study_regions
 from reliable_endo_gs.routing.tokens import selector_feature_names
 from reliable_endo_gs.runtime.git import get_git_commit, is_git_dirty
 from reliable_endo_gs.runtime.identity import source_sha256
@@ -57,6 +60,7 @@ from reliable_endo_gs.training.repairability import (
     stereo_consistency_loss,
 )
 from reliable_endo_gs.training.student_checkpoint import (
+    import_frozen_repair_artifact,
     load_student_checkpoint,
     read_student_checkpoint,
 )
@@ -114,6 +118,10 @@ def evaluate_intervention_selection(
     cost_calibration_path: Path | None = None,
     expected_checkpoint_sha256: str | None = None,
     selector_refit_path: Path | None = None,
+    study_protocol_path: Path | None = None,
+    lpips_backbone: Path | None = None,
+    lpips_calibration: Path | None = None,
+    require_lpips: bool = False,
 ) -> dict[str, object]:
     """Read-only deployment evaluation; restore RNG even on evaluation failure."""
     if not torch.cuda.is_available():
@@ -137,6 +145,10 @@ def evaluate_intervention_selection(
             cost_calibration_path=cost_calibration_path,
             expected_checkpoint_sha256=expected_checkpoint_sha256,
             selector_refit_path=selector_refit_path,
+            study_protocol_path=study_protocol_path,
+            lpips_backbone=lpips_backbone,
+            lpips_calibration=lpips_calibration,
+            require_lpips=require_lpips,
         )
     finally:
         restore_rng(rng, device)
@@ -159,6 +171,10 @@ def _evaluate_intervention_selection(
     cost_calibration_path: Path | None = None,
     expected_checkpoint_sha256: str | None = None,
     selector_refit_path: Path | None = None,
+    study_protocol_path: Path | None = None,
+    lpips_backbone: Path | None = None,
+    lpips_calibration: Path | None = None,
+    require_lpips: bool = False,
 ) -> dict[str, object]:
     """Evaluate real shared actions, fixed-mask gain and independent GT metrics.
 
@@ -168,6 +184,10 @@ def _evaluate_intervention_selection(
     """
     if max_samples < 1:
         raise ValueError("max_samples must be positive")
+    if (lpips_backbone is None) != (lpips_calibration is None) or (
+        require_lpips and lpips_backbone is None
+    ):
+        raise ValueError("LPIPS requires both pinned local backbone and calibration weights")
     if not torch.cuda.is_available():
         raise ValueError("native selection evaluation requires CUDA")
     repo = Path(__file__).resolve().parents[3]
@@ -201,6 +221,12 @@ def _evaluate_intervention_selection(
     if raw.get("intervention_config") is None:
         raise ValueError("requires a gain/harm intervention checkpoint")
     cfg = InterventionConfig(**raw["intervention_config"])
+    study = None if study_protocol_path is None else load_selector_study_config(study_protocol_path)
+    if study is not None and selector_refit_path is not None:
+        selector_raw = torch.load(selector_refit_path, map_location="cpu", weights_only=True)
+        if selector_raw.get("study_config_hash") != study.config_hash:
+            raise ValueError("selector study protocol mismatch")
+        cfg = InterventionConfig(**selector_raw["decision_config"])
     if (
         (
             raw["identity"]["source_sha256"] != source_sha256(repo)
@@ -223,13 +249,19 @@ def _evaluate_intervention_selection(
         width=config.width,
         bins=config.bins,
         minimum_effective_px=config.minimum_effective_px,
+        stereo_architecture=config.stereo_architecture,
     ).to(device)
     mask_config = (
         None if raw.get("mask_config") is None else MaskProposalConfig(**raw["mask_config"])
     )
-    if (mask_config is None) != (target_mask_index is None):
+    if study is not None:
+        if target_mask_index is not None or expected_checkpoint_sha256 is None:
+            raise ValueError("study evaluation requires a pinned actor and automatic regions")
+        mask_config, masks = automatic_study_regions(study)
+    elif (mask_config is None) != (target_mask_index is None):
         raise ValueError("mask checkpoint requires its explicit deployment ROI index")
-    masks = None if target_mask_index is None else TargetMaskIndex(target_mask_index)
+    else:
+        masks = None if target_mask_index is None else TargetMaskIndex(target_mask_index)
     if masks is not None:
         if construction.runtime.resolution_hw is None:
             raise ValueError("mask evaluation requires a pinned output grid")
@@ -252,7 +284,13 @@ def _evaluate_intervention_selection(
     # A fresh STOP-only baseline has no fitted routing normalizer. The strict
     # resume validator accepts it on this disposable clone; the public wrapper
     # restores process RNG and no action/selector prediction is executed.
-    load_student_checkpoint(checkpoint, learner, raw["identity"], size, resume=base_only)
+    if study is None:
+        load_student_checkpoint(checkpoint, learner, raw["identity"], size, resume=base_only)
+    else:
+        assert expected_checkpoint_sha256 is not None
+        import_frozen_repair_artifact(
+            checkpoint, learner, expected_sha256=expected_checkpoint_sha256
+        )
     if cost_calibration_path is not None and not base_only:
         artifact = load_cost_calibration(cost_calibration_path)
         if artifact.binding.get(
@@ -263,7 +301,9 @@ def _evaluate_intervention_selection(
     if selector_refit_path is not None:
         if base_only:
             raise ValueError("STOP baseline cannot attach a refit selector")
-        learner.load_refit_selector(selector_refit_path, source_sha256(repo))
+        learner.load_refit_selector(
+            selector_refit_path, source_sha256(repo), study_artifact=study is not None
+        )
     refit = learner.metric_selector
     if refit is not None and not isinstance(refit, CalibratedSelector):
         raise ValueError("intervention evaluator requires the calibrated selector")
@@ -286,6 +326,7 @@ def _evaluate_intervention_selection(
         isinstance(learner.selector, BalancedSelector)
         and not bool(learner.selector.normalization.fitted)
         and not base_only
+        and study is None
     ):
         raise ValueError("evaluation requires fitted training normalization")
     for module in (model, learner.actions, learner.selector):
@@ -303,6 +344,9 @@ def _evaluate_intervention_selection(
             raise ValueError("diagnostic metric policy differs from joint supervision")
         metric_config = configured_metric
     adapter = ScaredA00Adapter(data_root, manifest, roles=roles)
+    perceptual = None
+    if lpips_backbone is not None and lpips_calibration is not None:
+        perceptual = LPIPSAlexNet(lpips_backbone, lpips_calibration).to(device).eval()
     output_dir.mkdir(parents=True, exist_ok=False)
     torch.cuda.reset_peak_memory_stats(device)
     records: list[dict[str, Any]] = []
@@ -351,9 +395,15 @@ def _evaluate_intervention_selection(
             if regions:
                 features = learner.selection_features(state, regions)
                 predictor = refit if refit is not None else learner.selector
-                gains, harms, event_predictions, gain_components = _selection_outputs(
-                    predictor, features
-                )
+                if study is not None and refit is None:
+                    # Stage A's temporary selector is discarded. This invocation
+                    # evaluates fixed repairs/oracle only; no random head decision.
+                    gains = features.new_zeros((len(regions), 3))
+                    harms = features.new_zeros((len(regions), 3))
+                else:
+                    gains, harms, event_predictions, gain_components = _selection_outputs(
+                        predictor, features
+                    )
             else:
                 features = (
                     state.batch.left.new_empty((0, len(learner.selector.normalization.center)))
@@ -585,6 +635,14 @@ def _evaluate_intervention_selection(
                         metrics[view + "_psnr"] = psnr(render, image)
                         metrics[view + "_ssim"] = windowed_ssim(render.image, image)
                     metric_cache[key] = {k: v.to_dict() for k, v in metrics.items()}
+                if perceptual is not None and "left_lpips_alex" not in metric_cache[key]:
+                    for view, render, image in (
+                        ("left", outcome.left, state.batch.left),
+                        ("right", outcome.right, state.batch.right),
+                    ):
+                        metric_cache[key][view + "_lpips_alex"] = perceptual.measure(
+                            render.image, image
+                        ).to_dict()
                 row = dict(observed[key])
                 if not row.get("selector_label_available", True):
                     row.update(gain=None, local_gain=None, harm=None)
@@ -802,6 +860,16 @@ def _evaluate_intervention_selection(
         "manifest_hash": manifest.manifest_hash,
         "training_manifest_hash": train.manifest_hash,
         "checkpoint_sha256": checkpoint_digest,
+        "operative_action_identity": learner.operative_action_identity(),
+        "candidate_protocol_identity": learner.candidate_protocol_identity(),
+        "study_config_hash": None if study is None else study.config_hash,
+        "discarded_stage_a_selector": study is not None and refit is None,
+        "perceptual_metric": {
+            "status": "unavailable",
+            "reason": "pinned local LPIPS weights not supplied",
+        }
+        if perceptual is None
+        else {"status": "measured", **perceptual.identity},
         "checkpoint_source_sha256": raw["identity"]["source_sha256"],
         "checkpoint_import_mode": "explicit_pinned_historical_read_only_evaluation"
         if expected_checkpoint_sha256 is not None
@@ -845,7 +913,11 @@ def _evaluate_intervention_selection(
         "teacher_inference_executed": False,
         "training_executed": False,
         "summary": summaries,
-        "region_protocol": "fixed_grid.v1" if mask_config is None else mask_config.schema,
+        "region_protocol": masks.config.schema
+        if isinstance(masks, AutomaticSupportGrid)
+        else "fixed_grid.v1"
+        if mask_config is None
+        else mask_config.schema,
         "mask_config_hash": None if mask_config is None else mask_config.config_hash,
         "target_mask_index_sha256": None if masks is None else masks.identity,
         "metric_config_hash": None if metric_config is None else metric_config.config_hash,
@@ -854,7 +926,12 @@ def _evaluate_intervention_selection(
             "Same-keyframe diagnostic development, not sequence-disjoint final test.",
             "Warp residual and harm labels are proxies; GT metrics are reported independently.",
             "Single-run policy timings exclude I/O and oracle overhead; not a latency benchmark.",
-            "No LPIPS; sampled clouds are diagnostics, not paper-protocol parity.",
+            "Sampled clouds are diagnostics, not paper-protocol parity.",
+            *(
+                ["LPIPS unavailable: pinned local weights not supplied."]
+                if perceptual is None
+                else []
+            ),
         ],
     }
     if metric_config is not None:

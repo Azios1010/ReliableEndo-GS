@@ -7,6 +7,7 @@ validity map and image shape alone.  Values gathered through a
 indices are intentionally hard/discrete.
 """
 
+import functools
 from dataclasses import dataclass
 from typing import Literal
 
@@ -199,7 +200,9 @@ def sample_grid(
     for batch_index, indices in enumerate(flat_indices):
         if indices.numel():
             coverage[batch_index].flatten()[indices] = True
-    counts_tensor = torch.tensor(counts, dtype=torch.long, device=valid.device)
+    counts_tensor = valid_slots.sum(
+        dim=1
+    )  # equals ``counts`` (int64) without a host-to-device copy
     return SamplingResult(
         source_index=source_index,
         source_xy=source_xy,
@@ -208,6 +211,86 @@ def sample_grid(
         eligible_mask=eligible.unsqueeze(1),
         counts=counts_tensor,
         policy=resolved_policy,
+    )
+
+
+def fixed_grid_cells(
+    height: int, width: int, policy: SamplingPolicy
+) -> tuple[int, int, int, int] | None:
+    """``(y0, x0, rows, cols)`` of the regular grid of ``mode="fixed"``, or None when it cannot be laid out statically.
+
+    None means: not a fixed grid, an empty grid, or a cap smaller than the grid (the cap then keeps only the first cells in
+    row-major order, which is a data-dependent selection).
+    """
+
+    if policy.mode != "fixed":
+        return None
+    y0, x0 = policy.offset_xy[1] % policy.stride, policy.offset_xy[0] % policy.stride
+    rows, cols = len(range(y0, height, policy.stride)), len(range(x0, width, policy.stride))
+    cap = policy.effective_cap
+    if rows * cols == 0 or (cap is not None and rows * cols > cap):
+        return None
+    return y0, x0, rows, cols
+
+
+@functools.lru_cache(maxsize=16)
+def _fixed_grid_tables(
+    height: int,
+    width: int,
+    cells: tuple[int, int, int, int],
+    stride: int,
+    dtype: torch.dtype,
+    device: torch.device,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Immutable (source_index [N], source_xy [N,2]) of a fixed grid, built once per layout."""
+
+    y0, x0, _, _ = cells
+    v = torch.arange(y0, height, stride, device=device)
+    u = torch.arange(x0, width, stride, device=device)
+    vv, uu = torch.meshgrid(v, u, indexing="ij")
+    source_index = (vv * width + uu).reshape(-1)
+    source_xy = torch.stack((uu.reshape(-1), vv.reshape(-1)), dim=-1).to(dtype=dtype)
+    return source_index, source_xy
+
+
+def sample_fixed_grid_static(
+    grid_valid: torch.Tensor,
+    image_hw: tuple[int, int],
+    cells: tuple[int, int, int, int],
+    *,
+    policy: SamplingPolicy,
+) -> SamplingResult:
+    """Fixed-grid sampling with one slot per grid cell and no data-dependent shape or host read.
+
+    ``grid_valid`` is the validity of the grid centres, ``[B,rows,cols]``; ``cells`` comes from :func:`fixed_grid_cells`.
+    Slot ``k`` is grid cell ``k`` in row-major order. Cells without a valid centre are holes (``valid_mask=False``,
+    ``source_index=-1``, ``source_xy=0``), which downstream code already treats as padding. For a frame whose grid cells
+    are all valid this is exactly the compacted :func:`sample_grid` result.
+    """
+
+    if grid_valid.dtype != torch.bool or grid_valid.ndim != 3:
+        raise TypeError("grid_valid must be a boolean [B,rows,cols] tensor")
+    batch_size, rows, cols = grid_valid.shape
+    height, width = image_hw
+    y0, x0, expected_rows, expected_cols = cells
+    if (rows, cols) != (expected_rows, expected_cols):
+        raise ValueError("grid_valid does not match the grid cells")
+    source_index, source_xy = _fixed_grid_tables(
+        height, width, cells, policy.stride, torch.get_default_dtype(), grid_valid.device
+    )
+    slots = grid_valid.reshape(batch_size, rows * cols)
+    eligible = torch.zeros(
+        (batch_size, 1, height, width), dtype=torch.bool, device=grid_valid.device
+    )
+    eligible[:, 0, y0 :: policy.stride, x0 :: policy.stride] = grid_valid
+    return SamplingResult(
+        source_index=torch.where(slots, source_index, torch.full_like(source_index, -1)),
+        source_xy=torch.where(slots.unsqueeze(-1), source_xy, torch.zeros_like(source_xy)),
+        valid_mask=slots,
+        coverage=eligible,
+        eligible_mask=eligible,
+        counts=slots.sum(dim=1),
+        policy=policy,
     )
 
 
@@ -285,7 +368,9 @@ __all__ = [
     "SamplingResult",
     "SamplingCorrespondence",
     "deterministic_sample",
+    "fixed_grid_cells",
     "gather_source",
+    "sample_fixed_grid_static",
     "sample_grid",
     "sample_pixels",
     "sample_source",

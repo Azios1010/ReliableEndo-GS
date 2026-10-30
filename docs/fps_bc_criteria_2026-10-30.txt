@@ -1,0 +1,56 @@
+FPS WORK, PART 2: ADDENDUM TO CRITERIA.txt (sha256 98f5094c...) FOR THE B (CUDA GRAPH) AND C (torch.compile) ATTEMPTS
+Written 2026-10-30 22:2x +07, BEFORE any change to a file under src/ or tests/ for this task. Hash in CRITERIA_BC.sha256.
+
+User instruction (2026-10-30, evening): keep the result of part A; also try B and C to raise FPS; keep the action-repair
+contribution prominent ("lam du noi bat contribution cua phan action repair"). The success bar for the confirmatory run is a
+separate, still-pending decision and is NOT part of this file.
+
+0. FROZEN REFERENCE (path A = R0 + steps 1,4,5 of CRITERIA.txt)
+   frozen_A/src_full_A.tar.gz sha256 f3f0cf7c300d5498e70df029d13e4c5e14e528b562ff29c34c8f810ec74f0e55 (src/, scripts/, 2 test files),
+   frozen_A/refs_R0.pt sha256 05454e6c..., FROZEN_CONFIG.txt unchanged. Part A: 28.17 ms = 35.5 FPS @512x640 (87.4 ms @1280x1024).
+   Every new transform is an OPT-IN deployment scope, default OFF (same ContextVar pattern as utils/inference_mode.py).
+   After every src change, path A with all new scopes OFF must still reproduce refs_R0.pt bit-for-bit (8 frames x 2 resolutions).
+
+1. CEILING (measured 2026-10-30, GPU0 idle, results/ceiling.json; do not promise more than this)
+   512x640: stereo CUDA graph alone 10.22 ms GPU; whole frame GPU busy (union of kernel intervals) 19.47 ms; 45 FPS = 22.2 ms, 50 FPS = 20.0 ms.
+   => removing ALL host overhead cannot exceed ~51 FPS. 50 FPS is not reachable by B alone; it needs GPU work to shrink as well
+   (S1 below, C fusion, or a cheaper stereo network). 45 FPS needs exposed CPU time to fall from ~8.3 ms to about 2 ms.
+   Geometry-prior split measured: estimate_surface_frame ~5.2 ms GPU on all 327,680 pixels, of which only the stride-2 grid (81,920 slots)
+   is ever consumed (SamplingPolicy mode=fixed stride=2 offset (0,0) cap=100000; the cap binds only at 1024x1280, where the grid has 327,680 cells).
+
+2. VARIANTS, in this order; each measured separately AND cumulatively; none is skipped because an earlier one failed
+   S1  EXACT-STRUCTURAL: static grid layout for mode=fixed sampling when stride-grid size <= cap (slot k = grid cell k, invalid cells are holes with
+       valid=False, no nonzero), plus the surface frame evaluated only at the consumed grid cells (shared per-centre arithmetic, neighbours taken as strided
+       views). Skips work whose result is never consumed. Falls back to the unchanged dynamic path when cap binds or mode != fixed.
+   B1  CUDA graph of the segment stereo -> refined field (everything before the rasteriser call), rasteriser + its compaction outside the graph
+       (its native code does a device-to-host copy and cannot be captured). All validations recorded in the graph are re-registered with the active
+       deferred_validation scope on every replay. Diagnostics read once per frame after the rasteriser, or lazily.
+   C1  torch.compile (Inductor, no cudagraph) on per-slot elementwise regions of the post-stereo segment. Numerical-approximation class.
+   C2  B1 + C1 (compiled regions captured inside the graph). Numerical-approximation class.
+   D1  ONLY if still < 45 FPS after the above: stereo network channels_last / reduced precision (CRITERIA.txt step 6 list). Separate disclosure.
+   If C is technically blocked (compile failure, graph breaks that cannot be removed) it is reported as blocked with the evidence, not dropped silently.
+   Inductor on sm_120 was probed: torch 2.7.1+cu128, triton 3.3.1 compiles and runs a fused function on GPU0.
+
+3. EQUIVALENCE (as in CRITERIA.txt)
+   S1, B1, B2: must be BIT-IDENTICAL to R0 on the 8 frames at both resolutions, and to the full path on the 56 benchmark frames. If S1 changes bits
+   only because a matmul sees a different row count, it is re-classified as a numerical approximation and judged by the table below, disclosed by name.
+   C1, C2, D1 (and any re-classified step): on the 56 benchmark val_7 frames the mean change vs R0 must satisfy |dEPE| <= 0.01 px, |d depth MAE|
+   <= 0.01 mm, |dPSNR| <= 0.01 dB (each view), |dSSIM| <= 0.001, |dLPIPS| <= 0.001, worst single-frame dPSNR >= -0.1 dB, and no listed metric may be
+   worse than R0 by more than its tolerance (non-inferiority). The 56 frames are the benchmark set, not the sealed 64, not the 48 dev frames, not final_test.
+   Error behaviour: a graphed or compiled path must raise the same exception class and message as eager on invalid input (NaN disparity, singular
+   intrinsics, non-finite colours); each such check gets a test. A path that silently drops a validation is rejected.
+
+4. ACTION-REPAIR GUARD (how this work serves the repair contribution)
+   STOP = path A without the refiner, run with the SAME transforms as the variant. For every accepted variant report (a) the refiner's marginal
+   latency = variant(refined) - variant(STOP), both in the same process; (b) on the 56 benchmark frames the refined-minus-STOP gain in PSNR (left,
+   right), SSIM, LPIPS, which must equal the R0 gain within |dGain| <= 0.01 dB (PSNR) and 0.001 (SSIM, LPIPS). A variant that is faster but shrinks the
+   repair gain beyond this is rejected, whatever its FPS.
+
+5. LATENCY PROTOCOL: as CRITERIA.txt (paired in one process against path A, batch 1, preloaded inputs, synchronised, 10 warm-up + 60 reps, 8 frames
+   cycled, THREE independent runs, median of the three medians; GPU0 at 0% beforehand; loadavg and nvidia-smi logged per run). Compile time and graph
+   capture time are excluded from steady-state latency and reported separately. The user's URS job runs on GPU1 and uses about one CPU core; this
+   path is host-bound, so absolute ms are reported together with the load average.
+
+6. DECISION AND REPORTING: the final deployed configuration is the fastest one that meets section 3 and 4; if none beats part A, part A stays. 45 FPS is
+   the target; reaching it is not guaranteed and a miss is reported as a miss with the measured ceiling. The configuration is hashed and frozen BEFORE
+   the sealed-64 and final_test runs; neither is touched by this work. Training code, checkpoints, baseline code and frozen weights are not modified.

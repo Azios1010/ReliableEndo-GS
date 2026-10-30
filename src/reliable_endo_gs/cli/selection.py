@@ -31,6 +31,14 @@ def build_parser() -> argparse.ArgumentParser:
             command.add_argument("--cost-calibration", type=Path)
             command.add_argument("--target-mask-index", type=Path)
             command.add_argument("--metric-config", type=Path)
+            command.add_argument("--study-protocol-path", type=Path)
+            command.add_argument("--selector-refit-path", type=Path)
+            command.add_argument("--lpips-backbone", type=Path)
+            command.add_argument("--lpips-calibration", type=Path)
+            command.add_argument("--require-lpips", action="store_true")
+            command.add_argument(
+                "--sample-worklist", type=Path, help="Use the sealed development IDs"
+            )
             command.add_argument("--sample-id", action="append", default=[])
             command.add_argument(
                 "--checkpoint-sha256",
@@ -172,6 +180,14 @@ def main(argv: list[str] | None = None) -> int:
                 evaluate_intervention_selection,
             )
 
+            if args.sample_worklist is not None:
+                if args.sample_id:
+                    raise ValueError("choose --sample-id or --sample-worklist")
+                work = json.loads(args.sample_worklist.read_text())
+                ids = work.get("development")
+                if not isinstance(ids, list) or not ids or any(not isinstance(s, str) for s in ids):
+                    raise ValueError("worklist must declare development sample IDs")
+                args.sample_id = ids
             result = evaluate_intervention_selection(
                 checkpoint=args.checkpoint,
                 data_root=args.data_root,
@@ -186,6 +202,11 @@ def main(argv: list[str] | None = None) -> int:
                 metric_config_path=args.metric_config,
                 sample_ids=tuple(args.sample_id) if args.sample_id else None,
                 expected_checkpoint_sha256=args.checkpoint_sha256,
+                selector_refit_path=args.selector_refit_path,
+                study_protocol_path=args.study_protocol_path,
+                lpips_backbone=args.lpips_backbone,
+                lpips_calibration=args.lpips_calibration,
+                require_lpips=args.require_lpips,
             )
     except (OSError, ValueError, RuntimeError, KeyError, AssertionError) as error:
         print(f"error: {error}", file=sys.stderr)

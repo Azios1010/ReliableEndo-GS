@@ -150,6 +150,7 @@ def test_bounded_smoke_rejects_full_burn_in_schedule(tmp_path, cpu_native_runtim
         ("smoke", True, False, "priority"),
         ("smoke", True, False, "remediation"),
         ("smoke", True, False, "frozen"),
+        ("smoke", True, False, "frozen_automatic"),
     ],
 )
 def test_cached_cli_updates_without_loading_teacher(
@@ -191,7 +192,7 @@ def test_cached_cli_updates_without_loading_teacher(
         # Only the runtime's native device transfer is substituted. Learner,
         # losses, actions, parameter updates, checkpoints and configs are real.
         monkeypatch.setattr(model, "to", lambda _: model)
-        if balanced == "frozen":
+        if balanced in ("frozen", "frozen_automatic"):
             # A real model Adam update makes this a trained synthetic Phase I
             # fixture. The new frozen run imports only its model weights.
             parent = StudentLearner(
@@ -275,7 +276,7 @@ def test_cached_cli_updates_without_loading_teacher(
             if balanced == "priority"
             else "configs/routing/intervention_balanced_smoke.yaml",
         ]
-    if balanced == "frozen":
+    if balanced in ("frozen", "frozen_automatic"):
         training = replace(StudentLearningConfig(), student_epochs=0, joint_epochs=3)
         training_path = tmp_path / "frozen-training.yaml"
         training_path.write_text(yaml.safe_dump(asdict(training)), encoding="utf-8")
@@ -293,6 +294,8 @@ def test_cached_cli_updates_without_loading_teacher(
             "--initialize-model-from",
             str(tmp_path / "phase1.pt"),
         ]
+        if balanced == "frozen_automatic":
+            argv += ["--study-protocol-path", "configs/routing/selector_study.yaml"]
     arguments = build_parser().parse_args(argv)
     if not cache_hit and not populate:
         with pytest.raises(ValueError, match="missing pinned KD cache item"):
@@ -316,10 +319,17 @@ def test_cached_cli_updates_without_loading_teacher(
         assert raw["construction_config"]["runtime"]["precision"] == "fp32"
         assert ReferenceConfig.from_dict(raw["construction_config"]).runtime.precision == "fp32"
         assert raw["cost_observations"] == (
-            3 if balanced in ("remediation", "frozen") else 2 if balanced else 1
+            3 if balanced in ("remediation", "frozen", "frozen_automatic") else 2 if balanced else 1
         )
         if balanced:
-            assert raw["schema"] == "student_joint_intervention_checkpoint.v2"
+            assert raw["schema"] == (
+                "student_joint_mask_intervention_checkpoint.v1"
+                if balanced == "frozen_automatic"
+                else "student_joint_intervention_checkpoint.v2"
+            )
+            if balanced == "frozen_automatic":
+                assert raw["automatic_support_grid"]["schema"] == "automatic_support_grid.v1"
+                assert len(raw["identity"]["study_config_hash"]) == 64
             assert bool(raw["selector"]["normalization.fitted"])
             if balanced == "priority":
                 assert raw["intervention_config"]["stereo_training_priority"] == 3.0
@@ -328,7 +338,7 @@ def test_cached_cli_updates_without_loading_teacher(
                 assert all(
                     int(state["step"]) == 1 for state in raw["selector_optimizer"]["state"].values()
                 )
-            if balanced == "frozen":
+            if balanced in ("frozen", "frozen_automatic"):
                 assert raw["optimizer_update_counts"] == {"model": 0, "actions": 3, "selector": 1}
                 assert raw["model_optimizer"]["state"] == {}
                 initialization = raw["identity"]["model_initialization"]
@@ -337,7 +347,7 @@ def test_cached_cli_updates_without_loading_teacher(
                 assert len(initialization["checkpoint_sha256"]) == 64
         assert (output / "result.json").exists()
         if command == "smoke":
-            if balanced == "frozen":
+            if balanced in ("frozen", "frozen_automatic"):
                 assert report["parameters_changed"] == {
                     "student": False,
                     "head": False,

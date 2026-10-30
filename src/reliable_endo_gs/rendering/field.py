@@ -9,6 +9,7 @@ from reliable_endo_gs.contracts.cameras import CameraBatch
 from reliable_endo_gs.contracts.deployment import RectifiedStereoCamera
 from reliable_endo_gs.contracts.gaussians import GaussianField
 from reliable_endo_gs.contracts.rendering import RenderOutput
+from reliable_endo_gs.utils.readback import raise_first_failure
 
 if TYPE_CHECKING:
     from reliable_endo_gs.rendering.cross_view import CameraRequest
@@ -42,20 +43,45 @@ class FieldRenderRequest:
             raise ValueError("RGB field and matching camera batch required")
         if f.means3d.dtype != self.camera.K_L.dtype or f.means3d.device != self.camera.K_L.device:
             raise ValueError("field/camera dtype and device must match explicitly")
-        for tensor in (f.means3d, f.colors, f.rotations, f.scales, f.opacities):
-            if not bool(torch.isfinite(tensor[f.valid_mask]).all()):
-                raise ValueError("valid field values must be finite")
-        if not bool((f.scales[f.valid_mask] > 0).all()):
-            raise ValueError("scales are positive metric standard deviations")
-        colors = f.colors[f.valid_mask]
-        if not bool(((colors >= 0) & (colors <= 1)).all()):
-            raise ValueError("RGB must be in [0,1]")
-        alpha = f.opacities[f.valid_mask]
-        if not bool(((alpha >= 0) & (alpha <= 1)).all()):
-            raise ValueError("alpha must be in [0,1]")
-        norms = torch.linalg.vector_norm(f.rotations[f.valid_mask], dim=-1)
-        if not torch.allclose(norms, torch.ones_like(norms), atol=1e-5, rtol=1e-5):
-            raise ValueError("rotations must be normalized wxyz quaternions")
+        valid = f.valid_mask
+
+        def holds(condition: torch.Tensor) -> torch.Tensor:
+            """Device flag: ``condition`` holds on every valid primitive (no boolean-mask indexing)."""
+            mask = valid.reshape(*valid.shape, *([1] * (condition.ndim - valid.ndim)))
+            return (condition | ~mask).all()
+
+        norms = torch.linalg.vector_norm(f.rotations, dim=-1)
+        unit = torch.ones_like(norms)
+        # Same conditions and order as before (allclose(norms, 1, atol=rtol=1e-5)), one host transfer.
+        raise_first_failure(
+            [
+                (
+                    torch.stack(
+                        [
+                            holds(torch.isfinite(tensor))
+                            for tensor in (f.means3d, f.colors, f.rotations, f.scales, f.opacities)
+                        ]
+                    ).all(),
+                    lambda: ValueError("valid field values must be finite"),
+                ),
+                (
+                    holds(f.scales > 0),
+                    lambda: ValueError("scales are positive metric standard deviations"),
+                ),
+                (
+                    holds((f.colors >= 0) & (f.colors <= 1)),
+                    lambda: ValueError("RGB must be in [0,1]"),
+                ),
+                (
+                    holds((f.opacities >= 0) & (f.opacities <= 1)),
+                    lambda: ValueError("alpha must be in [0,1]"),
+                ),
+                (
+                    holds((norms - unit).abs() <= 1e-5 + 1e-5 * unit.abs()),
+                    lambda: ValueError("rotations must be normalized wxyz quaternions"),
+                ),
+            ]
+        )
 
 
 class FieldRenderer(Protocol):
@@ -138,6 +164,14 @@ class ExistingRendererBridge:
             raise TypeError("backend must return RenderOutput")
         if output.image.shape != (f.means3d.shape[0], 3, *request.image_hw):
             raise ValueError("backend image shape mismatch")
-        if output.image.device != f.means3d.device or not bool(torch.isfinite(output.image).all()):
+        if output.image.device != f.means3d.device:
             raise ValueError("backend image must be finite on the field device")
+        raise_first_failure(
+            [
+                (
+                    torch.isfinite(output.image).all(),
+                    lambda: ValueError("backend image must be finite on the field device"),
+                )
+            ]
+        )
         return output

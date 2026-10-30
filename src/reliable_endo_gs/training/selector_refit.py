@@ -6,7 +6,7 @@ import hashlib
 import json
 import uuid
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +17,7 @@ from reliable_endo_gs.config.selector_refit import (
     load_selector_refit_config,
     partition_selector_training,
 )
+from reliable_endo_gs.config.selector_study import load_selector_study_config
 from reliable_endo_gs.data.scared_a00 import ScaredA00Adapter, load_a01_manifest
 from reliable_endo_gs.data.selector_cohort import (
     validate_selector_worklist,
@@ -36,6 +37,7 @@ from reliable_endo_gs.routing.cost import (
 )
 from reliable_endo_gs.routing.masks import MaskProposalConfig
 from reliable_endo_gs.routing.metric_selection import module_state_sha256
+from reliable_endo_gs.routing.support_grid import automatic_study_regions
 from reliable_endo_gs.runtime.git import get_git_commit, is_git_dirty
 from reliable_endo_gs.runtime.identity import source_sha256
 from reliable_endo_gs.teachers import load_a01_roles
@@ -49,6 +51,7 @@ from reliable_endo_gs.training.selector_outcomes import (
 )
 from reliable_endo_gs.training.selector_shards import collect_selector_shards
 from reliable_endo_gs.training.student_checkpoint import (
+    import_frozen_repair_artifact,
     import_frozen_student_actions,
     read_student_checkpoint,
 )
@@ -59,7 +62,7 @@ from reliable_endo_gs.utils.io import write_json_atomic
 
 def _validate_deployment_cohort(
     adapter: ScaredA00Adapter,
-    masks: TargetMaskIndex,
+    masks: Any,
     sample_ids: tuple[str, ...],
     output_hw: tuple[int, int],
     role: str,
@@ -100,7 +103,7 @@ def run_selector_refit(
     development_manifest: Path,
     roles_path: Path,
     worklist_path: Path,
-    target_mask_index: Path,
+    target_mask_index: Path | None,
     refit_config_path: Path,
     cost_calibration_path: Path | None,
     output_dir: Path,
@@ -111,8 +114,16 @@ def run_selector_refit(
     collect_only: bool = False,
     routing_profile_reference: Path | None = None,
     routing_profile_selector: Path | None = None,
+    study_protocol_path: Path | None = None,
+    gate_a_report: Path | None = None,
 ) -> dict[str, Any]:
     """New immutable outputs; model/actions, original splits and teacher stay fixed."""
+    if sum((preflight_only, prepare_costs, collect_only)) > 1:
+        raise ValueError("choose one of preflight, cost preparation or outcome collection")
+    if study_protocol_path is not None and not (preflight_only or prepare_costs or collect_only):
+        raise ValueError(
+            "study collection requires --collect-only; fit-many uses cli.selector_study"
+        )
     repo = Path(__file__).resolve().parents[3]
     if (routing_profile_reference is None) != (routing_profile_selector is None):
         raise ValueError("routing profiling needs both archived source and pinned selector")
@@ -156,8 +167,26 @@ def run_selector_refit(
     config = StudentLearningConfig(**raw["student_config"])
     routing = RoutingConfig(**raw["routing_config"])
     intervention = InterventionConfig(**raw["intervention_config"])
-    mask_config = MaskProposalConfig(**raw["mask_config"])
-    masks = TargetMaskIndex(target_mask_index)
+    study = None if study_protocol_path is None else load_selector_study_config(study_protocol_path)
+    if study is not None:
+        if work.get("study_config_hash") != study.config_hash:
+            raise ValueError("worklist was sealed for a different study protocol")
+        if target_mask_index is not None:
+            raise ValueError("automatic study regions do not consume an operator mask index")
+        mask_config, masks = automatic_study_regions(study)
+        if raw.get("identity", {}).get("run_kind") == "bounded_smoke":
+            raise ValueError("Stage B cannot use a bounded Stage A smoke artifact")
+        # Collection stores the statistics prefix and the complete width-derived token bank.
+        intervention = replace(
+            intervention, selector_feature_mode="statistics", selector_token_channels=0
+        )
+    else:
+        if target_mask_index is None or raw.get("mask_config") is None:
+            raise ValueError(
+                "legacy refit needs masks; grid Stage A requires explicit --study-protocol-path"
+            )
+        mask_config = MaskProposalConfig(**raw["mask_config"])
+        masks = TargetMaskIndex(target_mask_index)
     if masks.identity != work.get("target_mask_index_sha256"):
         raise ValueError("deployment target mask identity mismatch")
     resolved_cost_path = cost_calibration_path or output_dir / "cost_calibration.pt"
@@ -190,6 +219,7 @@ def run_selector_refit(
         "partition_sha256": partition["partition_sha256"],
         "refit_config_hash": policy.config_hash,
         "data_source_index_sha256": source_snapshot_sha,
+        **({"study_config_hash": study.config_hash} if study is not None else {}),
     }
     reuse_rgb_validation = False
     if output_dir.exists():
@@ -248,13 +278,14 @@ def run_selector_refit(
     device = torch.device(device_name)
     rng = capture_rng(device)
     try:
-        torch.manual_seed(policy.seed)
+        torch.manual_seed(policy.resolved_fit_seed)
         model = StudentReconstructionModel(
             renderer=ProductionFieldRenderer(),
             config=construction,
             width=config.width,
             bins=config.bins,
             minimum_effective_px=config.minimum_effective_px,
+            stereo_architecture=config.stereo_architecture,
         ).to(device)
         if model._renderer_identity() != raw["identity"]["renderer_identity"]:
             raise ValueError("native renderer identity mismatch")
@@ -266,11 +297,26 @@ def run_selector_refit(
             mask_config=mask_config,
             target_masks=masks,
         )
-        imported = import_frozen_student_actions(
-            checkpoint, learner, expected_sha256=checkpoint_sha256
-        )
+        importer = import_frozen_student_actions if study is None else import_frozen_repair_artifact
+        imported = importer(checkpoint, learner, expected_sha256=checkpoint_sha256)
         action_identity = learner.frozen_action_identity()
         original_selector = module_state_sha256(learner.selector)
+        if not prepare_costs:
+            # Collection/fitting are downstream of real repair evidence. Preflight
+            # and GT-free cost preparation remain possible before Gate A.
+            from reliable_endo_gs.training.selector_study import verify_gate_a
+
+            verify_gate_a(
+                gate_a_report,
+                checkpoint_sha256,
+                learner.operative_action_identity(),
+                masks.identity,
+                learner.candidate_protocol_identity(),
+            )
+            assert gate_a_report is not None
+            provenance["gate_a_report_sha256"] = hashlib.sha256(
+                gate_a_report.read_bytes()
+            ).hexdigest()
         samples = MaskValidationSamples(adapter, train_ids, hw)
         if costs is None:
             if not prepare_costs:
@@ -341,12 +387,13 @@ def run_selector_refit(
             output_dir=output_dir / "train_outcomes",
             shard_size=policy.collection_shard_size,
             resume=resume,
+            store_feature_bank=study is not None,
         )
         if source_snapshot_sha is not None:
             verify_selector_source_snapshot(
                 data_root, worklist_path.parent / "data-source-index.json", str(source_snapshot_sha)
             )
-        table = load_selector_outcomes(output_dir / "train_outcomes", "train")
+        table = load_selector_outcomes(output_dir / "train_outcomes", "train", allow_empty=True)
         if collect_only:
             if (
                 learner.frozen_action_identity() != action_identity
@@ -366,6 +413,28 @@ def run_selector_refit(
             }
             write_json_atomic(output_dir / "collection_result.json", result)
             return result
+        if study is not None:
+            raise ValueError(
+                "shared study collection is complete; fit with cli.selector_study from these immutable outcomes"
+            )
+        # The legacy single-arm entry point must also respect the oracle gate.
+        from reliable_endo_gs.config.selector_study import SelectorStudyConfig
+        from reliable_endo_gs.evaluation.selector_evidence import oracle_gate
+
+        fit_view = table.view(tuple(partition["fit_sample_ids"]), allow_empty=True)
+        gate = (
+            oracle_gate(fit_view, intervention, SelectorStudyConfig())
+            if fit_view.sample_ids
+            else {"status": "no_go", "reason": "FIT has no fully observed regions"}
+        )
+        write_json_atomic(output_dir / "oracle_gate.json", gate)
+        if gate["status"] != "pass":
+            return {
+                **provenance,
+                "status": "oracle_gate_no_go",
+                "selector_fitted": False,
+                "gate": gate,
+            }
         views = {
             name: table.view(tuple(partition[name + "_sample_ids"]))
             for name in ("fit", "validation", "calibration")

@@ -17,12 +17,14 @@ def main(argv: list[str] | None = None) -> int:
         "development-manifest",
         "roles-path",
         "worklist-path",
-        "target-mask-index",
         "refit-config-path",
         "output-dir",
     ):
         parser.add_argument("--" + name, type=Path, required=True)
     parser.add_argument("--checkpoint-sha256", required=True)
+    parser.add_argument("--target-mask-index", type=Path)
+    parser.add_argument("--study-protocol-path", type=Path)
+    parser.add_argument("--gate-a-report", type=Path)
     parser.add_argument("--cost-calibration-path", type=Path)
     parser.add_argument("--device-name", default="cuda:0")
     parser.add_argument("--preflight-only", action="store_true")

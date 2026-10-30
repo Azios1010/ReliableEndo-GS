@@ -1,0 +1,13 @@
+schema: selector_refit.v1
+seed: 0
+partition_seed: 0
+fit_seed: 0
+partition_policy: stratified_keyframe_hash
+max_training_samples: 5738
+max_development_samples: 1014
+collection_shard_size: 32
+max_steps: 1000
+min_steps: 50
+validate_every: 25
+patience: 6
+validation_guard_mode: action_objectives

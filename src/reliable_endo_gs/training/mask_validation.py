@@ -250,6 +250,7 @@ def run_mask_validation(
         width=config.width,
         bins=config.bins,
         minimum_effective_px=config.minimum_effective_px,
+        stereo_architecture=config.stereo_architecture,
     ).to(device)
     learner = StudentLearner(
         model,

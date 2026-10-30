@@ -23,6 +23,11 @@ from reliable_endo_gs.reconstruction.model import (
     ReferenceReconstructionModel,
     ReferenceReconstructionResult,
 )
+from reliable_endo_gs.reconstruction.stereo_features import (
+    MultiscaleStereoFeatures,
+    StereoContextDecoder,
+    StereoCostRegularizer,
+)
 from reliable_endo_gs.teachers import AlignedTeacherTarget, RectifiedAlignment
 
 
@@ -36,7 +41,14 @@ class StereoStudent(nn.Module):
     Positive effective disparity uses softplus after principal-point offset.
     """
 
-    def __init__(self, width: int = 32, bins: int = 32, minimum_effective_px: float = 0.25) -> None:
+    def __init__(
+        self,
+        width: int = 32,
+        bins: int = 32,
+        minimum_effective_px: float = 0.25,
+        *,
+        architecture: str = "compact",
+    ) -> None:
         super().__init__()
         if type(width) is not int or width < 1 or type(bins) is not int or bins < 1:
             raise ValueError("student width/bins must be positive integers")
@@ -47,18 +59,32 @@ class StereoStudent(nn.Module):
         ):
             raise ValueError("minimum effective disparity must be finite and positive")
         self.bins = bins
+        self.width = width
         self.minimum_effective_px = minimum_effective_px
-        self.features = nn.Sequential(
-            nn.Conv2d(3, width, 3, stride=2, padding=1),
-            nn.ReLU(),
-            nn.Conv2d(width, width, 3, stride=2, padding=1),
-            nn.ReLU(),
-        )
-        self.decoder = nn.Sequential(
-            nn.Conv2d(7, width, 3, padding=1),
-            nn.ReLU(),
-            nn.Conv2d(width, 1, 3, padding=1),
-        )
+        if architecture not in ("compact", "multiscale"):
+            raise ValueError("unsupported stereo student architecture")
+        if architecture == "multiscale" and width < 8:
+            raise ValueError("multiscale stereo width must be at least 8")
+        self.architecture = architecture
+        self.cost_regularizer: StereoCostRegularizer | None = None
+        self.features: nn.Module
+        self.decoder: nn.Module
+        if architecture == "compact":
+            self.features = nn.Sequential(
+                nn.Conv2d(3, width, 3, stride=2, padding=1),
+                nn.ReLU(),
+                nn.Conv2d(width, width, 3, stride=2, padding=1),
+                nn.ReLU(),
+            )
+            self.decoder = nn.Sequential(
+                nn.Conv2d(7, width, 3, padding=1),
+                nn.ReLU(),
+                nn.Conv2d(width, 1, 3, padding=1),
+            )
+        else:
+            self.features = MultiscaleStereoFeatures(width)
+            self.decoder = StereoContextDecoder(width)
+            self.cost_regularizer = StereoCostRegularizer()
 
     def forward(self, batch: DeploymentStereoBatch) -> torch.Tensor:
         """Predict without GT/teacher inputs; discrete support is not differentiated."""
@@ -93,12 +119,19 @@ class StereoStudent(nn.Module):
         right = self.features(batch.right.float())
         width = left.shape[-1]
         costs = []
+        # One immutable device index for every disparity candidate; no cached
+        # scientific state and the original per-candidate arithmetic is retained.
+        columns = torch.arange(width, device=left.device)
         for shift in range(min(self.bins, width)):
             shifted = F.pad(right[..., : width - shift], (shift, 0))
             score = -(left - shifted).square().mean(1)
-            valid = torch.arange(width, device=left.device) >= shift
+            valid = columns >= shift
             costs.append(score.masked_fill(~valid, float("-inf")))
-        probabilities = torch.stack(costs, 1).softmax(1)
+        scores = torch.stack(costs, 1)
+        if self.cost_regularizer is not None:
+            valid = torch.isfinite(scores)
+            scores = (scores + self.cost_regularizer(scores, valid)).masked_fill(~valid, -torch.inf)
+        probabilities = scores.softmax(1)
         candidates = torch.arange(len(costs), device=left.device, dtype=left.dtype)
         coarse = (probabilities * candidates[None, :, None, None]).sum(1, keepdim=True) * 4
         coarse = F.interpolate(coarse, batch.left.shape[-2:], mode="bilinear", align_corners=False)
@@ -232,6 +265,7 @@ class StudentReconstructionModel(ReferenceReconstructionModel):
         width: int = 32,
         bins: int = 32,
         minimum_effective_px: float = 0.25,
+        stereo_architecture: str = "compact",
     ) -> None:
         config = replace(
             config,
@@ -239,7 +273,9 @@ class StudentReconstructionModel(ReferenceReconstructionModel):
             model_id="rectified_student_reconstruction_v1",
         )
         super().__init__(teacher=None, renderer=renderer, config=config)
-        self.stereo_student = StereoStudent(width, bins, minimum_effective_px)
+        self.stereo_student = StereoStudent(
+            width, bins, minimum_effective_px, architecture=stereo_architecture
+        )
 
     def forward(
         self,

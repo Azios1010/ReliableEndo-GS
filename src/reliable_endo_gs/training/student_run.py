@@ -18,6 +18,7 @@ from reliable_endo_gs.training.student_checkpoint import (
     validate_model_initialization,
 )
 from reliable_endo_gs.training.student_learning import StudentLearner
+from reliable_endo_gs.training.student_schedule import apply_model_learning_rate
 from reliable_endo_gs.utils.io import write_json_atomic
 
 
@@ -91,6 +92,11 @@ def run_student_training(
             while cursor["epoch"] < total and (max_steps is None or consumed < max_steps):
                 if signals.requested():
                     break
+                model_rate = None
+                if learner.config.model_lr_schedule != "constant" and not learner.student_frozen:
+                    model_rate = apply_model_learning_rate(
+                        learner.model_optimizer, learner.config, cursor["epoch"]
+                    )
                 sample = samples[cursor["next_sample_index"]]
                 # Reject forbidden sample/GT before invoking any teacher provider.
                 if (
@@ -179,6 +185,7 @@ def run_student_training(
                         "stage": "joint" if joint else "student",
                         "elapsed_seconds": time.perf_counter() - started,
                         "cursor": dict(cursor),
+                        **({"model_learning_rate": model_rate} if model_rate is not None else {}),
                         **losses,
                     }
                 )

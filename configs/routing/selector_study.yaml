@@ -1,0 +1,19 @@
+# Development protocol only. Seal with actor, partition and worklist before outcomes.
+schema: frozen_selector_study.v1
+fit_seeds: [0, 1, 2]
+utility_modes: [geometry, render_psnr]
+harm_budgets: [0.01, 0.05, 0.1, 0.2]
+cutoff_candidates: [0.01, 0.05, 0.1, 0.2, 0.35, 0.5, 0.75, 0.95]
+bootstrap_repetitions: 2000
+bootstrap_seed: 0
+minimum_unique_win_keyframes: 2
+minimum_oracle_headroom: 0.0
+minimum_selected_keyframes: 2
+minimum_selected_observations: 8
+repair_budget_ms: 1000.0
+render_cost_weight_per_ms: 0.0
+grid_tile_hw: [32, 32]
+max_regions: 4
+max_pixels: 4096
+max_primitives: 1024
+max_read_pixels: 65536

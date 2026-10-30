@@ -13,6 +13,7 @@ from reliable_endo_gs.data.scared_a00 import ScaredA00Sample
 from reliable_endo_gs.routing.cost import capture_runtime_identity
 from reliable_endo_gs.training.metric_quality import OfflineMetricTruth
 from reliable_endo_gs.training.selector_outcomes import (
+    SelectorOutcomes,
     collect_selector_outcomes,
     load_selector_outcomes,
 )
@@ -30,6 +31,7 @@ def collect_selector_shards(
     output_dir: Path,
     shard_size: int = 64,
     resume: bool = False,
+    store_feature_bank: bool = False,
 ) -> dict[str, Any]:
     """Completed shards are verified/reused; interrupted shards are archived."""
     repo = Path(__file__).resolve().parents[3]
@@ -52,6 +54,7 @@ def collect_selector_shards(
         "action_identity": learner.frozen_action_identity(),
         "intervention_config": learner.intervention_config.to_dict(),
         "runtime": capture_runtime_identity(device),
+        **({"store_feature_bank": True} if store_feature_bank else {}),
     }
     seal = json.loads(json.dumps(seal, allow_nan=False))
     normalized_provenance = json.loads(json.dumps(dict(provenance), allow_nan=False))
@@ -91,6 +94,7 @@ def collect_selector_shards(
                 collection_role="train",
                 provenance=provenance,
                 output_dir=directory,
+                **({"store_feature_bank": True} if store_feature_bank else {}),
             )
         table = load_selector_outcomes(directory, "train", allow_empty=True)
         if (
@@ -130,10 +134,43 @@ def collect_selector_shards(
         ],
     }
     write_json_atomic(output_dir / "result.json", result)
-    load_selector_outcomes(output_dir, "train")
+    load_selector_outcomes(output_dir, "train", allow_empty=True)
     return {
         "completed_samples": completed,
         "reused_samples": reused,
         "shards": len(tables),
         "outcome_sha256": result["samples_sha256"],
     }
+
+
+def load_verified_selector_shards(directory: Path) -> SelectorOutcomes:
+    """Verify aggregate against every immutable shard before any fit-only reuse."""
+    table = load_selector_outcomes(directory, "train", allow_empty=True)
+    rows = []
+    for member in table.metadata.get("shards", []):
+        name = member.get("path")
+        if not isinstance(name, str) or Path(name).name != name or not name.startswith("shard-"):
+            raise ValueError("unsafe outcome shard identity")
+        shard = load_selector_outcomes(directory / name, "train", allow_empty=True)
+        if member.get("samples_sha256") != shard.metadata["samples_sha256"] or any(
+            shard.metadata.get(k) != table.metadata.get(k)
+            for k in (
+                "action_identity",
+                "operative_action_identity",
+                "candidate_protocol_identity",
+                "intervention_config",
+                "feature_names",
+                "feature_bank_names",
+                "deployment_costs_ms",
+                "checkpoint_sha256",
+                "source_sha256",
+                "partition_sha256",
+                "study_config_hash",
+                "gate_a_report_sha256",
+            )
+        ):
+            raise ValueError("shared outcome shard identity mismatch")
+        rows.extend(shard.records)
+    if not table.metadata.get("shards") or rows != table.records:
+        raise ValueError("shared aggregate differs from verified outcome shards")
+    return table

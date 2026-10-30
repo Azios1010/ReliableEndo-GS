@@ -1,0 +1,115 @@
+FPS PHAN B (CUDA GRAPH) VA C (torch.compile): KET QUA VA TRANG THAI (2026-10-30)
+===============================================================================
+Doc tren terminal:   less -S /mnt/d/workspace/huann/reliableendo-gs/docs/fps_bc_status_2026-10-30.txt
+Tieu chi viet va hash TRUOC khi sua ma: CRITERIA_BC.txt (sha256 a22da5df8644002ee08497af34c6b6aa6a21ed3cda37c2c29998f1f3fc7ab49b),
+ban sao docs/fps_bc_criteria_2026-10-30.txt. Ung vien cau hinh + hash: FROZEN_CONFIG_BC.txt (sha256 5a7971a4bd52...; CHUA dong bang cho lan chay xac nhan, xem muc 7a). Bang chung:
+~/.local/share/reliableendo-gs/reports/fps-bc-20261030/ (frozen_A/, results/, scripts/).
+Yeu cau cua nguoi phu trach: giu ket qua phan A; thu ca B va C de tang FPS; giu duoc dong gop cua action repair.
+Phan A khong bi thay doi: voi moi scope moi TAT, duong A35 van giong bit R0 (8 khung x 2 do phan giai, ca 3 lan do sau khi sua ma).
+64 khung niem phong, final_test va 48 khung dev KHONG bi cham. Khong commit, khong sua weights, baseline hay code huan luyen.
+
+1. KET QUA NGAN
+---------------
+ 512x640, batch 1, cung tien trinh ghep cap voi duong STOP (A khong bo tinh chinh) cung bien doi, trung vi cua 3 lan goi doc lap.
+ Muc tieu 45 FPS (50 la muc cao): DAT va VUOT bang B1 (chinh xac tung bit) ma khong doi bat ky ket qua nao cua phan A.
+
+   bien the                                         ms/khung   FPS    bo tinh chinh them (ms)   so voi R0
+   A35  phan A (da dong bang, 35.5 FPS luc tot)      28.82     34.7        3.06                giong bit
+   S1   + bo cuc luoi tinh + frame be mat chi o luoi 23.68     42.2        2.86                giong bit
+   B1   + CUDA graph (stereo -> truong da tinh chinh) 18.01    55.5        0.81                giong bit
+   C1   S1 + torch.compile (khong graph)             21.70     46.1        1.60                xap xi trong dung sai
+   C2   B1 + torch.compile                           16.29     61.4        0.60                xap xi trong dung sai
+ (A35 luc do dem tai thap la 28.2 ms/35.5 FPS; tai may luc do: loadavg 2.1, 3.9, 5.6 o dau moi lan; do tre phu thuoc tai CPU
+  vi duong chay con phan ben host. Tung lan: B1 17.26/18.01/19.26 ms, C2 16.17/16.29/21.29 ms; A35 27.88/28.99/28.82 ms.)
+ 1280x1024: S1/B1/C2 khong ap dung duoc bo cuc tinh (luoi stride 2 co 327,680 o > cap 100,000, xem muc 6), nen B1 chay nhanh nhu cu
+ hoac cham hon (khong co graph stereo rieng); C1/C2 nhanh hon (62-64 ms, ~16 FPS) vi compile ap dung ca cho duong dong.
+ Bo nho dinh: A35 2.64 GB, S1 2.64, B1 2.73, C1 1.45, C2 1.59 GB.
+ Thoi gian dung graph: B1 0.6 s; C2 13 s (bo nho dem Inductor rong, gom compile).
+
+2. DONG GOP CUA ACTION REPAIR (bao ve theo CRITERIA_BC muc 4)
+---------------------------------------------------------------
+ 56 khung benchmark val_7 (khong phai 64 niem phong, khong phai dev48, khong phai final_test; mo ta, khong phai tuyen bo "tot hon baseline"):
+ refined - STOP (STOP = cung duong, cung bien doi, khong bo tinh chinh):
+   PSNR trai +3.354 dB, PSNR phai +0.996 dB;  SSIM trai +0.0600, phai +0.0430;  LPIPS trai -0.0713, phai -0.0587 (am la tot hon).
+   (gia tri tuyet doi cua refined: PSNR 28.80/23.09, SSIM 0.848/0.769, LPIPS 0.192/0.258; STOP: 25.44/22.10, 0.788/0.726, 0.263/0.317.)
+ Chi phi bien cua bo tinh chinh (refined - STOP trong cung tien trinh): A35 3.06 ms, S1 2.86, B1 0.81, C1 1.60, C2 0.60.
+   => o B1, toan bo action repair them 0.81 ms (khoang 4.5% thoi gian khung) de doi lay muc tang chat luong tren, trong khi ca he thong
+   (STOP gom ca stereo + hinh hoc + render 2 view) chay 55 FPS. Muc tang khong doi tung bit voi A, S1, B1 (anh giong bit) va doi toi
+   da |0.0005| dB / |2e-6| SSIM / |1e-5| LPIPS voi C1, C2 (muc 4).
+
+3. NHUNG GI DA LAM (tat ca la scope TUY CHON, mac dinh TAT)
+----------------------------------------------------------
+ S1  EXACT-STRUCTURAL. Voi lay mau luoi co dinh (SamplingPolicy mode=fixed, stride 2, cap khong chat luoi) moi o luoi la mot slot,
+     o khong co tam hop le la lo (valid=False, giong padding da co), khong dung nonzero; frame be mat chi tinh tai cac o luoi (3/4 so
+     pixel khong bao gio duoc dung). Phan so hoc moi tam dung chung mot ham (_surface_frame_from_neighbours, chuyen khoi, khong nhan doi).
+     Giam ~4.3 ms (GPU: 5.2 -> ~1.4 ms cho frame be mat). Giong bit tren moi slot hop le; khung khong lo = bo cuc dong nhu cu.
+     Ghi chu: 8/8 khung huan luyen va 56/56 khung benchmark KHONG co lo, nen truong hop co lo chi duoc kiem bang test tong hop
+     (so slot hop le giong bo cuc dong; nhung neu co lo, so hang cua matmul trong head/refiner doi, bit co the doi o muc lam tron -> khi do
+     phai xep vao loai xap xi; chua gap tren du lieu that).
+ B1  EXACT. RefinedInference.capture(): MOT CUDA graph tu anh vao den truong Gaussian da tinh chinh (gom ca mang stereo, geometry prior, head,
+     compose, refiner, merge). Rasterizer va nonzero nam NGOAI graph (ma native doc so luong ve host). Moi kiem tra hop le ghi trong graph
+     duoc xep vao mot tensor (PackedChecks) va dang ky lai vao deferred_validation o MOI lan replay -> loi dau vao ra dung loi nhu duong
+     eager (test: K suy bien -> cung loai loi, cung thong diep; khung hop le ngay sau van chay). So dem chan doan trong graph la giu cho
+     (khong ai doc, vi RefinedInference khong tra ve chung). Camera chi duoc copy vao bo dem tinh khi tensor camera cua nguoi goi doi
+     (id, dia chi, _version). Gia tri calibration_metadata (frame_id, hash) khong nam trong chu ky graph, chi tap khoa.
+ C   torch.compile chi cho 4 ham tensor thuan (_surface_frame_tensors, _rotation_matrix_to_quaternion, stable_axis_angle_exp,
+     _compose_scales_and_opacity), KHONG compile mang stereo (lan truoc compile mang stereo lech 3.39 px chua giai thich). Compile lam
+     khi khoi dong, truoc khi capture (warm-up 3 lan), khong luc import.
+     Thu "compile ca doan" (torch.compile(_segment)) THAT BAI: dynamo bien dich lai ngay luc capture (guard thay doi do ContextVar) va
+     torch.cuda.get_rng_state bi cam trong capture. Da chuyen sang compile cac ham thuan.
+
+4. TUONG DUONG VA DUNG SAI
+-------------------------
+ S1, B1: giong bit R0 (hash 8 khung x 2 do phan giai) VA giong bit A35 tren 56/56 khung benchmark (anh trai, phai, disparity, rotation, scale,
+ opacity, color, tam; ca nhanh STOP). C1/C2: disparity giong bit (mang stereo khong bi compile) nen dEPE = d depth MAE = 0. So voi A35/B1:
+   dPSNR trai -0.00027, phai -0.00012 dB (dung sai 0.01);  dSSIM -9e-7 / +9e-7 (0.001);  dLPIPS -1.0e-5 / -5.4e-6 (0.001);
+   khung te nhat dPSNR trai -0.0148, phai -0.0084 dB (>= -0.1);  khong chi so nao te hon R0 qua dung sai.  => DAT muc 3.
+ Do lech cua C co cau truc ro (do tren 4 khung, 327k slot): ~99.998% slot lech o muc lam tron (p99.9 ~1e-6); khoang 2e-5 so slot (vai slot/khung)
+ chon NHANH roi rac khac o cac diem hoa chung that su (cap pair dien tich lon nhat, nhanh quaternion), rotation lech toi O(1) o cac slot do
+ (mot khung khac nhung tuong duong), scale toi 7e-3 va opacity toi 0.04 o cac slot do. Anh lech toi da 0.076 tai vai pixel. Anh huong len chi
+ so rat nho (xem tren) nhung "xap xi muc lam tron" chi dung cho da so slot.
+
+5. KIEM TRA
+-----------
+ Bo test day du: 1296 passed, 20 skipped (1 test thieu omegaconf trong moi truong, khong lien quan, da loai). Truoc do 1267 -> +29 test moi:
+ tests/architecture/test_static_grid_layout.py (17: frame be mat luoi == frame dense cat tai luoi, prior tinh == prior dong, lo la padding,
+ chinh sach khac giu bo cuc dong), tests/architecture/test_refined_inference_graph.py (8, can CUDA: replay == eager bit, camera doi, camera
+ sua tai cho, loi dau vao cung loi, chu ky la roi ve eager, capture bi tu choi dung cho, STOP, compile), tests/unit/test_readback.py (+4).
+ Dieu khoan loi dau vao (CRITERIA_BC muc 3) duoc test cho ca duong graph va duong graph+compile: K suy bien (eager nem ValueError
+ "focal_length_x must be positive", graph nem dung loai va thong diep), NaN ghi tai cho vao anh trai, inf vao anh phai (eager khong nem loi,
+ tra truong 0/320 slot hop le, anh huu han; graph tra dung gia tri bit-bang), roi mot khung hop le ngay sau van chay dung.
+ ruff check/format sach. Hash tests/nguon: FROZEN_CONFIG_BC.txt. Xac nhan o hash cuoi: bo test day du 1302 passed / 20 skipped / 1 loai; 56 khung: S1, B1 giong bit
+ A35, C2 trong dung sai (so lieu giong het lan truoc); 8 khung x 2 do phan giai: A35, S1, B1 giong bit R0 (results/equiv_final_nolat.json).
+ Do tre: 3 lan do (trung vi) thuc hien o hash truoc do cua actions/refinement.py (sau do chi doi docstring va close(), ngoai duong nong), luc
+ GPU0 ranh. Lan do xac nhan o hash cuoi BI HUY vi GPU0 bat dau dung chung voi job cvst khac (89% util, +9 GB), nen KHONG do lai do tre o hash cuoi.
+
+6. HAN CHE VA DIEU CAN BIET
+---------------------------
+ * Tran GPU: tinh toan truoc do (tran ~51 FPS) dua tren GPU ban 19.5 ms; S1 cat cong viec GPU (frame be mat), nen tran moi cao hon
+   (tong thoi gian kernel trong graph B1: 13.8 ms; mang stereo 10.2 ms). Con dung de tang them: layout conversion cua cudnn nchw<->nhwc ~1.75 ms
+   (channels_last cho stereo = nhom D1, KHONG lam vi da vuot muc tieu); 2000+ kernel nho elementwise ~7 ms (compile them nhieu ham hon).
+ * Chi 512x640 dung duoc bo cuc tinh. O 1280x1024 chinh sach hien tai (stride 2, cap 100,000) CAT luoi 327,680 o xuong 100,000 o dau theo thu
+   tu hang -> Gaussian chi phu ~30% tren cua anh. Day la hanh vi co san cua cau hinh (khong do cong viec nay gay ra, khong sua), nhung can
+   biet khi bao cao so 1280x1024 (11.4 FPS cua phan A cung nam trong tinh huong nay).
+ * Ket qua tra ve cua duong graph la ban sao (copy_outputs=True): field va disparity ton tai sau lan goi ke tiep.
+ * Tinh dung chinh xac cua S1/B1 dua tren khung KHONG co lo: 8/8 khung huan luyen, 56/56 khung benchmark va 400/400 khung huan luyen ngau nhien
+   (results/holes_scan_train.json) deu co day du 81,920/81,920 slot hop le. Bo cuc tinh == bo cuc dong "theo cach dung" tren du lieu nay, nhung
+   truong hop co lo chi duoc test tong hop. Dataset 8 va 9 (final_test) khong duoc quet; neu co khoang trong ho tro (support) thi can chay
+   so sanh bit A35 vs B1 tren cac khung do truoc khi tin vao "giong bit".
+ * Hai RefinedInference (tinh chinh va STOP) dung chung mot model gio dung chung mot skipper dem tham chieu; close() theo thu tu bat ky deu
+   tra lai renderer goc (test them).
+ * Chua do tren du lieu co lo; chua do tren GPU khac; do tre phu thuoc tai CPU (xem loadavg).
+ * Moi truong: torch 2.7.1+cu128, triton 3.3.1, RTX 5070 Ti (sm_120).
+ * Chua lam: D1 (stereo channels_last / do chinh xac thap), sua cap 100,000, ket noi graph vao CLI, danh gia 64 khung niem phong, final_test.
+
+7. QUYET DINH CAN NGUOI PHU TRACH
+---------------------------------
+ (a) Cau hinh dong bang. THEO QUY TAC GHI TRUOC (CRITERIA_BC muc 6: "nhanh nhat dat muc 3 va 4") cau hinh duoc chon la C2
+     (61.4 FPS, xap xi trong dung sai). Chon B1 (chinh xac, 55.5 FPS) thay cho C2 la mot SAI LECH khoi quy tac da dang ky, can nguoi phu trach
+     dong y ro rang; ly do cua sai lech (khong co xap xi cong khai, moi con so chat luong da do cua A35 van dung nguyen cho B1, khong phu
+     thuoc Triton/Inductor, chenh chi ~6 FPS) duoc neu SAU KHI da thay ket qua, nen khong phai la ly do ghi truoc.
+     Chua dong bang cau hinh nao cho lan chay xac nhan cho den khi co cau tra loi.
+ (b) Co can commit/tag mot ban cua phan A khong (hien tat ca thay doi chua commit; ban sao dong bang o frozen_A/src_full_A.tar.gz).
+ (c) Nguong thanh cong cho lan chay xac nhan (muc 3 cua handoff) van CHUA chot. Ban de xuat, nghieng ve lam noi bat repair:
+     chi so chinh = refined - STOP tren moi khung, khoang tin cay > 0 cho ca hai view; khong kem hon STOP ve LPIPS/SSIM; last-80-cols <= 1.05x STOP;
+     FPS >= 30 @512x640 do bang chinh duong da dong bang, kem chi phi bien cua repair (ms). Chua chay.

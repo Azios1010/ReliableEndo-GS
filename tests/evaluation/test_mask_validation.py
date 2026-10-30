@@ -154,13 +154,28 @@ def test_diagnostic_does_not_certify_unknown_or_mix_units():
 @pytest.mark.parametrize("calibrated", [False, True])
 @pytest.mark.parametrize("historical", [False, True])
 def test_native_evaluator_mask_checkpoint_cursor_gt_order_and_immutability(
-    setup, tmp_path, monkeypatch, quiet, base_only, calibrated, historical
+    setup,
+    tmp_path,
+    monkeypatch,
+    quiet,
+    base_only,
+    calibrated,
+    historical,
+    automatic=False,
+    perceptual=False,
 ):
     import reliable_endo_gs.evaluation.intervention_selection as runtime
     from reliable_endo_gs.routing.masks import MaskProposalConfig
     from reliable_endo_gs.training.student_learning import StudentLearner
 
     learner, sample, target = setup
+    if automatic:
+        learner = StudentLearner(
+            learner.model,
+            learner.config,
+            learner.routing,
+            intervention_config=replace(learner.intervention_config, student_update_mode="frozen"),
+        )
     object.__setattr__(learner.model, "_renderer", BoundedRenderer())
     learner.model.config = replace(
         learner.model.config,
@@ -176,14 +191,20 @@ def test_native_evaluator_mask_checkpoint_cursor_gt_order_and_immutability(
         sample_id="dataset_1/keyframe_1/dev",
     )
     masks = TargetMaskIndex(index)
+    proposal = MaskProposalConfig(threshold=0.0, cell_size=2, max_pixels=12, max_primitives=12)
+    study_path = None
+    if automatic:
+        from reliable_endo_gs.config.selector_study import load_selector_study_config
+        from reliable_endo_gs.routing.support_grid import automatic_study_regions
+
+        study_path = Path("configs/routing/selector_study.yaml")
+        proposal, masks = automatic_study_regions(load_selector_study_config(study_path))
     masked = StudentLearner(
         copy.deepcopy(learner.model),
         learner.config,
         learner.routing,
         intervention_config=learner.intervention_config,
-        mask_config=MaskProposalConfig(
-            threshold=0.0, cell_size=2, max_pixels=12, max_primitives=12
-        ),
+        mask_config=proposal,
         target_masks=masks,
     )
     masked.actions.load_state_dict(learner.actions.state_dict())
@@ -195,9 +216,10 @@ def test_native_evaluator_mask_checkpoint_cursor_gt_order_and_immutability(
     for name in ("model_optimizer", "action_optimizer", "selector_optimizer"):
         getattr(masked, name).load_state_dict(getattr(learner, name).state_dict())
     masked.optimizer_update_counts = dict(learner.optimizer_update_counts)
+    masked.action_update_counts = dict(learner.action_update_counts)
     tr = [f"dataset_{i}/keyframe_1/train" for i in range(1, 8)]
     identity = dict(
-        run_kind="bounded_mask_validation",
+        run_kind="full_manifest" if automatic else "bounded_mask_validation",
         source_sha256="source",
         manifest_hash="train",
         role_hash="roles",
@@ -224,6 +246,15 @@ def test_native_evaluator_mask_checkpoint_cursor_gt_order_and_immutability(
                     "frozen_action_identity": masked.frozen_action_identity(),
                     "training_identity": identity,
                     "training_manifest_hash": "train",
+                    **(
+                        {
+                            "operative_action_identity": masked.operative_action_identity(),
+                            "candidate_protocol_identity": masked.candidate_protocol_identity(),
+                            "target_mask_index_sha256": masks.identity,
+                        }
+                        if automatic
+                        else {}
+                    ),
                 },
                 CostCalibrationPolicy("max", None, 0, 2),
                 capture_runtime_identity("cpu"),
@@ -293,6 +324,20 @@ def test_native_evaluator_mask_checkpoint_cursor_gt_order_and_immutability(
     monkeypatch.setattr(runtime, "ScaredA00Adapter", Adapter)
     metric = tmp_path / "metric.yaml"
     metric.write_text(json.dumps({"schema": "metric_action_tradeoff.v1"}))
+    if perceptual:
+        from reliable_endo_gs.evaluation.stereo import MetricResult
+
+        class SyntheticPerceptual(torch.nn.Module):
+            def __init__(self, *_):
+                super().__init__()
+                self.identity = {"backend": "synthetic_metric_wiring_test"}
+
+            def measure(self, x, y):
+                return MetricResult(
+                    "lpips_alex", float((x - y).abs().mean()), 1, 1, "synthetic_not_LPIPS_evidence"
+                )
+
+        monkeypatch.setattr(runtime, "LPIPSAlexNet", SyntheticPerceptual)
     rng_before = torch.get_rng_state().clone()
     report = runtime.evaluate_intervention_selection(
         checkpoint=checkpoint,
@@ -303,7 +348,11 @@ def test_native_evaluator_mask_checkpoint_cursor_gt_order_and_immutability(
         output_dir=tmp_path / "result",
         device_name="cpu",
         max_samples=1,
-        target_mask_index=index,
+        target_mask_index=None if automatic else index,
+        study_protocol_path=study_path,
+        lpips_backbone=tmp_path / "synthetic_backbone" if perceptual else None,
+        lpips_calibration=tmp_path / "synthetic_calibration" if perceptual else None,
+        require_lpips=perceptual,
         sample_ids=("dataset_1/keyframe_1/dev",),
         metric_config_path=metric,
         base_only=base_only,
@@ -316,7 +365,11 @@ def test_native_evaluator_mask_checkpoint_cursor_gt_order_and_immutability(
     assert report["training_overlap_scope"] == "current_training_manifest_only"
     assert report["initialization_overlap_audited"] is False
     assert report["evaluation_scope"] == "development_diagnostic"
-    assert report["samples"] == 1 and report["region_protocol"] == "target_mask_proposals.v1"
+    assert report["samples"] == 1 and report["region_protocol"] == (
+        "automatic_support_grid.v1" if automatic else "target_mask_proposals.v1"
+    )
+    assert report["discarded_stage_a_selector"] is automatic
+    assert report["perceptual_metric"]["status"] == ("measured" if perceptual else "unavailable")
     assert report["checkpoint_source_sha256"] == "source"
     assert report["source_sha256"] == ("current" if historical else "source")
     if historical:
@@ -346,6 +399,11 @@ def test_native_evaluator_mask_checkpoint_cursor_gt_order_and_immutability(
                 target_mask_index=index,
             )
     record = json.loads((tmp_path / "result/samples.jsonl").read_text())
+    if perceptual:
+        assert all(
+            "left_lpips_alex" in r["metrics"] and "right_lpips_alex" in r["metrics"]
+            for r in record["policies"].values()
+        )
     assert torch.equal(torch.get_rng_state(), rng_before)
     if quiet or base_only:
         assert not record["mask_candidates"] and not record["counterfactual_metric_outcomes"]
@@ -359,6 +417,23 @@ def test_native_evaluator_mask_checkpoint_cursor_gt_order_and_immutability(
                 for row in record["counterfactual_metric_outcomes"]
             )
     assert calls[-1] == "GT"
+
+
+@pytest.mark.parametrize("perceptual", [False, True])
+def test_automatic_stage_a_native_entry_point_with_cpu_renderer_and_lpips_wiring(
+    setup, tmp_path, monkeypatch, perceptual
+):
+    test_native_evaluator_mask_checkpoint_cursor_gt_order_and_immutability(
+        setup,
+        tmp_path,
+        monkeypatch,
+        quiet=False,
+        base_only=False,
+        calibrated=True,
+        historical=True,
+        automatic=True,
+        perceptual=perceptual,
+    )
 
 
 @pytest.mark.parametrize("preflight_only", [True, False])

@@ -99,8 +99,16 @@ class InterventionConfig:
     selector_risk_mode: str = "union"
     selector_gain_mode: str = "regression"
     gain_probability_weight: float = 1.0
+    # Opt-in paper-objective arm. Raw dB reward; physical guards remain canonical.
+    metric_utility_mode: str = "geometry"
 
     def __post_init__(self) -> None:
+        if self.metric_utility_mode not in ("geometry", "render_psnr") or (
+            self.metric_utility_mode != "geometry" and self.metric_quality is None
+        ):
+            raise ValueError("render utility requires physical metric supervision")
+        if self.metric_utility_mode == "render_psnr" and self.stereo_utility_multiplier != 1.0:
+            raise ValueError("render utility must use the same dB units for both actions")
         if self.selector_gain_mode not in ("regression", "signed_expectation"):
             raise ValueError("unsupported selector gain mode")
         if self.selector_gain_mode == "signed_expectation" and (
@@ -260,6 +268,7 @@ class InterventionConfig:
                     "selector_risk_mode",
                     "selector_gain_mode",
                     "repair_max_disparity_px",
+                    "metric_utility_mode",
                 }
                 or value is None
             ):
@@ -349,6 +358,7 @@ class InterventionConfig:
             ("gain_probability_weight", 1.0),
             ("repair_max_disparity_px", None),
             ("cost_weight_per_ms", 0.0),
+            ("metric_utility_mode", "geometry"),
         ):
             if data.get(key) == neutral:
                 data.pop(key, None)
@@ -395,6 +405,7 @@ V2_FIELDS = frozenset(
         "selector_risk_mode",
         "selector_gain_mode",
         "gain_probability_weight",
+        "metric_utility_mode",
     }
 )
 

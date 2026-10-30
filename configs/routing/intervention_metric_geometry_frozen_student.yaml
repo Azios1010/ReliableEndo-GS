@@ -1,5 +1,6 @@
 # Opt-in TRAIN-only metric geometry objective; historical policy stays unchanged.
-# All owners learn jointly; GT is never part of deployment inputs.
+# Student is frozen; both repairs and the disposable Stage A selector learn.
+# GT is never part of deployment inputs; Stage B refits its selector separately.
 schema: intervention_selection.v2
 selector_architecture: separate_action_heads
 selector_balance_mode: per_action

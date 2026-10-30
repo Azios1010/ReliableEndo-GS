@@ -16,6 +16,9 @@ import yaml
 class SelectorRefitConfig:
     schema: str = "selector_refit.v1"
     seed: int = 0
+    # Legacy seed is the fallback; study replicates vary ONLY fit_seed.
+    partition_seed: int | None = None
+    fit_seed: int | None = None
     fit_fraction: float = 0.6
     validation_fraction: float = 0.15
     max_steps: int = 1000
@@ -38,6 +41,9 @@ class SelectorRefitConfig:
     def __post_init__(self) -> None:
         if self.schema != "selector_refit.v1" or type(self.seed) is not int or self.seed < 0:
             raise ValueError("invalid selector refit identity")
+        for value in (self.partition_seed, self.fit_seed):
+            if value is not None and (type(value) is not int or value < 0):
+                raise ValueError("partition/fit seed must be a nonnegative integer")
         if self.validation_guard_mode not in ("component_minima", "action_objectives"):
             raise ValueError("unsupported selector validation guard mode")
         for key in (
@@ -91,10 +97,20 @@ class SelectorRefitConfig:
             "max_development_samples",
             "collection_shard_size",
             "validation_guard_mode",
+            "partition_seed",
+            "fit_seed",
         ):
             if raw[key] == self.__dataclass_fields__[key].default:
                 raw.pop(key)
         return hashlib.sha256(json.dumps(raw, sort_keys=True).encode()).hexdigest()
+
+    @property
+    def resolved_partition_seed(self) -> int:
+        return self.seed if self.partition_seed is None else self.partition_seed
+
+    @property
+    def resolved_fit_seed(self) -> int:
+        return self.seed if self.fit_seed is None else self.fit_seed
 
 
 def load_selector_refit_config(path: Path) -> SelectorRefitConfig:
@@ -119,7 +135,7 @@ def partition_selector_training(
         raise ValueError("partition requires unique original-SCARED TRAIN identities")
     keys = sorted(
         {s.rsplit("/", 1)[0] for s in ids},
-        key=lambda k: hashlib.sha256(f"{config.seed}:{k}".encode()).hexdigest(),
+        key=lambda k: hashlib.sha256(f"{config.resolved_partition_seed}:{k}".encode()).hexdigest(),
     )
     nfit = int(len(keys) * config.fit_fraction)
     nval = int(len(keys) * config.validation_fraction)
@@ -128,8 +144,9 @@ def partition_selector_training(
         fit_keys = []
         validation_keys = []
         calibration_keys = []
-        for fold in range(1, 8):
-            candidates = [k for k in keys if k.startswith(f"dataset_{fold}/")]
+        # Derive folds from the sealed manifest, including an explicit train_1236 subset.
+        for fold in sorted({s.split("/")[0] for s in ids}):
+            candidates = [k for k in keys if k.startswith(fold + "/")]
             if len(candidates) < 3:
                 raise ValueError("stratified roles require three keyframes in every training fold")
             validation_keys.append(candidates[0])
@@ -142,7 +159,7 @@ def partition_selector_training(
         "policy": "sha256_whole_TRAIN_keyframes_before_labels"
         if config.partition_policy == "global_keyframe_hash"
         else "sha256_within_each_fold_whole_TRAIN_keyframes_before_labels",
-        "seed": config.seed,
+        "seed": config.resolved_partition_seed,
         "parent_roles_changed": False,
     }
     for name, group in zip(("fit", "validation", "calibration"), groups, strict=True):

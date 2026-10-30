@@ -1,0 +1,60 @@
+ACTION REDESIGN, STEP 1: WHY THE FROZEN GAUSSIAN ACTION HURT THE RIGHT VIEW  (2026-10-29)
+Status: EXPLORATORY diagnosis, read-only, no training, no gate. Sealed 64 frames and final_test untouched.
+Evidence (scripts, raw results): ~/.local/share/reliableendo-gs/reports/action-redesign-20261029/
+Frames: 24 val_7 frames outside the sealed 64 and the 56 benchmark IDs + 16 train frames (4 per dataset 1,2,3,6).
+
+1. WHAT WAS MEASURED
+   [DO] The earlier "left half helps both views, right half hurts the right view" pattern was a coarse view of something
+   narrower. Applying the action to each cell of a 4x4 grid separately (640 cells, 40 frames), mean change of whole-image MSE
+   (x1e-4; negative = better), cells improving the right view in brackets:
+        grid column      left view     right view
+        0 (x   0-160)     -0.47        -0.49  [86%]
+        1 (x 160-320)     -1.00        -1.04  [89%]
+        2 (x 320-480)     -0.87        -1.05  [92%]
+        3 (x 480-640)     -1.12        +8.45  [ 6%]
+   Full-frame action, change of squared error by image column (x1e-4, 80-px bins, mean over 40 frames):
+        bin x range   baseline R   change R   change L
+         0   0- 80       40.7       -14.3       -2.2
+         1  80-160       42.8       -14.7      -12.7
+         2 160-240       45.5       -17.4      -16.3
+         3 240-320       45.9       -19.7      -16.4
+         4 320-400       44.6       -20.0      -13.1
+         5 400-480       34.1       -14.6      -15.6
+         6 480-560       53.7       +14.5      -14.7
+         7 560-640      190.4      +286.6      -21.4
+   In the interior the right-view error falls 30-45%; the whole right-view loss comes from the last ~160 columns.
+
+2. WHAT DOES NOT EXPLAIN IT
+   [DO] Across cells, local disparity, depth error against GT, surface tilt relative to the left or right camera ray and the
+   fraction of the cell visible in the right image explain almost none of the right-view harm (single-feature R2 <= 0.02).
+   Horizontal image position alone: R2 0.20 (val), 0.26 (train) - i.e. the border band, not geometry.
+
+3. A CHEAP GUARD ALREADY CHANGES THE PICTURE  (post-hoc K scan on the same frames: optimistic)
+   Action applied to columns [0, W-K), change in PSNR vs STOP (dB), mean over frames:
+        K (px)   val_7: left  right   both better     train: left  right   both better
+          0             +2.97  -1.61     2/24                +1.52  -1.38     3/16
+         40             +2.31  +1.09    24/24                +1.30  +1.22    15/16
+         80             +2.07  +1.02    24/24                +1.26  +1.19    16/16
+        160             +1.60  +0.84    24/24                +1.17  +1.13    16/16
+   Leaving out only the last 40 columns (6% of the width) turns a trade-off into a gain in both views, in every val frame.
+
+4. ROOT CAUSE CANDIDATE (strongest evidence so far)
+   [DO] During Stage A all 52,600 training cores sat at exactly two horizontal positions (50% centred in x 80-160, 50% in
+   x 400-480); none touched the last 160 columns. The action was trained on primitives from four fixed image positions and
+   was never exposed to border primitives. The training objective was local (a 32x32 core, both views) and never measured
+   the whole frame.
+   [SUY LUAN] The harm is an extrapolation failure at the right border, not an inherent left/right trade-off. The exact
+   mechanism at the border (e.g. low-support edge primitives amplified by the opacity/scale correction) is NOT yet
+   identified; no test of it has been run.
+
+5. LIMITS
+   Exploratory, 40 frames, same frames used to pick K, in-sample for train frames, one checkpoint. These numbers justify a
+   redesign; they are not a result and not a gate.
+
+6. WHAT THIS IMPLIES FOR THE REDESIGN (proposal, nothing approved or trained yet)
+   - Train the refinement over the WHOLE frame (all valid primitives, all positions incl. borders), not four fixed cores.
+   - Objective: full-frame, both-view reconstruction loss, so border harm is penalised where it occurs.
+   - Apply it inside the single render (before the first render): about +1 ms instead of the ~18 ms separate action pass.
+   - Keep a visibility/support guard as an ablation, not as the main fix.
+   - Training cost is small (frozen student, ~1.7k trainable parameters, one render pair per step).
+   - Success bar and fresh confirmation frames must be set by the maintainer before any confirmatory run.

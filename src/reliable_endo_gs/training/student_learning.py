@@ -33,6 +33,10 @@ from reliable_endo_gs.data.target_masks import TargetMaskIndex
 from reliable_endo_gs.reconstruction.model import ReferenceReconstructionResult
 from reliable_endo_gs.reconstruction.student import StudentReconstructionModel
 from reliable_endo_gs.regions.grid import Region, grid_regions
+from reliable_endo_gs.routing.artifact_identity import (
+    repair_execution_config,
+    repair_execution_source_sha256,
+)
 from reliable_endo_gs.routing.balanced import BalancedSelector
 from reliable_endo_gs.routing.calibrated_selector import (
     CalibratedSelector,
@@ -62,6 +66,7 @@ from reliable_endo_gs.routing.selector import (
     region_features,
     select_action,
 )
+from reliable_endo_gs.routing.support_grid import AutomaticSupportGrid
 from reliable_endo_gs.routing.tokens import mask_feature_tokens
 from reliable_endo_gs.routing.tradeoff import TradeoffConfig
 from reliable_endo_gs.teachers import AlignedTeacherTarget
@@ -107,7 +112,7 @@ class StudentLearner:
         *,
         intervention_config: InterventionConfig | None = None,
         mask_config: MaskProposalConfig | None = None,
-        target_masks: TargetMaskIndex | None = None,
+        target_masks: TargetMaskIndex | AutomaticSupportGrid | None = None,
     ) -> None:
         self.model, self.config, self.routing = model, config, routing
         if (mask_config is None) != (target_masks is None):
@@ -131,11 +136,12 @@ class StudentLearner:
         )
         if self.student_frozen and config.student_epochs:
             raise ValueError("frozen student comparison excludes student-only warmup")
+        if self.student_frozen and config.model_lr_schedule != "constant":
+            raise ValueError("frozen student must preserve constant model Adam settings")
         self.frozen_student_start_step: int | None = 0 if self.student_frozen else None
-        first = model.stereo_student.features[0]
         if (
-            not isinstance(first, nn.Conv2d)
-            or first.out_channels != config.width
+            model.stereo_student.width != config.width
+            or model.stereo_student.architecture != config.stereo_architecture
             or model.stereo_student.bins != config.bins
             or model.stereo_student.minimum_effective_px != config.minimum_effective_px
         ):
@@ -255,6 +261,34 @@ class StudentLearner:
             "mask_config_hash": None if self.mask_config is None else self.mask_config.config_hash,
         }
 
+    def operative_action_identity(self) -> dict[str, object]:
+        """Frozen forward identity shared across study variants; legacy resume is unchanged."""
+        return {
+            "schema": "operative_repair_identity.v1",
+            "execution_source_sha256": repair_execution_source_sha256(),
+            "renderer_identity": self.model._renderer_identity(),
+            "model_state_sha256": module_state_sha256(self.model),
+            "action_state_sha256": module_state_sha256(self.actions),
+            "construction_config_hash": self.model.config.config_hash,
+            "student_config_hash": self.config.config_hash,
+            "routing_config_hash": self.routing.config_hash,
+            "repair_execution_config": None
+            if self.intervention_config is None
+            else repair_execution_config(self.intervention_config),
+        }
+
+    def candidate_protocol_identity(self) -> dict[str, object]:
+        """Bind proposal limits/ROI separately from immutable repair weights."""
+        return {
+            "schema": "repair_candidate_protocol.v1",
+            "mask_config_hash": None if self.mask_config is None else self.mask_config.config_hash,
+            "target_mask_identity": None
+            if self.target_masks is None
+            else self.target_masks.identity,
+            "tile_hw": list(self.routing.tile_hw),
+            "halo": self.routing.halo,
+        }
+
     def load_metric_selector(self, path: Path, config: TradeoffConfig, candidate_hash: str) -> None:
         """Bind an offline TRAIN-fitted/calibrated predictor to frozen actions."""
         if self.intervention_config is None or self.mask_config is None:
@@ -281,8 +315,17 @@ class StudentLearner:
         Training timing history remains diagnostic; deployment allocation uses
         this artifact only after its runtime and output-grid identity match.
         """
+        operative = calibration.binding.get("operative_action_identity")
+        if (
+            operative is not None
+            and calibration.binding.get("candidate_protocol_identity")
+            != self.candidate_protocol_identity()
+        ):
+            raise ValueError("deployment cost calibration candidate protocol mismatch")
         if calibration.binding.get("collection_role") != "train" or (
-            calibration.binding.get("frozen_action_identity") != self.frozen_action_identity()
+            operative != self.operative_action_identity()
+            if operative is not None
+            else calibration.binding.get("frozen_action_identity") != self.frozen_action_identity()
         ):
             raise ValueError("cost calibration requires exact frozen TRAIN model/action identity")
         if "target_mask_index_sha256" in calibration.binding and (
@@ -295,16 +338,25 @@ class StudentLearner:
             p._version for m in (self.model, self.actions) for p in m.parameters()
         )
 
-    def load_refit_selector(self, path: Path, source_sha256: str) -> None:
+    def load_refit_selector(
+        self, path: Path, source_sha256: str, *, study_artifact: bool = False
+    ) -> None:
         """Attach a TRAIN-only refit; any subsequent joint update invalidates it."""
         if self.intervention_config is None or self.target_masks is None:
             raise ValueError("refit selection requires physical masked reconstruction")
         self.metric_selector = load_calibrated_selector(
             path,
-            expected_action_identity=self.frozen_action_identity(),
+            expected_action_identity=self.operative_action_identity()
+            if study_artifact
+            else self.frozen_action_identity(),
             expected_config=self.intervention_config,
             expected_mask_identity=self.target_masks.identity,
             expected_source_sha256=source_sha256,
+            **(
+                {"expected_candidate_identity": self.candidate_protocol_identity()}
+                if study_artifact
+                else {}
+            ),
         ).to(next(self.model.parameters()).device)
         self._frozen_versions = tuple(
             p._version for m in (self.model, self.actions) for p in m.parameters()
@@ -362,7 +414,9 @@ class StudentLearner:
             calibration=self.deployment_cost_calibration,
         )
 
-    def state(self, sample: ScaredA00Sample) -> RepairState:
+    def state(
+        self, sample: ScaredA00Sample, *, include_feature_tokens: bool = False
+    ) -> RepairState:
         """GT exclusion before forward; preserve student graph during training."""
         if sample.supervision is not None:
             raise ValueError("student deployment source must not load GT")
@@ -374,8 +428,11 @@ class StudentLearner:
             calibration_metadata=sample.calibration_metadata,
             include_matching_evidence=self.intervention_config is not None
             and self.intervention_config.schema == "intervention_selection.v2",
-            include_feature_tokens=self.intervention_config is not None
-            and self.intervention_config.selector_feature_mode == "mask_tokens",
+            include_feature_tokens=include_feature_tokens
+            or (
+                self.intervention_config is not None
+                and self.intervention_config.selector_feature_mode == "mask_tokens"
+            ),
         )
         return RepairState(batch, result)
 
@@ -416,6 +473,8 @@ class StudentLearner:
         if self.mask_config is None:
             return grid_regions((h, w), self.routing.tile_hw, self.routing.halo)
         assert self.target_masks is not None
+        if isinstance(self.target_masks, AutomaticSupportGrid):
+            return self.target_masks.propose(state, halo=self.routing.halo)
         target = self.target_masks.load(sample_id, (h, w), state.batch.left.device)
         return propose_masks(state, target, self.mask_config, halo=self.routing.halo)
 

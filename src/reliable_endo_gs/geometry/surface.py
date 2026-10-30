@@ -7,11 +7,14 @@ from a small, validity- and depth-jump-masked neighbourhood; the remaining
 frame is a deterministic camera-relative gauge owned by this module.
 """
 
+import functools
 from dataclasses import dataclass
 from math import isfinite
 from typing import Literal
 
 import torch
+
+from reliable_endo_gs.utils.inference_mode import compiled_when_enabled
 
 
 @dataclass(frozen=True, slots=True)
@@ -271,46 +274,74 @@ def _camera_relative_gauge(
     return tangent_1, tangent_2, use_fallback, least_aligned_index
 
 
-def estimate_surface_frame(
-    centers: torch.Tensor,
-    valid_mask: torch.Tensor,
-    *,
-    policy: SurfaceFramePolicy | None = None,
-    layout: Literal["channel_first", "channel_last"] | None = None,
-) -> SurfaceFrameResult:
-    """Estimate masked camera-relative surface frames from metric points.
+@functools.lru_cache(maxsize=8)
+def _pair_table(pairs: tuple[tuple[int, int], ...], device: torch.device) -> torch.Tensor:
+    """Immutable [P,2] neighbour-pair table, built once per (pairs, device).
 
-    ``centers`` are left-camera points in metres.  The centre validity mask is
-    hard and non-differentiable by design.  For valid centres, selected point
-    differences and cross products retain autograd connectivity.  A normal is
-    selected from the largest non-degenerate pairwise neighbourhood cross
-    product; if no such pair survives the depth-jump mask, a camera-facing
-    ray normal and bounded isotropic scale are returned with ``fallback_mask``
-    set.  Invalid centres receive finite placeholders and ``valid_mask=False``.
+    Creating it per call was a pageable host-to-device copy that also waited for queued kernels.
     """
+    return torch.tensor(pairs, dtype=torch.long, device=device)
 
-    resolved_policy = policy or _DEFAULT_SURFACE_FRAME_POLICY
-    image_points, input_valid, _ = _as_image_points(centers, valid_mask, layout=layout)
-    finite = torch.isfinite(image_points).all(dim=-1)
-    center_valid = input_valid & finite & (image_points[..., 2] > 0)
-    safe_points = torch.where(finite.unsqueeze(-1), image_points, torch.zeros_like(image_points))
-    batch_size, height, width, _ = safe_points.shape
 
-    offsets = [
+def _neighbour_offsets(policy: SurfaceFramePolicy) -> list[tuple[int, int]]:
+    """Neighbour ``(dy, dx)`` offsets in the fixed order that the pair enumeration and ``selected_pair`` refer to."""
+
+    return [
         (dy, dx)
-        for distance in range(1, resolved_policy.neighborhood_radius + 1)
+        for distance in range(1, policy.neighborhood_radius + 1)
         for dy in range(-distance, distance + 1)
         for dx in range(-distance, distance + 1)
         if (dy != 0 or dx != 0) and max(abs(dy), abs(dx)) == distance
     ]
-    neighbours: list[torch.Tensor] = []
-    neighbour_validity: list[torch.Tensor] = []
-    for dy, dx in offsets:
-        neighbour, neighbour_valid = _shifted_neighbour(safe_points, center_valid, dy, dx)
-        neighbours.append(neighbour)
-        neighbour_validity.append(neighbour_valid)
-    neighbour_points = torch.stack(neighbours, dim=3)
-    neighbour_valid = torch.stack(neighbour_validity, dim=3)
+
+
+def _surface_frame_from_neighbours(
+    safe_points: torch.Tensor,
+    center_valid: torch.Tensor,
+    neighbour_points: torch.Tensor,
+    neighbour_valid: torch.Tensor,
+    resolved_policy: SurfaceFramePolicy,
+) -> SurfaceFrameResult:
+    """Per-centre surface-frame arithmetic shared by the dense and the grid evaluation (single owner).
+
+    ``safe_points`` [B,A,C,3] finite centres, ``center_valid`` [B,A,C], ``neighbour_points`` [B,A,C,K,3] and
+    ``neighbour_valid`` [B,A,C,K] in ``estimate_surface_frame`` offset order. Every centre is independent of every other.
+    """
+
+    offset_count = neighbour_points.shape[3]
+    pair_table = _pair_table(
+        tuple(
+            (first, second)
+            for first in range(offset_count)
+            for second in range(first + 1, offset_count)
+        ),
+        safe_points.device,
+    )
+    return SurfaceFrameResult(
+        *_surface_frame_tensors(
+            safe_points,
+            center_valid,
+            neighbour_points,
+            neighbour_valid,
+            pair_table,
+            resolved_policy,
+        )
+    )
+
+
+@compiled_when_enabled
+def _surface_frame_tensors(
+    safe_points: torch.Tensor,
+    center_valid: torch.Tensor,
+    neighbour_points: torch.Tensor,
+    neighbour_valid: torch.Tensor,
+    pair_table: torch.Tensor,
+    resolved_policy: SurfaceFramePolicy,
+) -> tuple[torch.Tensor, ...]:
+    """The arithmetic of :func:`_surface_frame_from_neighbours` as pure tensor code; fields in ``SurfaceFrameResult`` order."""
+
+    batch_size, height, width, _ = safe_points.shape
+    offset_count = neighbour_points.shape[3]
 
     centre_z = safe_points[..., 2].unsqueeze(-1)
     neighbour_z = neighbour_points[..., 2]
@@ -327,11 +358,8 @@ def estimate_surface_frame(
     neighbour_vectors = neighbour_points - safe_points.unsqueeze(3)
     pair_crosses: list[torch.Tensor] = []
     pair_validity: list[torch.Tensor] = []
-    pair_indices: list[tuple[int, int]] = []
-    offset_count = len(offsets)
     for first in range(offset_count):
         for second in range(first + 1, offset_count):
-            pair_indices.append((first, second))
             pair_crosses.append(
                 torch.linalg.cross(
                     neighbour_vectors[..., first, :],
@@ -377,21 +405,21 @@ def estimate_surface_frame(
         normal, tangent_epsilon=resolved_policy.tangent_epsilon
     )
     tangent_fallback = tangent_fallback & center_valid
-    identity = torch.eye(3, dtype=image_points.dtype, device=image_points.device)
+    identity = torch.eye(3, dtype=safe_points.dtype, device=safe_points.device)
     frame = torch.stack((tangent_1, tangent_2, normal), dim=-1)
     frame = torch.where(center_valid.unsqueeze(-1).unsqueeze(-1), frame, identity)
 
     distances = torch.linalg.vector_norm(neighbour_vectors, dim=-1)
     distance_sum = torch.where(accepted, distances, torch.zeros_like(distances)).sum(dim=-1)
-    safe_count = neighbour_count.clamp_min(1).to(image_points.dtype)
+    safe_count = neighbour_count.clamp_min(1).to(safe_points.dtype)
     local_spacing = distance_sum / safe_count
     tangent_scale = (local_spacing * resolved_policy.scale_factor).clamp(
         min=resolved_policy.min_tangent_scale_m, max=resolved_policy.max_tangent_scale_m
     )
-    normal_scale = image_points.new_full(tangent_scale.shape, resolved_policy.normal_thickness_m)
+    normal_scale = safe_points.new_full(tangent_scale.shape, resolved_policy.normal_thickness_m)
     regular_scales = torch.stack((tangent_scale, tangent_scale, normal_scale), dim=-1)
     bounded_fallback_scale = resolved_policy.bounded_fallback_scale_m
-    fallback_scales = image_points.new_full((*tangent_scale.shape, 3), bounded_fallback_scale)
+    fallback_scales = safe_points.new_full((*tangent_scale.shape, 3), bounded_fallback_scale)
     scales = torch.where(
         normal_valid.unsqueeze(-1),
         regular_scales,
@@ -400,29 +428,122 @@ def estimate_surface_frame(
     scales = torch.where(center_valid.unsqueeze(-1), scales, fallback_scales)
 
     selected_pair = torch.empty(
-        (*best_pair_index.shape, 2), dtype=torch.long, device=image_points.device
+        (*best_pair_index.shape, 2), dtype=torch.long, device=safe_points.device
     )
-    pair_table = torch.tensor(pair_indices, dtype=torch.long, device=image_points.device)
     selected_pair.copy_(pair_table[best_pair_index])
     selected_pair = torch.where(
         center_valid.unsqueeze(-1), selected_pair, torch.full_like(selected_pair, -1)
     )
 
-    return SurfaceFrameResult(
-        normals=normal,
-        tangent_1=tangent_1,
-        tangent_2=tangent_2,
-        frame=frame,
-        scales=scales,
-        valid_mask=center_valid,
-        normal_valid_mask=normal_valid,
-        fallback_mask=center_valid & ~normal_valid,
-        discontinuity_mask=discontinuity_mask,
-        degeneracy_mask=degeneracy_mask,
-        tangent_fallback_mask=tangent_fallback,
-        neighbor_count=neighbour_count,
-        accepted_neighbor_mask=accepted,
-        selected_pair=selected_pair,
+    return (
+        normal,
+        tangent_1,
+        tangent_2,
+        frame,
+        scales,
+        center_valid,
+        normal_valid,
+        center_valid & ~normal_valid,
+        discontinuity_mask,
+        degeneracy_mask,
+        tangent_fallback,
+        neighbour_count,
+        accepted,
+        selected_pair,
+    )
+
+
+def estimate_surface_frame(
+    centers: torch.Tensor,
+    valid_mask: torch.Tensor,
+    *,
+    policy: SurfaceFramePolicy | None = None,
+    layout: Literal["channel_first", "channel_last"] | None = None,
+) -> SurfaceFrameResult:
+    """Estimate masked camera-relative surface frames from metric points.
+
+    ``centers`` are left-camera points in metres.  The centre validity mask is
+    hard and non-differentiable by design.  For valid centres, selected point
+    differences and cross products retain autograd connectivity.  A normal is
+    selected from the largest non-degenerate pairwise neighbourhood cross
+    product; if no such pair survives the depth-jump mask, a camera-facing
+    ray normal and bounded isotropic scale are returned with ``fallback_mask``
+    set.  Invalid centres receive finite placeholders and ``valid_mask=False``.
+    """
+
+    resolved_policy = policy or _DEFAULT_SURFACE_FRAME_POLICY
+    image_points, input_valid, _ = _as_image_points(centers, valid_mask, layout=layout)
+    finite = torch.isfinite(image_points).all(dim=-1)
+    center_valid = input_valid & finite & (image_points[..., 2] > 0)
+    safe_points = torch.where(finite.unsqueeze(-1), image_points, torch.zeros_like(image_points))
+
+    neighbours: list[torch.Tensor] = []
+    neighbour_validity: list[torch.Tensor] = []
+    for dy, dx in _neighbour_offsets(resolved_policy):
+        neighbour, neighbour_valid = _shifted_neighbour(safe_points, center_valid, dy, dx)
+        neighbours.append(neighbour)
+        neighbour_validity.append(neighbour_valid)
+    neighbour_points = torch.stack(neighbours, dim=3)
+    neighbour_valid = torch.stack(neighbour_validity, dim=3)
+    return _surface_frame_from_neighbours(
+        safe_points, center_valid, neighbour_points, neighbour_valid, resolved_policy
+    )
+
+
+def estimate_surface_frame_on_grid(
+    centers: torch.Tensor,
+    valid_mask: torch.Tensor,
+    *,
+    stride: int,
+    offset_xy: tuple[int, int] = (0, 0),
+    policy: SurfaceFramePolicy | None = None,
+    layout: Literal["channel_first", "channel_last"] | None = None,
+) -> SurfaceFrameResult:
+    """:func:`estimate_surface_frame` evaluated only at the centres ``(y0 + stride*i, x0 + stride*j)``.
+
+    ``y0 = offset_xy[1] % stride`` and ``x0 = offset_xy[0] % stride`` are the first row and column of the regular grid of
+    ``SamplingPolicy(mode="fixed")``. Every field has shape ``[B,rows,cols,...]`` and equals the dense result sliced at the
+    same centres: neighbours are strided views of a zero-padded copy of the points (padding is invalid, like the border mask of
+    the dense roll), and the arithmetic is the shared :func:`_surface_frame_from_neighbours`. Used when only the grid centres
+    are consumed, so the other ``stride**2 - 1`` of every ``stride**2`` pixels are not evaluated.
+    """
+
+    if stride < 1:
+        raise ValueError("stride must be a positive integer")
+    resolved_policy = policy or _DEFAULT_SURFACE_FRAME_POLICY
+    image_points, input_valid, _ = _as_image_points(centers, valid_mask, layout=layout)
+    finite = torch.isfinite(image_points).all(dim=-1)
+    center_valid = input_valid & finite & (image_points[..., 2] > 0)
+    safe_points = torch.where(finite.unsqueeze(-1), image_points, torch.zeros_like(image_points))
+    batch_size, height, width, _ = safe_points.shape
+    radius = resolved_policy.neighborhood_radius
+    y0, x0 = offset_xy[1] % stride, offset_xy[0] % stride
+    rows, cols = len(range(y0, height, stride)), len(range(x0, width, stride))
+    if rows == 0 or cols == 0:
+        raise ValueError("the grid has no cells inside the image")
+
+    padded_points = safe_points.new_zeros((batch_size, height + 2 * radius, width + 2 * radius, 3))
+    padded_points[:, radius : radius + height, radius : radius + width] = safe_points
+    padded_valid = center_valid.new_zeros((batch_size, height + 2 * radius, width + 2 * radius))
+    padded_valid[:, radius : radius + height, radius : radius + width] = center_valid
+
+    def at(padded: torch.Tensor, dy: int, dx: int) -> torch.Tensor:
+        top, left = radius + y0 + dy, radius + x0 + dx
+        return padded[
+            :,
+            top : top + stride * (rows - 1) + 1 : stride,
+            left : left + stride * (cols - 1) + 1 : stride,
+        ]
+
+    offsets = _neighbour_offsets(resolved_policy)
+    neighbour_points = torch.stack([at(padded_points, dy, dx) for dy, dx in offsets], dim=3)
+    neighbour_valid = torch.stack([at(padded_valid, dy, dx) for dy, dx in offsets], dim=3)
+    return _surface_frame_from_neighbours(
+        at(padded_points, 0, 0),
+        at(padded_valid, 0, 0),
+        neighbour_points,
+        neighbour_valid,
+        resolved_policy,
     )
 
 
@@ -448,5 +569,6 @@ __all__ = [
     "SurfacePolicy",
     "SurfaceFrame",
     "estimate_surface_frame",
+    "estimate_surface_frame_on_grid",
     "estimate_surface_normals",
 ]

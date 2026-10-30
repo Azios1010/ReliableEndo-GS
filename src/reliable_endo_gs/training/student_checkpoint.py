@@ -14,8 +14,10 @@ import torch
 from reliable_endo_gs.reconstruction.checkpoint import _atomic_torch_save, _cpu_tree
 from reliable_endo_gs.routing.balanced import BalancedSelector
 from reliable_endo_gs.routing.cost import HISTORY_SIZE, new_cost_history
+from reliable_endo_gs.routing.support_grid import AutomaticSupportGrid
 from reliable_endo_gs.training.harness import capture_rng, checkpoint_rng, restore_rng
 from reliable_endo_gs.training.student_learning import StudentLearner
+from reliable_endo_gs.training.student_schedule import checkpoint_model_learning_rate
 
 SCHEMA = "student_joint_checkpoint.v1"
 SELECTION_SCHEMA = "student_joint_intervention_checkpoint.v1"
@@ -53,6 +55,11 @@ def save_student_checkpoint(
                     else {}
                 ),
                 "mask_config": None if learner.mask_config is None else asdict(learner.mask_config),
+                **(
+                    {"automatic_support_grid": asdict(learner.target_masks.config)}
+                    if isinstance(learner.target_masks, AutomaticSupportGrid)
+                    else {}
+                ),
                 "target_mask_index_sha256": None
                 if learner.target_masks is None
                 else learner.target_masks.identity,
@@ -67,7 +74,7 @@ def save_student_checkpoint(
                 else learner.selector_balancer.state_dict(),
                 "identity": dict(identity),
                 "cursor": dict(cursor),
-                "student_config": asdict(learner.config),
+                "student_config": learner.config.to_dict(),
                 "routing_config": asdict(learner.routing),
                 "construction_config": learner.model.config.to_dict(),
                 "hashes": [
@@ -134,6 +141,8 @@ def initialize_student_model(
         architecture.get(name) != getattr(learner.config, name)
         for name in ("width", "bins", "minimum_effective_px")
     ):
+        raise ValueError("warm-start student architecture mismatch")
+    if architecture.get("stereo_architecture", "compact") != learner.config.stereo_architecture:
         raise ValueError("warm-start student architecture mismatch")
     if (
         raw.get("teacher_in_checkpoint") is not False
@@ -263,7 +272,7 @@ def import_frozen_student_actions(
         None if learner.intervention_config is None else learner.intervention_config.to_dict()
     )
     if (
-        raw.get("student_config") != asdict(learner.config)
+        raw.get("student_config") != learner.config.to_dict()
         or raw.get("routing_config") != asdict(learner.routing)
         or raw.get("intervention_config") != protocol
         or raw.get("identity", {}).get("run_kind") == "bounded_smoke"
@@ -295,6 +304,66 @@ def import_frozen_student_actions(
     }
 
 
+def import_frozen_repair_artifact(
+    path: Path, learner: StudentLearner, *, expected_sha256: str
+) -> dict[str, object]:
+    """Explicit read-only Stage A -> study adapter; never relax checkpoint resume.
+
+    Allows a NEW selector/utility/candidate protocol while requiring identical
+    reconstruction, student, routing and action-forward construction. Does not
+    import optimizer, selector, normalization, RNG or historical timing state.
+    """
+    from reliable_endo_gs.config.intervention import InterventionConfig
+    from reliable_endo_gs.routing.artifact_identity import repair_execution_config
+
+    if hashlib.sha256(path.read_bytes()).hexdigest() != expected_sha256:
+        raise ValueError("frozen repair artifact SHA-256 mismatch")
+    raw = read_student_checkpoint(path)
+    cfg = learner.intervention_config
+    if (
+        cfg is None
+        or cfg.student_update_mode != "frozen"
+        or raw.get("student_config") != learner.config.to_dict()
+        or raw.get("routing_config") != asdict(learner.routing)
+        or raw.get("identity", {}).get("run_kind") == "bounded_smoke"
+        or raw.get("frozen_student_start_step") is None
+        or not isinstance(raw.get("intervention_config"), dict)
+    ):
+        raise ValueError("study requires a full frozen-student repair artifact")
+    parent = InterventionConfig(**raw["intervention_config"])
+    if parent.student_update_mode != "frozen" or repair_execution_config(
+        parent
+    ) != repair_execution_config(cfg):
+        raise ValueError("study changed the real repair execution protocol")
+    state, expected = raw.get("actions"), learner.actions.state_dict()
+    if (
+        not isinstance(state, dict)
+        or set(state) != set(expected)
+        or any(
+            not isinstance(v, torch.Tensor)
+            or v.shape != expected[k].shape
+            or v.dtype != expected[k].dtype
+            or not bool(torch.isfinite(v).all())
+            for k, v in state.items()
+        )
+    ):
+        raise ValueError("invalid frozen repair tensors")
+    imported = initialize_student_model(path, learner)
+    learner.actions.load_state_dict(state, strict=True)
+    for module in (learner.model, learner.actions):
+        module.eval().requires_grad_(False)
+    return {
+        **imported,
+        "mode": "frozen_repair_selector_study",
+        "parent_intervention_config_hash": parent.config_hash,
+        "study_intervention_config_hash": cfg.config_hash,
+        "operative_action_identity": learner.operative_action_identity(),
+        "selector_imported": False,
+        "optimizer_imported": False,
+        "checkpoint_modified": False,
+    }
+
+
 def load_student_checkpoint(
     path: Path,
     learner: StudentLearner,
@@ -319,6 +388,12 @@ def load_student_checkpoint(
         or raw.get("intervention_config") != expected_intervention
         or raw.get("mask_config")
         != (None if learner.mask_config is None else asdict(learner.mask_config))
+        or raw.get("automatic_support_grid")
+        != (
+            asdict(learner.target_masks.config)
+            if isinstance(learner.target_masks, AutomaticSupportGrid)
+            else None
+        )
         or (
             resume
             and raw.get("target_mask_index_sha256")
@@ -338,7 +413,7 @@ def load_student_checkpoint(
     ):
         raise ValueError("student checkpoint config/ownership mismatch")
     if (
-        raw.get("student_config") != asdict(learner.config)
+        raw.get("student_config") != learner.config.to_dict()
         or raw.get("routing_config") != asdict(learner.routing)
         or raw.get("construction_config") != learner.model.config.to_dict()
     ):
@@ -570,6 +645,12 @@ def load_student_checkpoint(
         if not isinstance(payload, dict) or set(payload) != {"state", "param_groups"}:
             raise ValueError(f"invalid student optimizer schema: {name}")
         expected_groups = optimizer.state_dict()["param_groups"]
+        if name == "model_optimizer":
+            rate = checkpoint_model_learning_rate(
+                learner.config, cursor["samples_seen"], samples_per_epoch
+            )
+            for group in expected_groups:
+                group["lr"] = rate
         if not isinstance(payload["state"], dict) or payload["param_groups"] != expected_groups:
             raise ValueError(f"student optimizer groups/config mismatch: {name}")
         group_ids = [index for group in payload["param_groups"] for index in group["params"]]

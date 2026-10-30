@@ -55,7 +55,8 @@ def test_opt_in_identity_and_physical_utility_are_preserved():
     frozen = load_intervention_config(
         Path("configs/routing/intervention_metric_signed_gain_frozen_student.yaml")
     )
-    assert replace(frozen, student_update_mode="joint") == new
+    assert frozen.selector_token_channels == 64  # KD multiscale checkpoint width.
+    assert replace(frozen, student_update_mode="joint", selector_token_channels=32) == new
     for kwargs in (
         {"selector_gain_mode": "unknown"},
         {"selector_balance_mode": "shared"},

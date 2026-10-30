@@ -5,14 +5,18 @@ from __future__ import annotations
 import argparse
 import copy
 import hashlib
+import json
+import threading
 import time
-from dataclasses import replace
+from contextlib import ExitStack
+from dataclasses import asdict, replace
 from pathlib import Path
 
 import torch
 
 from reliable_endo_gs.actions.repair import Action
 from reliable_endo_gs.config.intervention import InterventionConfig, load_intervention_config
+from reliable_endo_gs.config.selector_study import load_selector_study_config
 from reliable_endo_gs.data.scared_a00 import (
     ScaredA00Adapter,
     ScaredA00Dataset,
@@ -29,6 +33,11 @@ from reliable_endo_gs.rendering.production import ProductionFieldRenderer
 from reliable_endo_gs.routing.config import RoutingConfig, load_routing_config
 from reliable_endo_gs.routing.cost import load_cost_calibration
 from reliable_endo_gs.routing.masks import MaskProposalConfig, load_mask_config
+from reliable_endo_gs.routing.support_grid import (
+    AutomaticSupportGrid,
+    SupportGridConfig,
+    automatic_study_regions,
+)
 from reliable_endo_gs.routing.tokens import selector_feature_names
 from reliable_endo_gs.routing.tradeoff import load_tradeoff_config
 from reliable_endo_gs.runtime.git import get_git_commit, is_git_dirty
@@ -64,9 +73,20 @@ def _check_zero_repair_render(repaired: torch.Tensor, original: torch.Tensor) ->
 
 
 def run_student_command(arguments: argparse.Namespace) -> dict[str, object]:
+    """Own input-worker lifetime even when model or teacher initialization fails."""
+    with ExitStack() as resources:
+        return _run_student_command(arguments, resources)
+
+
+def _run_student_command(arguments: argparse.Namespace, resources: ExitStack) -> dict[str, object]:
     """Native runs are explicit CLI requests; inference never resolves a teacher."""
     infer = arguments.command == "infer"
     smoke = arguments.command == "smoke"
+    gpu_input = bool(getattr(arguments, "gpu_input", False))
+    if gpu_input and infer:
+        raise ValueError("--gpu-input is a training/smoke input-pipeline option")
+    if gpu_input and torch.get_num_threads() != 1:
+        raise ValueError("--gpu-input requires OMP_NUM_THREADS=1 to pin CPU reference RGB rounding")
     initialize_from = getattr(arguments, "initialize_model_from", None)
     metric_selector_path = getattr(arguments, "metric_selector", None)
     metric_config_path = getattr(arguments, "metric_config", None)
@@ -207,9 +227,35 @@ def run_student_command(arguments: argparse.Namespace) -> dict[str, object]:
         raise ValueError("native student construction must pin cuda:0 and final_train")
     if construction.runtime.precision != "fp32":
         raise ValueError("student runtime/checkpoint must declare FP32 precision")
-    if (mask_config is None) != (mask_index_path is None):
+    automatic_regions = None
+    study_path = getattr(arguments, "study_protocol_path", None)
+    study = None if study_path is None else load_selector_study_config(study_path)
+    if study is not None:
+        if mask_path is not None or mask_index_path is not None:
+            raise ValueError("automatic study regions cannot consume operator mask arguments")
+        if intervention_config is None or intervention_config.student_update_mode != "frozen":
+            raise ValueError(
+                "automatic study training requires the explicit frozen-student protocol"
+            )
+        study_mask, automatic_regions = automatic_study_regions(study)
+        if raw is not None and (
+            raw.get("automatic_support_grid") != asdict(automatic_regions.config)
+            or mask_config != study_mask
+            or raw.get("identity", {}).get("study_config_hash") != study.config_hash
+        ):
+            raise ValueError("automatic study inference protocol differs from its checkpoint")
+        mask_config = study_mask
+    elif raw is not None and raw.get("automatic_support_grid") is not None:
+        if mask_config is None or mask_index_path is not None:
+            raise ValueError(
+                "automatic checkpoint pins its mask limits and excludes operator masks"
+            )
+        automatic_regions = AutomaticSupportGrid(
+            SupportGridConfig(**raw["automatic_support_grid"]), mask_config
+        )
+    if automatic_regions is None and (mask_config is None) != (mask_index_path is None):
         raise ValueError("mask protocol requires --target-mask-index and proposal config")
-    target_masks = None
+    target_masks = automatic_regions
     if mask_index_path is not None:
         mask_index_path = mask_index_path.resolve()
         if mask_index_path == repo or repo in mask_index_path.parents:
@@ -225,7 +271,64 @@ def run_student_command(arguments: argparse.Namespace) -> dict[str, object]:
         include_supervision=False,
         data_role="final_train",
         output_hw=construction.runtime.resolution_hw,
+        device=device if gpu_input else None,
     )
+    staged = None
+    stage_from = getattr(arguments, "stage_from", None)
+    stage_inventory = getattr(arguments, "stage_inventory", None)
+    if (stage_from is None) != (stage_inventory is None):
+        raise ValueError("--stage-from and --stage-inventory must be supplied together")
+    if stage_from is not None:
+        if infer or smoke or config.joint_epochs or intervention_config is not None:
+            raise ValueError(
+                "asynchronous staging currently supports ordered student-only training"
+            )
+        from reliable_endo_gs.data.staging import FileStager, deployment_file_index
+        from reliable_endo_gs.training.input_prefetch import OrderedInputPrefetch
+
+        member_index = deployment_file_index(
+            [entry.sample_id for entry in manifest.entries if entry.data_role == "final_train"],
+            stage_inventory,
+        )
+        event_lock = threading.Lock()
+        event_path = Path(str(output) + ".input.jsonl")
+
+        def input_event(event: str, **fields: object) -> None:
+            record = {"event": event, "time_unix": time.time(), **fields}
+            with event_lock:
+                event_path.parent.mkdir(parents=True, exist_ok=True)
+                with event_path.open("a") as handle:
+                    handle.write(json.dumps(record) + "\n")
+
+        stager = FileStager(
+            stage_from,
+            arguments.data_root,
+            journal=Path(str(output) + ".staging.jsonl"),
+            previous_journals=arguments.staging_journal,
+            retries=arguments.staging_retries,
+            event=input_event,
+        )
+        start = 0
+        if arguments.checkpoint is not None:
+            start = read_student_checkpoint(arguments.checkpoint)["cursor"]["next_sample_index"]
+        staged = resources.enter_context(
+            OrderedInputPrefetch(
+                dataset,
+                lambda index: stager.prepare(member_index[index]),
+                start=start,
+                ahead=arguments.prefetch_samples,
+                workers=arguments.staging_workers,
+                release=lambda index: stager.release(member_index[index]),
+                event=input_event,
+            )
+        )
+        input_event(
+            "prefetch_started",
+            start_index=start,
+            ahead=staged.ahead,
+            workers=staged.workers,
+            tensor_loader="unchanged_main_thread",
+        )
     if target_masks is not None:
         if construction.runtime.resolution_hw is None:
             raise ValueError("mask routing requires an explicit model output resolution")
@@ -242,6 +345,7 @@ def run_student_command(arguments: argparse.Namespace) -> dict[str, object]:
         width=config.width,
         bins=config.bins,
         minimum_effective_px=config.minimum_effective_px,
+        stereo_architecture=config.stereo_architecture,
     ).to(device)
     learner = StudentLearner(
         model,
@@ -272,6 +376,15 @@ def run_student_command(arguments: argparse.Namespace) -> dict[str, object]:
         "precision": "fp32",
         "run_kind": "bounded_smoke" if smoke else "full_manifest",
     }
+    if gpu_input:
+        identity["input_pipeline"] = {
+            "schema": "cuda_a00_input.v2",
+            "tensor_device": "cuda:0",
+            "rgb_normalization": "cuda_uint8_lookup_round_once_float32",
+            "rgb_resize": "cuda_cpu_single_thread_order_bilinear_identity_or_twofold",
+            "rgb_reference_cpu_threads": 1,
+            "supervision": "same_canonical_nearest_exact_without_rgb_reload",
+        }
     if intervention_config is not None:
         identity["intervention_config_hash"] = intervention_config.config_hash
         identity["selection_protocol"] = intervention_config.schema
@@ -286,6 +399,13 @@ def run_student_command(arguments: argparse.Namespace) -> dict[str, object]:
             target_mask_index_sha256=target_masks.identity,
             matching_evidence_protocol="student_matching_shared_pass.v1",
         )
+        if automatic_regions is not None:
+            identity["automatic_support_grid"] = asdict(automatic_regions.config)
+            identity["region_protocol"] = automatic_regions.config.schema
+            if study is not None:
+                identity["study_config_hash"] = study.config_hash
+            elif raw is not None and "study_config_hash" in raw["identity"]:
+                identity["study_config_hash"] = raw["identity"]["study_config_hash"]
     if initialize_from is not None:
         identity["model_initialization"] = initialize_student_model(
             initialize_from, learner, require_trained=learner.student_frozen
@@ -408,6 +528,9 @@ def run_student_command(arguments: argparse.Namespace) -> dict[str, object]:
             from reliable_endo_gs.training.metric_quality import OfflineMetricTruth
 
             def provide_metric_truth(sample: ScaredA00Sample) -> OfflineMetricTruth:
+                if gpu_input:
+                    supervision = adapter.load_supervision(sample)
+                    return OfflineMetricTruth.from_a00(replace(sample, supervision=supervision))
                 truth_sample = adapter.load(
                     sample.sample_id,
                     data_role="final_train",
@@ -417,7 +540,7 @@ def run_student_command(arguments: argparse.Namespace) -> dict[str, object]:
                 return OfflineMetricTruth.from_a00(truth_sample)
 
             metric_truth_provider = provide_metric_truth
-        samples: StudentSamples = dataset
+        samples: StudentSamples = staged if staged is not None else dataset
         if intervention_config is not None and not smoke:
             ordered = SeededSampleOrder(dataset, config.seed)
             samples = ordered
@@ -429,6 +552,7 @@ def run_student_command(arguments: argparse.Namespace) -> dict[str, object]:
                 data_role="final_train",
                 include_supervision=False,
                 output_hw=construction.runtime.resolution_hw,
+                device=device if gpu_input else None,
             )
             from reliable_endo_gs.training.student_learning import evaluation_mode
 
@@ -505,6 +629,19 @@ def run_student_command(arguments: argparse.Namespace) -> dict[str, object]:
             target_provider=target_provider,
             metric_truth_provider=metric_truth_provider,
         )
+        if staged is not None:
+            io_report = {
+                "schema": "ordered_byte_prefetch.v1",
+                "source_root": str(stage_from),
+                "inventory": str(stage_inventory),
+                "prefetch_samples": staged.ahead,
+                "workers": staged.workers,
+                "consumed": staged.consumed,
+                "input_wait_seconds": staged.wait_seconds,
+                "peak_pending": staged.peak_pending,
+                "model_reloads_at_queue_boundaries": 0,
+            }
+            write_json_atomic(output / "input_pipeline.json", io_report)
         if smoke:
             torch.cuda.synchronize(device)
             report["smoke_only_not_full_training"] = True

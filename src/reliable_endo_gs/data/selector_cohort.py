@@ -15,7 +15,7 @@ import numpy as np
 from PIL import Image, ImageDraw
 
 from reliable_endo_gs.config.selector_refit import SelectorRefitConfig, partition_selector_training
-from reliable_endo_gs.data.scared_a00 import load_a01_manifest
+from reliable_endo_gs.data.scared_a00 import ScaredA00Adapter, load_a01_manifest
 from reliable_endo_gs.teachers import load_a01_roles
 from reliable_endo_gs.utils.io import write_json_atomic
 
@@ -23,7 +23,7 @@ from reliable_endo_gs.utils.io import write_json_atomic
 def validate_selector_worklist(
     raw: dict[str, Any], train_ids: set[str], dev_ids: set[str], policy: SelectorRefitConfig
 ) -> tuple[tuple[str, ...], tuple[str, ...]]:
-    """Declared bounds, original manifests, all seven folds and no overlap."""
+    """Declared bounds, every manifest fold, original TRAIN identities, no overlap."""
     if raw.get("schema") not in ("mask_validation_worklist.v1", "selector_cohort_worklist.v1"):
         raise ValueError("unsupported selector worklist schema")
     groups = []
@@ -34,11 +34,16 @@ def validate_selector_worklist(
         ids = raw.get(name)
         if (
             not isinstance(ids, list)
-            or not 7 <= len(ids) <= maximum
+            or not 1 <= len(ids) <= maximum
             or any(not isinstance(s, str) for s in ids)
             or len(ids) != len(set(ids))
             or not set(ids) <= known
-            or {s.split("/")[0] for s in ids} != {f"dataset_{i}" for i in range(1, 8)}
+            or {s.split("/")[0] for s in ids} != {s.split("/")[0] for s in known}
+            or any(
+                len(s.split("/")) != 3
+                or s.split("/")[0] not in {f"dataset_{i}" for i in range(1, 8)}
+                for s in ids
+            )
         ):
             raise ValueError(f"invalid declared {name} cohort")
         groups.append(tuple(ids))
@@ -458,3 +463,102 @@ def verify_selector_source_snapshot(data_root: Path, index: Path, expected_sha25
                 )
     if data_root.resolve() != resolved_root:
         raise ValueError("external data root changed during source verification")
+
+
+def temporal_keyframe_cohort(sample_ids: tuple[str, ...], per_keyframe: int) -> tuple[str, ...]:
+    """Deterministic midpoint temporal strata, before GT/outcomes; cover every keyframe."""
+    if type(per_keyframe) is not int or per_keyframe < 1 or len(set(sample_ids)) != len(sample_ids):
+        raise ValueError("invalid temporal cohort bounds/identities")
+    groups: dict[str, list[str]] = defaultdict(list)
+    for sid in sorted(sample_ids):
+        groups[sid.rsplit("/", 1)[0]].append(sid)
+    chosen = []
+    for ids in groups.values():
+        n = min(per_keyframe, len(ids))
+        chosen.extend(ids[(2 * i + 1) * len(ids) // (2 * n)] for i in range(n))
+    return tuple(chosen)
+
+
+def prepare_automatic_selector_cohort(
+    *,
+    data_root: Path,
+    training_manifest: Path,
+    development_manifest: Path,
+    roles_path: Path,
+    policy: SelectorRefitConfig,
+    output_dir: Path,
+    candidate_identity: str,
+    study_config_hash: str,
+    per_keyframe: int = 16,
+) -> dict[str, Any]:
+    """Seal bounded sample/role/source identities; no operator ROI or GT decoding."""
+    _external(output_dir)
+    _external(data_root)
+    if output_dir.exists():
+        raise ValueError("automatic cohort requires a new external directory")
+    data_root = data_root.resolve()
+    roles = load_a01_roles(roles_path)
+    train, dev = (
+        load_a01_manifest(p, roles=roles) for p in (training_manifest, development_manifest)
+    )
+    all_train = {e.sample_id for e in train.entries if e.data_role == "final_train"}
+    all_dev = {e.sample_id for e in dev.entries if e.data_role == "final_train"}
+    work = {
+        "schema": "selector_cohort_worklist.v1",
+        "training": list(temporal_keyframe_cohort(tuple(all_train), per_keyframe)),
+        "development": list(temporal_keyframe_cohort(tuple(all_dev), per_keyframe)),
+        "training_manifest_hash": train.manifest_hash,
+        "development_manifest_hash": dev.manifest_hash,
+        "role_hash": roles.role_hash,
+        "target_mask_index_sha256": candidate_identity,
+        "study_config_hash": study_config_hash,
+        "selection": "midpoint_temporal_strata_per_keyframe_before_labels",
+        "per_keyframe": per_keyframe,
+        "operator_roi_used": False,
+    }
+    train_ids, dev_ids = validate_selector_worklist(work, all_train, all_dev, policy)
+    partition = partition_selector_training(train_ids, policy)
+    output_dir.mkdir(parents=True, exist_ok=False)
+    write_json_atomic(output_dir / "partition.json", partition)
+    # Record the chosen IDs before touching any medical image or supervision bytes.
+    write_json_atomic(output_dir / "worklist-draft.json", work)
+    members: set[Path] = set()
+    for manifest, ids in ((train, train_ids), (dev, dev_ids)):
+        adapter = ScaredA00Adapter(data_root, manifest, roles=roles)
+        for sid in ids:
+            members.update(adapter.source_members(sid, include_supervision=True))
+
+    def hash_member(path: Path) -> tuple[str, dict[str, Any]]:
+        before = path.stat()
+        digest = hashlib.sha256()
+        with path.open("rb") as stream:
+            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                digest.update(chunk)
+        after = path.stat()
+        if (before.st_size, before.st_mtime_ns) != (after.st_size, after.st_mtime_ns):
+            raise ValueError("source changed during cohort preparation")
+        return path.relative_to(data_root).as_posix(), {
+            "size": before.st_size,
+            "mtime_ns": before.st_mtime_ns,
+            "sha256": digest.hexdigest(),
+        }
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        sources = dict(executor.map(hash_member, sorted(members)))
+    write_json_atomic(
+        output_dir / "data-source-index.json",
+        {"schema": "selector_data_source_snapshot.v1", "files": sources, "gt_decoded": False},
+    )
+    work["data_source_index_sha256"] = hashlib.sha256(
+        (output_dir / "data-source-index.json").read_bytes()
+    ).hexdigest()
+    write_json_atomic(output_dir / "worklist.json", work)
+    return {
+        "status": "automatic_selector_cohort_prepared",
+        "training_samples": len(train_ids),
+        "development_samples": len(dev_ids),
+        "partition_sha256": partition["partition_sha256"],
+        "source_files": len(sources),
+        "ground_truth_loaded": False,
+        "operator_roi_used": False,
+    }

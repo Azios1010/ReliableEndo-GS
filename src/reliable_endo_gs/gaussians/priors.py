@@ -17,7 +17,9 @@ from reliable_endo_gs.contracts.deployment import RectifiedStereoCamera
 from reliable_endo_gs.gaussians.sampling import (
     SamplingPolicy,
     SamplingResult,
+    fixed_grid_cells,
     gather_source,
+    sample_fixed_grid_static,
     sample_grid,
 )
 from reliable_endo_gs.gaussians.support_covariance import (
@@ -25,7 +27,13 @@ from reliable_endo_gs.gaussians.support_covariance import (
     quaternion_to_rotation_matrix,
 )
 from reliable_endo_gs.geometry.rectified import reconstruct_rectified
-from reliable_endo_gs.geometry.surface import SurfaceFramePolicy, estimate_surface_frame
+from reliable_endo_gs.geometry.surface import (
+    SurfaceFramePolicy,
+    estimate_surface_frame,
+    estimate_surface_frame_on_grid,
+)
+from reliable_endo_gs.utils.inference_mode import compiled_when_enabled, static_grid_layout_enabled
+from reliable_endo_gs.utils.readback import raise_first_failure, read_ints
 
 
 @dataclass(frozen=True, slots=True)
@@ -211,8 +219,20 @@ def rotation_matrix_to_quaternion(rotation: torch.Tensor) -> torch.Tensor:
         raise ValueError("rotation must have trailing shape [3,3]")
     if not torch.is_floating_point(rotation):
         raise TypeError("rotation must be floating point")
-    if not bool(torch.isfinite(rotation).all()):
-        raise ValueError("rotation must contain finite values")
+    raise_first_failure(
+        [
+            (
+                torch.isfinite(rotation).all(),
+                lambda: ValueError("rotation must contain finite values"),
+            )
+        ]
+    )
+    return _rotation_matrix_to_quaternion(rotation)
+
+
+@compiled_when_enabled
+def _rotation_matrix_to_quaternion(rotation: torch.Tensor) -> torch.Tensor:
+    """The arithmetic of :func:`rotation_matrix_to_quaternion` as pure tensor code (inputs already validated)."""
     m00, m01, m02 = rotation[..., 0, 0], rotation[..., 0, 1], rotation[..., 0, 2]
     m10, m11, m12 = rotation[..., 1, 0], rotation[..., 1, 1], rotation[..., 1, 2]
     m20, m21, m22 = rotation[..., 2, 0], rotation[..., 2, 1], rotation[..., 2, 2]
@@ -358,25 +378,56 @@ def build_geometry_prior(
         min_effective_disparity=min_effective_disparity,
     )
     points = geometry.points.centers
-    surface = estimate_surface_frame(
-        points,
-        geometry.points.valid_mask,
-        policy=resolved_policy.surface,
-        layout="channel_first",
-    )
-    sampling = sample_grid(surface.valid_mask, policy=resolved_policy.sampling)
     batch_size, _, height, width = points.shape
     point_image = points.permute(0, 2, 3, 1)
-    mu = _gather_image_tensor(point_image, sampling)
-    frame = _gather_image_tensor(surface.frame, sampling)
-    scales = _gather_image_tensor(surface.scales, sampling)
-    fallback = _gather_image_tensor(surface.fallback_mask.unsqueeze(-1), sampling).squeeze(-1)
-    discontinuity = _gather_image_tensor(
-        surface.discontinuity_mask.unsqueeze(-1), sampling
-    ).squeeze(-1)
-    tangent_fallback = _gather_image_tensor(
-        surface.tangent_fallback_mask.unsqueeze(-1), sampling
-    ).squeeze(-1)
+    cells = (
+        fixed_grid_cells(height, width, resolved_policy.sampling)
+        if static_grid_layout_enabled()
+        else None
+    )
+    if cells is None:
+        surface = estimate_surface_frame(
+            points,
+            geometry.points.valid_mask,
+            policy=resolved_policy.surface,
+            layout="channel_first",
+        )
+        sampling = sample_grid(surface.valid_mask, policy=resolved_policy.sampling)
+        mu = _gather_image_tensor(point_image, sampling)
+        frame = _gather_image_tensor(surface.frame, sampling)
+        scales = _gather_image_tensor(surface.scales, sampling)
+        fallback = _gather_image_tensor(surface.fallback_mask.unsqueeze(-1), sampling).squeeze(-1)
+        discontinuity = _gather_image_tensor(
+            surface.discontinuity_mask.unsqueeze(-1), sampling
+        ).squeeze(-1)
+        tangent_fallback = _gather_image_tensor(
+            surface.tangent_fallback_mask.unsqueeze(-1), sampling
+        ).squeeze(-1)
+    else:
+        # Static grid layout (utils.inference_mode): slot k is grid cell k, surface frames only at the grid cells, no nonzero.
+        # Holes are masked by ``valid`` below exactly like padded slots.
+        y0, x0, rows, cols = cells
+        grid_policy = resolved_policy.sampling
+        grid = estimate_surface_frame_on_grid(
+            points,
+            geometry.points.valid_mask,
+            stride=grid_policy.stride,
+            offset_xy=grid_policy.offset_xy,
+            policy=resolved_policy.surface,
+            layout="channel_first",
+        )
+        count = rows * cols
+        sampling = sample_fixed_grid_static(
+            grid.valid_mask, (height, width), cells, policy=grid_policy
+        )
+        mu = point_image[:, y0 :: grid_policy.stride, x0 :: grid_policy.stride].reshape(
+            batch_size, count, 3
+        )
+        frame = grid.frame.reshape(batch_size, count, 3, 3)
+        scales = grid.scales.reshape(batch_size, count, 3)
+        fallback = grid.fallback_mask.reshape(batch_size, count)
+        discontinuity = grid.discontinuity_mask.reshape(batch_size, count)
+        tangent_fallback = grid.tangent_fallback_mask.reshape(batch_size, count)
     valid = sampling.valid_mask
     # Surface frame values are finite for valid centres.  Zero/identity
     # placeholders keep padded fields finite and make omission explicit.
@@ -430,11 +481,13 @@ def build_geometry_prior(
 
     coverage = valid.unsqueeze(-1).to(dtype)
     alpha0 = coverage * float(resolved_policy.alpha_valid)
-    selected = int(valid.sum().item())
-    eligible = int(sampling.eligible_mask.sum().item())
-    fallback_count = int((fallback & valid).sum().item())
-    discontinuity_count = int((discontinuity & valid).sum().item())
-    tangent_fallback_count = int((tangent_fallback & valid).sum().item())
+    selected, eligible, fallback_count, discontinuity_count, tangent_fallback_count = read_ints(
+        valid.sum(),
+        sampling.eligible_mask.sum(),
+        (fallback & valid).sum(),
+        (discontinuity & valid).sum(),
+        (tangent_fallback & valid).sum(),
+    )
     diagnostics = GeometryPriorDiagnostics(
         eligible_count=eligible,
         selected_count=selected,

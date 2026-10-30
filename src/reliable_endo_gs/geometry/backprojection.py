@@ -5,8 +5,9 @@ from dataclasses import dataclass
 import torch
 
 from reliable_endo_gs.geometry.conventions import GeometryConvention
-from reliable_endo_gs.geometry.disparity import _count, _nan_where_invalid
+from reliable_endo_gs.geometry.disparity import _counts, _nan_where_invalid
 from reliable_endo_gs.geometry.pixels import pixel_grid
+from reliable_endo_gs.utils.readback import raise_first_failure
 
 
 @dataclass(frozen=True, slots=True)
@@ -63,13 +64,17 @@ def pixel_rays(
     )
     homogeneous = torch.cat((pixels, torch.ones_like(pixels[..., :1])), dim=-1)
     vectors = homogeneous.reshape(batch_size, height * width, 3).transpose(1, 2)
-    try:
-        rays = torch.linalg.solve(intrinsics, vectors)
-    except torch.linalg.LinAlgError as error:
-        raise ValueError("intrinsics must be invertible") from error
+    rays, solve_info = torch.linalg.solve_ex(intrinsics, vectors)
     rays = rays.reshape(batch_size, 3, height, width)
-    if not bool(torch.all(torch.isfinite(rays))):
-        raise ValueError("intrinsics produce non-finite pixel rays")
+    raise_first_failure(
+        [
+            ((solve_info == 0).all(), lambda: ValueError("intrinsics must be invertible")),
+            (
+                torch.all(torch.isfinite(rays)),
+                lambda: ValueError("intrinsics produce non-finite pixel rays"),
+            ),
+        ]
+    )
     return RayResult(rays, convention)
 
 
@@ -110,13 +115,20 @@ def backproject_depth(
     safe_depth = torch.where(output_mask, depth, torch.zeros_like(depth))
     centers = safe_depth * rays
     centers = _nan_where_invalid(centers, output_mask.expand(-1, 3, -1, -1))
+    masked, nonfinite_depth, nonpositive_depth, valid_total, nonfinite_center = _counts(
+        ~valid_mask,
+        valid_mask & ~finite,
+        valid_mask & finite & ~positive,
+        output_mask,
+        output_mask.expand(-1, 3, -1, -1) & ~torch.isfinite(centers),
+    )
     diagnostics = BackprojectionDiagnostics(
         total_count=depth.numel(),
-        input_masked_count=_count(~valid_mask),
-        nonfinite_depth_count=_count(valid_mask & ~finite),
-        nonpositive_depth_count=_count(valid_mask & finite & ~positive),
-        valid_count=_count(output_mask),
-        nonfinite_center_count=_count(output_mask.expand(-1, 3, -1, -1) & ~torch.isfinite(centers)),
+        input_masked_count=masked,
+        nonfinite_depth_count=nonfinite_depth,
+        nonpositive_depth_count=nonpositive_depth,
+        valid_count=valid_total,
+        nonfinite_center_count=nonfinite_center,
     )
     return BackprojectionResult(centers, rays, output_mask, diagnostics, convention)
 
@@ -130,8 +142,9 @@ def _validate_intrinsics(intrinsics: torch.Tensor) -> None:
         raise ValueError("intrinsics batch dimension must be positive")
     if not torch.is_floating_point(intrinsics):
         raise TypeError(f"intrinsics must be floating-point; got {intrinsics.dtype}")
-    if not bool(torch.all(torch.isfinite(intrinsics))):
-        raise ValueError("intrinsics must be finite")
+    raise_first_failure(
+        [(torch.all(torch.isfinite(intrinsics)), lambda: ValueError("intrinsics must be finite"))]
+    )
 
 
 def _validate_depth_inputs(depth: torch.Tensor, valid_mask: torch.Tensor) -> None:

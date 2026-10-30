@@ -20,6 +20,7 @@ from reliable_endo_gs.probabilistic_gs.marginalization import (
     RepresentationProvenance,
     RepresentationVariant,
 )
+from reliable_endo_gs.utils.readback import raise_first_failure
 
 
 class CovarianceRequest(str, Enum):
@@ -68,15 +69,23 @@ class RendererRequest:
         require_bool("valid_mask", valid)
         if valid.device != means.device:
             raise ValueError("valid_mask must share device with means3d")
-        if bool((valid & ~torch.isfinite(means).all(dim=-1)).any()):
-            raise ValueError("means3d must be finite on valid primitives")
+        means_ok = ~(valid & ~torch.isfinite(means).all(dim=-1)).any()
         for name, tensor in (("opacities", opacity),):
             if tensor.dtype != means.dtype or tensor.device != means.device:
                 raise ValueError(f"{name} must share dtype/device with means3d")
             alpha_ok = torch.isfinite(tensor).all(dim=-1)
             alpha_ok = alpha_ok & (tensor >= 0).all(dim=-1) & (tensor <= 1).all(dim=-1)
-            if bool((valid & ~alpha_ok).any()):
-                raise ValueError(f"{name} must be finite and in [0, 1] on valid primitives")
+            raise_first_failure(
+                [
+                    (means_ok, lambda: ValueError("means3d must be finite on valid primitives")),
+                    (
+                        ~(valid & ~alpha_ok).any(),
+                        lambda name=name: ValueError(
+                            f"{name} must be finite and in [0, 1] on valid primitives"
+                        ),
+                    ),
+                ]
+            )
         if not frame_is_explicit(self.frame, self.length_unit):
             raise ValueError("frame and length_unit must be explicit non-empty strings")
         source = CovarianceRequest(self.covariance_source)

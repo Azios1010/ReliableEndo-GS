@@ -97,14 +97,25 @@ def metric_targets(
 ) -> tuple[float, float, bool]:
     """Global decision utility, local geometry auxiliary, physical guard harm.
 
-    Common metric scales and geometry/render weights define the base score.
-    An explicit stereo multiplier scales its signed utility and local target;
-    Gaussian and physical harm labels are unchanged. This changes the action
-    preference, not the measured metric deltas or the predicted harm event.
+    Geometry mode uses the historical scaled bounded score. Render mode uses
+    mean left/right PSNR gain in raw dB. The local geometry auxiliary and
+    physical guards retain their canonical definitions in both modes. A stereo
+    multiplier is permitted only for geometry utility. Latency is subtracted
+    only in the deployment decision, never from these quality labels.
     """
     policy = metric_action_policy(config, action)
     assert config.metric_scales is not None
     utility = outcome_utility(changes, config.metric_scales, policy)
+    if config.metric_utility_mode == "render_psnr":
+        # Physical vectors order the two PSNR deltas before SSIM. No latency
+        # subtraction here: select_repairability is the sole cost-penalty owner.
+        utility = (
+            sum(
+                changes[COMPONENT_NAMES.index(name)]
+                for name in ("left_psnr_gain_db", "right_psnr_gain_db")
+            )
+            / 2
+        )
     local = [0.0] * len(COMPONENT_NAMES)
     index = COMPONENT_NAMES.index("local_depth_mae_gain_mm")
     local[index] = changes[index]

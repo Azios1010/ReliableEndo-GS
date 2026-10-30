@@ -400,19 +400,34 @@ def _extract_relative_transform(
     return transform
 
 
-def _read_image(path: Path, *, image_range: str) -> torch.Tensor:
+def _read_image(
+    path: Path, *, image_range: str, device: torch.device | str | None = None
+) -> torch.Tensor:
     try:
         import numpy as np
         from PIL import Image
 
         with Image.open(path) as image:
-            array = np.asarray(image.convert("RGB"), dtype=np.float32).copy()
+            array = np.asarray(image.convert("RGB"), dtype=np.uint8).copy()
     except (ImportError, OSError, ValueError) as error:
         raise ScaredA00SampleError(f"unable to decode RGB image {path}: {error}") from error
-    if image_range == "uint8_0_255":
-        tensor = torch.from_numpy(array / 255.0)
+    destination = torch.device("cpu" if device is None else device)
+    if destination.type == "cuda":
+        # Transfer decoded bytes before any full-image floating-point work.
+        pixels = torch.from_numpy(array).to(device=destination)
+        if image_range == "uint8_0_255":
+            # NumPy's float32 division rounds n/255 once. CUDA's float32
+            # division may use a reciprocal approximation; a 256-entry table
+            # rounded from double preserves the canonical byte mapping exactly.
+            lookup = (torch.arange(256, dtype=torch.float64, device=destination) / 255.0).float()
+            return lookup[pixels.long()].permute(2, 0, 1).contiguous()
+        if image_range != "float01":  # pragma: no cover - validated by A00Protocol
+            raise ScaredA00ProtocolError(f"unsupported image range {image_range!r}")
+        tensor = pixels.float()
+    elif image_range == "uint8_0_255":
+        tensor = torch.from_numpy(array.astype(np.float32) / 255.0).to(destination)
     elif image_range == "float01":
-        tensor = torch.from_numpy(array)
+        tensor = torch.from_numpy(array.astype(np.float32)).to(destination)
     else:  # pragma: no cover - validated by A00Protocol
         raise ScaredA00ProtocolError(f"unsupported image range {image_range!r}")
     tensor = tensor.permute(2, 0, 1).contiguous()
@@ -421,19 +436,101 @@ def _read_image(path: Path, *, image_range: str) -> torch.Tensor:
     return tensor
 
 
-def _read_disparity(path: Path) -> torch.Tensor:
+def _resize_rgb(image: torch.Tensor, output_hw: tuple[int, int]) -> torch.Tensor:
+    """Resize FP32 RGB [3,H,W] with the canonical half-pixel convention.
+
+    The CUDA path supports identity and exactly twofold reduction, as used by
+    the current 1280x1024 -> 640x512 run. At twofold reduction all four weights
+    are 1/2 per axis. The canonical single-thread RGB CPU kernel accumulates
+    four quarter-weight products left to right; CUDA interpolate groups terms
+    differently. Explicit eager operations preserve the reference rounding.
+    Require a single-thread reference because CPU dispatch changes its
+    expression with thread count. See PyTorch v2.7.1 UpSampleKernel.cpp,
+    cpu_upsample_linear_channels_last and upsample_bilinear2d_kernel_impl_float.
+    Other CUDA scales fail explicitly rather than changing input numerics or
+    silently processing images on CPU. CPU resizing retains the general path.
+    """
+    if image.device.type != "cuda":
+        resized: torch.Tensor = functional.interpolate(
+            image.unsqueeze(0), size=output_hw, mode="bilinear", align_corners=False
+        )
+        return resized.squeeze(0)
+    if tuple(image.shape[-2:]) == output_hw:
+        return image
+    if tuple(image.shape[-2:]) != (2 * output_hw[0], 2 * output_hw[1]):
+        raise ScaredA00SampleError(
+            "CUDA RGB preparation requires identity or exactly twofold resize; "
+            "other scales have no verified canonical rounding implementation"
+        )
+    if torch.get_num_threads() != 1:
+        raise ScaredA00SampleError(
+            "CUDA twofold RGB preparation requires OMP_NUM_THREADS=1 to pin "
+            "the canonical CPU reference rounding"
+        )
+    result = image[:, 0::2, 0::2] * 0.25 + image[:, 0::2, 1::2] * 0.25
+    result = result + image[:, 1::2, 0::2] * 0.25
+    return result + image[:, 1::2, 1::2] * 0.25
+
+
+def _read_disparity(path: Path, *, device: torch.device | str | None = None) -> torch.Tensor:
     try:
         import tifffile
 
         array = tifffile.imread(path)
     except (ImportError, OSError, ValueError) as error:
         raise ScaredA00SampleError(f"unable to decode disparity {path}: {error}") from error
-    tensor = torch.as_tensor(array, dtype=torch.float32)
+    tensor = torch.as_tensor(array)
+    if device is not None:
+        tensor = tensor.to(device=device)
+    # Keep conversion after transfer: a combined CPU->CUDA/dtype copy may
+    # stage its dtype conversion on the host for some source TIFF dtypes.
+    tensor = tensor.to(dtype=torch.float32)
     if tensor.ndim == 3 and tensor.shape[-1] == 1:
         tensor = tensor[..., 0]
     if tensor.ndim != 2:
         raise ScaredA00SampleError(f"disparity {path} must be a 2-D TIFF")
     return tensor.contiguous()
+
+
+def _load_supervision(
+    path: Path,
+    *,
+    input_hw: tuple[int, int],
+    crop_xy_left: tuple[int, int],
+    crop_xy_right: tuple[int, int],
+    crop_hw: tuple[int, int],
+    output_hw: tuple[int, int] | None,
+    device: torch.device | str | None = None,
+) -> ScaredSupervision:
+    """Canonical TIFF-to-supervision transform; returns disparity/mask [1,1,H,W].
+
+    CPU and CUDA use the same crop offset, nearest-exact indices and scaling.
+    Disk decoding stays on CPU; optional device preparation never reads RGB.
+    """
+    disparity = _read_disparity(path, device=device)
+    if tuple(disparity.shape) != input_hw:
+        raise ScaredA00SampleError(
+            f"disparity shape {tuple(disparity.shape)} does not match processed image {input_hw}"
+        )
+    # Preserve invalid source targets before an asymmetric crop changes coordinates.
+    source_valid = torch.isfinite(disparity) & (disparity > 0)
+    ys = slice(crop_xy_left[1], crop_xy_left[1] + crop_hw[0])
+    xs = slice(crop_xy_left[0], crop_xy_left[0] + crop_hw[1])
+    source_valid = source_valid[ys, xs]
+    disparity = disparity[ys, xs] - float(crop_xy_left[0] - crop_xy_right[0])
+    if output_hw is not None:
+        # Half-pixel nearest-exact centres match RGB/camera resize without
+        # blending sparse holes or different surfaces into synthetic truth.
+        disparity = functional.interpolate(
+            disparity[None, None], size=output_hw, mode="nearest-exact"
+        )[0, 0]
+        disparity = disparity * (output_hw[1] / crop_hw[1])
+        source_valid = functional.interpolate(
+            source_valid[None, None].float(), size=output_hw, mode="nearest-exact"
+        )[0, 0].bool()
+    valid = source_valid & torch.isfinite(disparity) & (disparity > 0)
+    safe = torch.where(torch.isfinite(disparity), disparity, torch.zeros_like(disparity))
+    return ScaredSupervision(safe[None, None], valid[None, None])
 
 
 class ScaredA00Adapter:
@@ -525,6 +622,18 @@ class ScaredA00Adapter:
             )
         return paths
 
+    def source_members(
+        self, sample_id: str, *, include_supervision: bool = False
+    ) -> tuple[Path, ...]:
+        """Canonical raw-byte provenance members; no images or GT tensors are decoded."""
+        normalized = self.roles.validate_sample_id(sample_id, role="final_train", cache=False)
+        paths = self._paths(normalized, include_supervision=include_supervision)
+        members = list(paths[:5] if include_supervision else paths[:4])
+        protocol = _protocol_path(paths[-1])
+        if protocol.is_file():
+            members.append(protocol)
+        return tuple(members)
+
     def validate_deployment_files(self, sample_id: str, *, data_role: str) -> dict[str, object]:
         """Decode deployment RGB and validate calibration/protocol, without GT or hashing images.
 
@@ -587,6 +696,7 @@ class ScaredA00Adapter:
         crop_hw: tuple[int, int] | None = None,
         output_hw: tuple[int, int] | None = None,
         include_supervision: bool = True,
+        device: torch.device | str | None = None,
     ) -> ScaredA00Sample:
         normalized = self.roles.validate_sample_id(
             sample_id,
@@ -601,24 +711,26 @@ class ScaredA00Adapter:
         frame_data = _load_json(frame_path, "frame_data")
         newpram = _load_json(newpram_path, "newpram_data")
         protocol = _load_protocol(keyframe_dir, frame_data, newpram)
-        left = _read_image(left_path, image_range=protocol.image_range)
-        right = _read_image(right_path, image_range=protocol.image_range)
+        # Decode bytes on the host; optional CUDA preparation performs the
+        # normalization, crop and verified resize on the input device.
+        left = _read_image(left_path, image_range=protocol.image_range, device=device)
+        right = _read_image(right_path, image_range=protocol.image_range, device=device)
         if left.shape != right.shape:
             raise ScaredA00SampleError("left/right processed images must have matching shape")
         calibration_dtype = left.dtype
         k_left = (
             _matrix(newpram.get("intr0"), "newpram.intr0", (3, 3))
-            .to(calibration_dtype)
+            .to(device=left.device, dtype=calibration_dtype)
             .unsqueeze(0)
         )
         k_right = (
             _matrix(newpram.get("intr1"), "newpram.intr1", (3, 3))
-            .to(calibration_dtype)
+            .to(device=left.device, dtype=calibration_dtype)
             .unsqueeze(0)
         )
         transform = (
             _extract_relative_transform(protocol, frame_data, newpram)
-            .to(calibration_dtype)
+            .to(device=left.device, dtype=calibration_dtype)
             .unsqueeze(0)
         )
         camera = RectifiedStereoCamera(k_left, k_right, transform, True)
@@ -663,12 +775,8 @@ class ScaredA00Adapter:
             crop_xy_right[0] : crop_xy_right[0] + resolved_crop_hw[1],
         ]
         if output_hw is not None:
-            left = functional.interpolate(
-                left.unsqueeze(0), size=output_hw, mode="bilinear", align_corners=False
-            ).squeeze(0)
-            right = functional.interpolate(
-                right.unsqueeze(0), size=output_hw, mode="bilinear", align_corners=False
-            ).squeeze(0)
+            left = _resize_rgb(left, output_hw)
+            right = _resize_rgb(right, output_hw)
         camera = crop_resize_camera(
             camera,
             left_crop_xy=crop_xy_left,
@@ -676,56 +784,28 @@ class ScaredA00Adapter:
             crop_hw=resolved_crop_hw,
             output_hw=output_hw or resolved_crop_hw,
         )
-        support = torch.ones((1, 1, left.shape[1], left.shape[2]), dtype=torch.bool)
+        if device is not None:
+            left, right = left.to(device=device), right.to(device=device)
+            camera = RectifiedStereoCamera(
+                camera.K_L.to(device=device),
+                camera.K_R.to(device=device),
+                camera.T_R_from_L.to(device=device),
+                True,
+            )
+        support = torch.ones(
+            (1, 1, left.shape[1], left.shape[2]), dtype=torch.bool, device=left.device
+        )
         batch = DeploymentStereoBatch(left.unsqueeze(0), right.unsqueeze(0), camera, support)
         supervision: ScaredSupervision | None = None
         if include_supervision:
-            disparity = _read_disparity(disparity_path)
-            if tuple(disparity.shape) != (height, width):
-                raise ScaredA00SampleError(
-                    f"disparity shape {tuple(disparity.shape)} does not match processed image {(height, width)}"
-                )
-            # Invalid zero targets must stay invalid when asymmetric crops
-            # change disparity coordinates. Preserve source validity separately.
-            source_valid = torch.isfinite(disparity) & (disparity > 0)
-            source_valid = source_valid[
-                crop_xy_left[1] : crop_xy_left[1] + resolved_crop_hw[0],
-                crop_xy_left[0] : crop_xy_left[0] + resolved_crop_hw[1],
-            ]
-            disparity = disparity[
-                crop_xy_left[1] : crop_xy_left[1] + resolved_crop_hw[0],
-                crop_xy_left[0] : crop_xy_left[0] + resolved_crop_hw[1],
-            ]
-            # A paired crop changes the declared left-minus-right pixel
-            # coordinate by ``-left_x + right_x`` before any resize.
-            disparity = disparity - float(crop_xy_left[0] - crop_xy_right[0])
-            if output_hw is not None:
-                disparity = (
-                    # Match the half-pixel centres used by RGB and camera resize.
-                    # Legacy nearest picks floor(u / scale), shifting sparse GT
-                    # by one source pixel for a 2x reduction. Never blend holes
-                    # or different surfaces into a synthetic valid target.
-                    functional.interpolate(
-                        disparity[None, None], size=output_hw, mode="nearest-exact"
-                    )
-                    .squeeze(0)
-                    .squeeze(0)
-                )
-                disparity = disparity * (output_hw[1] / resolved_crop_hw[1])
-                source_valid = (
-                    functional.interpolate(
-                        source_valid[None, None].float(), size=output_hw, mode="nearest-exact"
-                    )
-                    .squeeze(0)
-                    .squeeze(0)
-                    .bool()
-                )
-            valid = source_valid & torch.isfinite(disparity) & (disparity > 0)
-            safe_disparity = torch.where(
-                torch.isfinite(disparity), disparity, torch.zeros_like(disparity)
-            )
-            supervision = ScaredSupervision(
-                safe_disparity.unsqueeze(0).unsqueeze(0), valid.unsqueeze(0).unsqueeze(0)
+            supervision = _load_supervision(
+                disparity_path,
+                input_hw=(height, width),
+                crop_xy_left=crop_xy_left,
+                crop_xy_right=crop_xy_right,
+                crop_hw=resolved_crop_hw,
+                output_hw=output_hw,
+                device=device,
             )
         protocol_path = _protocol_path(keyframe_dir)
         calibration_metadata = {
@@ -765,6 +845,81 @@ class ScaredA00Adapter:
         }
         return ScaredA00Sample(normalized, entry_role, batch, calibration_metadata, supervision)
 
+    def load_supervision(self, sample: ScaredA00Sample) -> ScaredSupervision:
+        """Load separate GT [1,1,H,W] on the deployment sample's device, without RGB decoding.
+
+        Reuse only adapter-bound crop/resampling metadata after verifying the
+        manifest, source files and protocol. No GT is attached to the input sample.
+        """
+        normalized = self.roles.validate_sample_id(
+            sample.sample_id, role=sample.data_role, cache=False
+        )
+        left, right, frame, calibration, disparity, _, keyframe = self._paths(
+            normalized, include_supervision=True
+        )
+        metadata = sample.calibration_metadata
+        if metadata.get("frame_id") != _safe_relative_id(normalized)[2]:
+            raise ScaredA00SampleError("supervision source frame mismatch")
+        if metadata.get("manifest_hash") != self.manifest.manifest_hash:
+            raise ScaredA00SampleError("supervision source manifest mismatch")
+        protocol = _load_protocol(
+            keyframe, _load_json(frame, "frame_data"), _load_json(calibration, "newpram_data")
+        )
+        if metadata.get("protocol_identity") != protocol.identity_hash:
+            raise ScaredA00SampleError("supervision source protocol mismatch")
+        expected_resampling = {
+            "rgb": "bilinear_align_corners_false",
+            "supervision": A00_SUPERVISION_RESAMPLING,
+            "validity": "same_nearest_exact_source_index_as_disparity",
+        }
+        if metadata.get("runtime_resampling") != expected_resampling:
+            raise ScaredA00SampleError("supervision resampling identity mismatch")
+        hashes = _mapping(metadata.get("source_file_hashes"), "source_file_hashes")
+        protocol_path = _protocol_path(keyframe)
+        for name, path in (
+            ("left_rgb", left),
+            ("right_rgb", right),
+            ("frame_data", frame),
+            ("newpram_data", calibration),
+            ("a00_protocol", protocol_path),
+        ):
+            current = self._source_hash(path) if path.is_file() else None
+            if hashes.get(name) != current:
+                raise ScaredA00SampleError(f"supervision source file changed: {name}")
+
+        def pair(name: str, *, positive: bool) -> tuple[int, int]:
+            value = metadata.get(name)
+            if (
+                not isinstance(value, (tuple, list))
+                or len(value) != 2
+                or any(type(x) is not int or x < (1 if positive else 0) for x in value)
+            ):
+                raise ScaredA00SampleError(f"invalid supervision {name}")
+            return int(value[0]), int(value[1])
+
+        input_hw = pair("input_hw", positive=True)
+        crop_hw = pair("crop_hw", positive=True)
+        crop_left = pair("crop_xy_left", positive=False)
+        crop_right = pair("crop_xy_right", positive=False)
+        output_hw = pair("output_hw", positive=True)
+        if output_hw != tuple(sample.batch.left.shape[-2:]) or crop_left[1] != crop_right[1]:
+            raise ScaredA00SampleError("supervision crop/output grid mismatch")
+        if any(
+            origin[axis] + crop_hw[1 - axis] > input_hw[1 - axis]
+            for origin in (crop_left, crop_right)
+            for axis in (0, 1)
+        ):
+            raise ScaredA00SampleError("supervision crop exceeds input grid")
+        return _load_supervision(
+            disparity,
+            input_hw=input_hw,
+            crop_xy_left=crop_left,
+            crop_xy_right=crop_right,
+            crop_hw=crop_hw,
+            output_hw=output_hw,
+            device=sample.batch.left.device,
+        )
+
 
 class ScaredA00Dataset(Dataset[ScaredA00Sample]):
     """PyTorch dataset wrapper that keeps deployment and supervision separate."""
@@ -776,6 +931,7 @@ class ScaredA00Dataset(Dataset[ScaredA00Sample]):
         include_supervision: bool = True,
         data_role: str | None = None,
         output_hw: tuple[int, int] | None = None,
+        device: torch.device | str | None = None,
     ) -> None:
         self.adapter = adapter
         self.include_supervision = include_supervision
@@ -790,6 +946,7 @@ class ScaredA00Dataset(Dataset[ScaredA00Sample]):
         ):
             raise ScaredA00SampleError("output_hw must contain positive integer height and width")
         self.output_hw = output_hw
+        self.device = device
         self._entries = tuple(
             entry
             for entry in adapter.manifest.entries
@@ -808,6 +965,7 @@ class ScaredA00Dataset(Dataset[ScaredA00Sample]):
             data_role=entry.data_role,
             include_supervision=self.include_supervision,
             output_hw=self.output_hw,
+            device=self.device,
         )
 
 

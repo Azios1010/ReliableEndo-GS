@@ -1,0 +1,254 @@
+BAO CAO: BO TINH CHINH TRUONG GAUSSIAN TOAN KHUNG (action moi) - KET QUA DEV, 2026-10-30
+==========================================================================================
+Doc tren terminal:   less -S /mnt/d/workspace/huann/reliableendo-gs/docs/action_redesign_ladder_dev_2026-10-30.txt
+                     (trong less: phim '/' de tim, 'q' de thoat, mui ten trai/phai de cuon ngang)
+
+TRANG THAI: THAM DO (development). Khong phai Gate I/II, khong phai ket qua xac nhan.
+64 khung niem phong (val_7) va final_test CHUA bi dung. Nguong thanh cong CHUA duoc nguoi phu trach chot.
+Moi so duoi day la mo ta (descriptive); khong co tuyen bo nghien cuu nao duoc rut ra o day.
+
+1. KET QUA CHINH (so voi STOP = student dong bang, khong chinh, tren 48 khung dev)
+------------------------------------------------------------------------------------
+Arm chon theo quy tac da dang ky (LADDER_SPEC.txt muc 4): L6_relaxed_bounds
+  (MLP 32x32, 11 kenh dau vao khong co toa do tuyet doi x,y, gioi han ra x2; 1,671 tham so).
+  PSNR trai  +3.48 dB (25.40 -> 28.88),  PSNR phai +1.12 dB (22.27 -> 23.39)
+  SSIM va LPIPS tot hon STOP o ca hai view; 48/48 khung tot hon o ca hai view.
+  Sai so binh phuong o 80 cot cuoi ben phai (view phai) = 1.009 x STOP: KHONG hai o mep phai.
+  (action Stage A cu: 2.300 x STOP o cung vung va -1.56 dB o view phai.)
+
+Luu y khi doc: gain view TRAI la kieu "tai tao anh nguon" (Gaussian duoc dat tai pixel anh trai).
+Tin hieu y nghia hon cho chat luong that la view PHAI (nhin moi) va hinh hoc: +1.1 dB o view phai.
+
+2. THIET LAP (tom tat)
+----------------------
+Student: KD student dong bang (gia tri bit khong doi, da kiem tra sau train: frozen_unchanged = True o ca 8 arm).
+Train: train_1236, 13,150 buoc (1 epoch), 1 khung moi buoc, Adam lr 1e-3, clip 1.0, checkpoint CUOI, khong early stop.
+Muc tieu: reconstruction_loss chuan (Charbonnier trung binh hai view, toan khung).
+Plateau (chi dung loss train, KHONG dung dev): ca 8 arm dat plateau (chenh hai block 1000 buoc cuoi 0.0004..0.0022 < 0.005),
+  nen khong train epoch 2. Chi tiet: results/ladder/plateau_check.txt. Loss STOP tinh lai tung buoc khop bit voi log train.
+Dev: dev_cohort_fresh.json, 48 khung dataset_7 (12/keyframe), khong trung 64 khung niem phong, khong trung khung train.
+  Danh gia DUNG MOT LAN, hash/lenh truoc khi chay: results/dev_eval/PREREG_HASHES.txt, COMMAND.txt.
+
+3. BANG CHINH (gain = bien the tru STOP; PSNR/SSIM cao hon la tot; LPIPS in ra la STOP tru bien the, duong = tot)
+-----------------------------------------------------------------------------------------------------------
+variant         params  dPSNR_L  dPSNR_R  dSSIM_L  dSSIM_R  dLPIPS_L  dLPIPS_R R>0 frac last4 ratio   score
+-----------------------------------------------------------------------------------------------------------
+stageA_full          -    2.687   -1.562   0.0379   0.0104    0.0424    0.0411     0.08       2.300   0.563
+stageA_K40           -    1.926    0.840   0.0323   0.0342    0.0332    0.0369     1.00       1.000   1.383
+const                -    2.077   -1.219   0.0434   0.0121    0.0549    0.0429     0.12       1.945   0.429
+L0_constant         14    0.666   -0.024   0.0136   0.0184    0.0081    0.0159     0.40       1.169   0.321
+L1_linear           98    2.029    0.896   0.0340   0.0317    0.0400    0.0376     1.00       0.971   1.462
+L2_mlp32          1735    2.990    1.026   0.0525   0.0395    0.0619    0.0518     1.00       0.996   2.008
+L3_mlp32_noxy     1671    2.840    1.018   0.0498   0.0389    0.0588    0.0498     1.00       0.982   1.929
+L4_mlp128_noxy   18951    3.086    1.076   0.0547   0.0408    0.0653    0.0547     0.98       0.977   2.081
+L5_colour         1770    2.969    1.064   0.0552   0.0414    0.0663    0.0566     1.00       0.990   2.017
+L6_relaxed_bounds    1671    3.479    1.120   0.0608   0.0437    0.0706    0.0571     1.00       1.009   2.299
+H_head_finetune   19207    0.147    0.675   0.0028   0.0145    0.0011    0.0076     0.85       0.704   0.411
+
+  cot 'R>0 frac' = ti le khung co PSNR phai tot hon STOP; 'last4 ratio' = sai so view phai o 4 bang cuoi / cua STOP.
+  stageA_full, stageA_K40, const, L0..L6, H: xem LADDER_SPEC.txt muc 2 (const = hieu chinh hang so x1.52,x1.49,x0.47 va alpha +2).
+
+4. SO TUYET DOI, SAI SO THEO KHUNG, KHOANG TIN CAY THEO KEYFRAME
+-----------------------------------------------------------------
+ABSOLUTE macro metrics on the 48 dev frames (dataset_7, 4 keyframes x 12)
+variant              PSNR_L   PSNR_R   SSIM_L   SSIM_R  LPIPS_L  LPIPS_R
+stop                  25.40    22.27   0.7920   0.7365   0.2561   0.3065
+stageA_K40            27.33    23.11   0.8244   0.7707   0.2229   0.2696
+L1_linear             27.43    23.17   0.8260   0.7682   0.2161   0.2689
+L2_mlp32              28.39    23.30   0.8446   0.7760   0.1942   0.2547
+L4_mlp128_noxy        28.49    23.35   0.8467   0.7773   0.1907   0.2518
+L6_relaxed_bounds     28.88    23.39   0.8528   0.7802   0.1854   0.2494
+H_head_finetune       25.55    22.95   0.7949   0.7510   0.2550   0.2989
+
+PAIRED frame-level differences (mean +- SE over 48 frames; frames within a keyframe are correlated, so SE is optimistic)
+L6_relaxed_bounds  - stop              left +3.479 +- 0.193 dB (frames better: 100%)  |  right +1.120 +- 0.080 dB (frames better: 100%)
+L2_mlp32           - stop              left +2.990 +- 0.160 dB (frames better: 100%)  |  right +1.026 +- 0.070 dB (frames better: 100%)
+L6_relaxed_bounds  - L2_mlp32          left +0.488 +- 0.043 dB (frames better: 98%)  |  right +0.094 +- 0.023 dB (frames better: 75%)
+L6_relaxed_bounds  - L4_mlp128_noxy    left +0.393 +- 0.028 dB (frames better: 96%)  |  right +0.044 +- 0.031 dB (frames better: 67%)
+L4_mlp128_noxy     - L2_mlp32          left +0.096 +- 0.031 dB (frames better: 65%)  |  right +0.050 +- 0.026 dB (frames better: 60%)
+L6_relaxed_bounds  - stageA_K40        left +1.552 +- 0.111 dB (frames better: 100%)  |  right +0.280 +- 0.049 dB (frames better: 83%)
+L2_mlp32           - H_head_finetune   left +2.843 +- 0.167 dB (frames better: 100%)  |  right +0.351 +- 0.159 dB (frames better: 77%)
+
+keyframe-clustered bootstrap 95%% interval (4 keyframes, 4000 resamples; weak, descriptive):
+  L6_relaxed_bounds  vs stop: left +2.71..+4.18 dB, right +0.76..+1.48 dB
+  L2_mlp32           vs stop: left +2.31..+3.56 dB, right +0.71..+1.35 dB
+  H_head_finetune    vs stop: left -0.05..+0.31 dB, right +0.30..+1.20 dB
+
+RIGHT-view squared-error profile of L6 relative to STOP, by band group (32 bands; <1 = lower error):
+  right bands 1-8 0.566 | 9-16 0.508 | 17-24 0.574 | 25-28 0.810 | 29-32 (last 80 cols) 1.009   [stageA_full last group 2.300]
+  left  bands 1-8 0.361 | 9-16 0.368 | 17-24 0.360 | 25-28 0.467 | 29-32 (last 80 cols) 0.634   [stageA_full last group 0.384]
+
+5. THEO TUNG KEYFRAME (kf1..kf4 = dataset_7/keyframe_1..4; gain so voi STOP, dB)
+---------------------------------------------------------------------------------
+variant            | PSNR gain RIGHT (dB)  kf1   kf2   kf3   kf4 | PSNR gain LEFT (dB)   kf1   kf2   kf3   kf4
+stageA_full        |                      -1.92 -1.31 -1.03 -1.99 |                      +2.20 +2.76 +3.16 +2.62
+stageA_K40         |                      +0.99 +0.99 +0.86 +0.52 |                      +1.53 +2.30 +2.56 +1.32
+const              |                      -1.67 -1.12 -0.50 -1.59 |                      +1.68 +2.04 +2.36 +2.23
+L0_constant        |                      -0.22 +0.13 +0.20 -0.22 |                      +0.32 +0.74 +0.79 +0.82
+L1_linear          |                      +1.23 +0.78 +1.04 +0.52 |                      +2.02 +2.08 +2.40 +1.62
+L2_mlp32           |                      +1.48 +1.04 +0.99 +0.59 |                      +3.08 +3.40 +3.47 +2.01
+L3_mlp32_noxy      |                      +1.43 +1.08 +0.97 +0.59 |                      +2.83 +3.37 +3.27 +1.89
+L4_mlp128_noxy     |                      +1.53 +1.10 +1.08 +0.59 |                      +3.08 +3.53 +3.69 +2.05
+L5_colour          |                      +1.51 +1.10 +1.01 +0.64 |                      +3.09 +3.29 +3.43 +2.07
+L6_relaxed_bounds  |                      +1.61 +1.15 +1.11 +0.61 |                      +3.45 +3.99 +4.11 +2.37
+H_head_finetune    |                      +0.28 +1.31 +0.52 +0.60 |                      +0.16 -0.00 +0.13 +0.29
+
+6. DOC KET QUA: DIEU DU LIEU NOI VA KHONG NOI
+----------------------------------------------
+[DO] Mot bo tinh chinh nho (1.7k tham so) dua PSNR trai/phai len +3.0/+1.0 dB (L2) ... +3.5/+1.1 dB (L6) so voi STOP,
+     tren 48/48 khung, va SSIM/LPIPS cung tot hon. Action Stage A cu hai view phai -1.56 dB; bo tinh chinh moi khong can
+     'guard' mep phai (L2: 0.996x, L6: 1.009x sai so 80 cot cuoi so voi STOP).
+[DO] Dung luong tham so khong phai yeu to chinh: L2 (1.7k) -> L4 (19k) chi them +0.10 dB trai, +0.05 dB phai.
+     Gioi han ra x2 (L6) giup hon: so voi L3 (cung 11 kenh, chi khac gioi han) la +0.64 dB trai, +0.10 dB phai (hieu macro),
+     chu yeu o view trai.
+     L1 tuyen tinh (98 tham so) da dat ~73% diem so cua L2; L0 hang so ~0 (PSNR phai -0.02): khong phai chi la 'bu hieu chinh toan cuc'.
+     Bo toa do tuyet doi (L3) khong mat gi so voi L2. Kenh mau (L5) khong them gi dang ke (khong co co 'overfit view nguon').
+[DO] Doi chung H (tinh chinh chinh head cua student, khong them do tre): trai +0.15, phai +0.68 dB -> kem hon nhieu so voi bo tinh
+     chinh rieng (L2 - H: trai +2.84, phai +0.35 +- 0.16 dB). Theo LADDER_SPEC muc 5, bo tinh chinh rieng duoc ung ho; nhung H van cho
+     +0.68 dB o view phai voi chi phi do tre bang 0. H co the chua duoc toi uu (cung lr/so buoc, huan luyen xuyen qua toan student);
+     chua dieu tra.
+[SUY LUAN] Gioi han ra x2 giup view trai ma it giup view phai: co the cac tham so bi chan boi gioi han, hoac view trai la 'tai tao nguon'
+     de hoc hon. Chua thu x3/x4 (se la arm moi, can dang ky truoc).
+[KHONG NOI DUOC] Day khong phai bang chung khai quat chinh thuc: dev chi gom MOT sequence (dataset_7) va 4 keyframe; cac khung ke nhau
+     giong nhau; 48 khung khong phai 48 mau doc lap. SE theo khung (+-0.08 dB) lac quan; khoang tin cay bootstrap theo keyframe rong hon
+     (phai +0.76..+1.48 dB cho L6) va chi mang tinh mo ta.
+
+7. HAN CHE VA VIEC CHUA LAM
+----------------------------
+ 1. Chon arm tren cung 48 khung dev (8 arm): chenh lech giua L2..L6 o view phai nho (+1.03..+1.12 dB) co the mot phan la loi the cua chon loc.
+ 2. Chua chay ket qua XAC NHAN tren 64 khung niem phong (can nguoi phu trach chot nguong truoc, ghi hash truoc khi chay).
+ 3. Gain la so voi STOP cua chinh student, KHONG phai so voi baseline. Khong co so sanh baseline tren cung 48 khung; khong tuyen bo hon baseline.
+    (STOP tuyet doi: PSNR trai 25.40, phai 22.27 dB; baseline do khac tap khung nen khong so truc tiep duoc.)
+ 4. Chua do tre thuc cua duong chay tich hop (bo tinh chinh + thanh phan Gaussian lan thu hai; CUDA graph + deferred validation).
+    Uoc tinh truoc ~ +5 ms KHONG con duoc dung lam bang chung; chi phi that co the thap hon (khong can render truong goc).
+ 5. Chua co ablation bat buoc cua chuong trinh (scalar confidence weighting, opacity-only, cross-view...) cho huong moi nay.
+ 6. Moi so chi dung cho do phan giai 512x640; chua do 1280x1024.
+ 7. Selector/router: khong dung o day (bo tinh chinh ap len toan khung); quyet dinh giu/bo selector van la cua nguoi phu trach.
+
+8. BANG CHUNG
+--------------
+ Thu muc: /home/bkai/.local/share/reliableendo-gs/reports/action-redesign-20261029/
+   LADDER_SPEC.txt                       dac ta + quy tac chon (viet truoc khi danh gia dev)
+   results/ladder/<arm>/                 refiner.pt | head_finetuned.pt, spec.json, summary.json, train.jsonl
+   results/ladder/plateau_check.txt      kiem tra plateau;  stop_reference_losses.jsonl (loss STOP tung buoc)
+   results/ladder/pool.status            nhat ky chay (co ghi ro cac lan treo GPU / chay lai / huy)
+   results/dev_eval/dev_eval.json        ket qua tho theo khung;  analysis.txt (quy tac chon);  extra_stats.txt
+   results/dev_eval/PREREG_HASHES.txt    hash cohort/script/trong so + commit (ac97de8a, cay lam viec co thay doi chua commit)
+ Lenh xem nhanh:
+   less -S results/dev_eval/analysis.txt
+   awk '/^variant/,/^$/' results/dev_eval/analysis.txt
+   column -t results/dev_eval/perkeyframe_compact.txt | less -S
+
+9. DO TRE CUA DUONG CHAY CO BO TINH CHINH L6 (2026-10-30 17:20; chi dung khung TRAIN; khong cham khung dev/niem phong)
+------------------------------------------------------------------------------------------------------------------
+Script: scripts/deploy_refined_bench.py; ket qua: results/latency/refined_L6.json (lan 1 loi thuoc tinh ActionResult.gaussians trong
+chinh script do, khong co so do nao bi mat: results/latency/refined_L6.attempt1_attribute_error.stdout).
+Dieu kien: GPU0 ranh (0%), GPU1 va CPU dung chung voi job khac cua may -> so TUYET DOI co nhieu; so SANH CAP trong cung tien trinh dang tin hon.
+Batch 1, dau vao nap san, dong bo, 10 khoi dong + 60 lan, 8 khung train xoay vong, CUDA graph + GroupNorm song song + deferred validation
+trong MOT pham vi cho ca khung (forward + tinh chinh + moi kiem tra).
+
+  trung vi (ms)         512x640            1280x1024
+  A  hien tai           30.57 (32.7 FPS)   89.06 (11.2 FPS)
+  B  trien khai + L6    32.60 (30.7 FPS)   94.73 (10.6 FPS)     <- render truong goc duoc BO QUA (khong can khi luon tinh chinh)
+  C  can tren           40.00 (25.0 FPS)   97.31 (10.3 FPS)     <- render ca truong goc roi moi tinh chinh
+  D  chi tinh chinh     11.70              14.14                <- MLP + ghep lai + 2 render, tren trang thai nen co san
+  B - A                 +2.03 ms           +5.67 ms
+  B == C tung bit (anh trai, anh phai, scale, opacity) tren ca 8 khung: DUNG o ca hai do phan giai.
+
+Luu y: A o day (30.6 ms) cham hon so voi 27.6 ms (36.2 FPS) cua lan do toi uu truoc (docs/inference_deployment.md) do may khong yen;
+chua do lai khi yen. Uoc tinh +5 ms truoc day cao hon thuc te o 512x640. So voi nguong de xuat (>=30 FPS o 512x640, >=10 FPS o 1280x1024)
+ket qua dat nhung sat (30.7 / 10.6): can do lai khi may yen va lap lai trong buoc xac nhan.
+
+10. SO SANH VOI BASELINE TREN 56 KHUNG BENCHMARK val_7 (MO TA, KHONG PHAI TUYEN BO; 2026-10-30 17:25)
+-------------------------------------------------------------------------------------------------------
+56 khung = eval_samples.json (tap benchmark cua COMPARISON_PLAN.md), khong trung 64 khung niem phong, khong trung 48 khung dev.
+Baseline = Endo-E2E-GS A00 khop (so lieu co san benchmark/baseline/samples.jsonl). Kiem tra danh tinh: STOP cua toi khop SO KD cua benchmark
+tung khung, tung so (336 so, lech toi da 0) -> student cua Stage A chinh la KD cua benchmark; pipeline do giong nhau.
+Chi chay L6 va L2 tren tap nay (mot lan). Ket qua L6-STOP: trai +3.35 dB, phai +0.99 dB (dev-48: +3.48 / +1.12) -> tai lap; 80 cot cuoi 1.028x STOP.
+CHECK: my STOP vs benchmark KD per-frame metrics, max |diff| = 0.00e+00 over 336 numbers
+
+56 benchmark frames (val_7, same frames for all rows). Means over frames.  PSNR/SSIM up = better, LPIPS down = better
+model                        PSNR_L   PSNR_R   SSIM_L   SSIM_R  LPIPS_L  LPIPS_R
+baseline (matched A00)       26.885   17.329   0.9375   0.5531   0.0484   0.3215
+KD student STOP              25.443   22.098   0.7885   0.7257   0.2628   0.3171
+KD + Stage A K40 guard       27.323   22.936   0.8196   0.7603   0.2315   0.2792
+KD + L2 refiner (1.7k)       28.325   23.036   0.8401   0.7646   0.2010   0.2645
+KD + L6 refiner (1.7k)       28.796   23.092   0.8484   0.7686   0.1916   0.2585
+
+PAIRED L6 minus baseline, per frame (mean +- SE; share of frames where L6 is better)
+  left_psnr   +1.9108 +- 0.2005   L6 better on  89% of frames
+  right_psnr  +5.7633 +- 0.2534   L6 better on 100% of frames
+  left_ssim   -0.0891 +- 0.0025   L6 better on   0% of frames
+  right_ssim  +0.2155 +- 0.0078   L6 better on 100% of frames
+  left_lpips  +0.1432 +- 0.0037   L6 better on   0% of frames
+  right_lpips -0.0630 +- 0.0059   L6 better on  93% of frames
+
+per keyframe, L6 minus baseline (PSNR dB):  keyframe_1 L +1.91 R +7.35  keyframe_2 L +3.12 R +5.37  keyframe_3 L +0.77 R +5.23  keyframe_4 L +1.52 R +5.64
+
+L6 minus STOP on these 56 frames: left +3.35 dB, right +0.99 dB (dev-48 gave +3.48 / +1.12)
+L6 right-view squared error in the last 80 columns / STOP: 1.028
+
+Doc ket qua (mo ta):
+ * VIEW PHAI (nhin moi) va HINH HOC: KD+L6 hon baseline ro: PSNR phai +5.76 dB, SSIM phai +0.22, LPIPS phai -0.063 (tot hon tren 100% / 100% / 93% khung);
+   hinh hoc (khong doi boi bo tinh chinh, tu benchmark): EPE 3.6 vs 15.5 px, sai so do sau 4.4 vs 18.8 mm.
+ * VIEW TRAI: PSNR cao hon baseline (+1.91 dB, 89% khung) NHUNG SSIM (0.848 vs 0.938) va LPIPS (0.192 vs 0.048) kem hon rat nhieu tren 100% khung.
+   Baseline tai tao anh nguon gan nhu chinh xac (khong phu thuoc do sau); PSNR va SSIM/LPIPS ve view trai MAU THUAN nhau -> khong the noi
+   'view trai tot hon'.
+ * TOC DO: khong phai diem manh (muc 9 va docs/phase2_action_latency_diagnosis_2026-10-29.txt muc 3.3: khi toi uu ngang nhau baseline nhanh hon).
+ * QUY TAC: COMPARISON_PLAN.md chi cho phep noi 'tot hon baseline' tren final_test (dataset 8 va 9, ca hai, khoang tin cay ghep cap khong chua 0);
+   final_test CHUA bi dung. Day la 4 keyframe cua MOT sequence.
+
+10b. BANG TONG HOP TUNG CHI SO (KD+L6 vs baseline, 56 khung; dong 'unchanged by the refiner' lay tu benchmark, khong doi boi bo tinh chinh vi no chi sua xoay/scale/opacity, khong sua disparity hay tam Gaussian)
+------------------------------------------------------------------------------------------------------------------
+KD(+L6 for rendering rows) vs matched baseline, 56 val_7 frames, paired per frame.  verdict: BETTER / WORSE / SAME (mean difference, share of paired frames where ours is better)
+metric                           baseline       ours ours-better  verdict note
+Disparity EPE (px)                15.4671     3.6153       93%  BETTER  n=55 (unchanged by the refiner)
+Disparity 1px accuracy             0.0395     0.3423       89%  BETTER  n=55 (unchanged by the refiner)
+Stereo depth MAE (mm)             18.8035     4.3733       95%  BETTER  n=55 (unchanged by the refiner)
+Stereo depth RMSE (mm)            20.8006     6.9834       96%  BETTER  n=55 (unchanged by the refiner)
+Stereo depth AbsRel                0.3541     0.0655       95%  BETTER  n=55 (unchanged by the refiner)
+Surface Chamfer (mm)              13.8577     2.9490       94%  BETTER  n=54 (unchanged by the refiner)
+Gaussian-centre Chamfer (mm)      13.6020     3.0720       95%  BETTER  n=55 (unchanged by the refiner)
+Surface normal consistency         0.4828     0.4804       41%  SAME    n=54 (unchanged by the refiner)
+Right PSNR (dB)                   17.3291    23.0925      100%  BETTER  n=56 (KD+L6)
+Right SSIM                         0.5531     0.7686      100%  BETTER  n=56 (KD+L6)
+Right LPIPS                        0.3215     0.2585       93%  BETTER  n=56 (KD+L6)
+Left PSNR (dB)                    26.8851    28.7959       89%  BETTER  n=56 (KD+L6)
+Left SSIM                          0.9375     0.8484        0%  WORSE   n=56 (KD+L6)
+Left LPIPS                         0.0484     0.1916        0%  WORSE   n=56 (KD+L6)
+
+11. KHOANG CACH KHAI QUAT: KHUNG TRAIN vs SEQUENCE CHUA THAY (baseline khop vs KD) - tham do, 2026-10-30 18:55
+------------------------------------------------------------------------------------------------------
+Script: scripts/generalization_gap.py; so lieu tho: results/generalization/gap.json. Cung duong code benchmark (predictor -> evaluate_geometry);
+kiem tra danh tinh: EPE tung khung val_7 cua ca hai mo hinh khop samples.jsonl cua benchmark (55 khung, lech 0). 80 khung train (20/dataset 1,2,3,6).
+
+IDENTITY CHECK kd       val_7: EPE per frame vs benchmark samples.jsonl: n=55 max|diff|=0.00e+00
+IDENTITY CHECK baseline val_7: EPE per frame vs benchmark samples.jsonl: n=55 max|diff|=0.00e+00
+
+DISPARITY EPE (px), mean [median] over frames; TRAIN datasets = frames the model was trained on; val_7 = unseen sequence
+model     train ds1      train ds2      train ds3      train ds6      | unseen val_7   | unseen/train (mean of means)
+kd        0.62 [0.47]    1.40 [1.26]    1.12 [0.73]    1.63 [1.25]    | 3.62 [2.90]    | x3.0 (train mean 1.19 -> unseen 3.62)
+baseline  0.68 [0.54]    1.00 [0.87]    0.62 [0.56]    1.03 [0.84]    | 15.47 [13.42]  | x18.6 (train mean 0.83 -> unseen 15.47)
+
+Depth MAE (mm) / 1px accuracy / share of GT pixels with |error|>3px  (train: mean over 80 frames; val_7: 56 frames)
+  kd        train  MAE 2.18 mm | acc1px 0.618 | err>3px 8.4%
+  kd        val_7  MAE 4.37 mm | acc1px 0.342 | err>3px 34.6%
+  baseline  train  MAE 1.53 mm | acc1px 0.731 | err>3px 3.4%
+  baseline  val_7  MAE 18.80 mm | acc1px 0.040 | err>3px 88.1%
+
+Mechanism check: mean GT disparity vs mean PREDICTED disparity per dataset (px)
+  kd        1 GT 34.9/pred 34.6 | 2 GT 41.6/pred 42.4 | 3 GT 33.9/pred 33.7 | 6 GT 41.4/pred 42.5 | 7 GT 51.9/pred 53.3
+  baseline  1 GT 34.9/pred 34.6 | 2 GT 41.6/pred 41.3 | 3 GT 33.9/pred 33.7 | 6 GT 41.4/pred 41.5 | 7 GT 51.9/pred 45.2
+
+baseline val_7: frames with EPE<3px: 2/55 ; EPE>10px: 37/55 ; max 49.3 px
+kd       val_7: frames with EPE<3px: 31/55 ; EPE>10px: 1/55 ; max 24.1 px
+
+Doc ket qua (mo ta, KHONG phai tuyen bo):
+ * TRONG tap train baseline khop tot HON KD (EPE 0.83 vs 1.19 px; MAE 1.53 vs 2.18 mm). Tren sequence chua thay (val_7) baseline 15.47 px,
+   KD 3.62 px: baseline suy giam x18.6, KD x3.0. Mau hinh 'baseline overfit train, khong khai quat sang sequence moi'; KD cung suy giam (x3.0) nhung it hon nhieu.
+ * Co che ro: val_7 co disparity trung binh 51.9 px, NGOAI khoang train (34-42 px). Baseline du doan 45.2 px (keo ve khoang train, lech -6.7 px);
+   KD du doan 53.3 px (lech +1.4 px).
+ * Gioi han: (a) baseline giam sat bang disparity GT, KD bang nhan teacher FoundationStereo (da tien huan luyen ngoai SCARED) -> loi the khai quat
+   co the den tu teacher chu khong phai kien truc; chua co doi chung. (b) Day la giao thuc CHEO sequence, KHONG phai giao thuc trong-sequence cua bai goc Endo-E2E-GS,
+   nen khong noi gi ve so lieu cua bai goc. (c) Mot sequence chua thay (val_7), mot seed moi mo hinh. (d) AGENTS.md ghi 'native parity not yet verified' cho baseline.
+ * Tu 'robust' can than: da do KHAI QUAT CHEO SEQUENCE; chua thu nhieu anh (sang/toi, nhieu, mo).

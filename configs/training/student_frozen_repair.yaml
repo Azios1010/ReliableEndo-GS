@@ -1,0 +1,21 @@
+# Stage A: repair-action learning with the KD student and its attribute head frozen.
+# Architecture fields must equal the checkpoint given to --initialize-model-from
+# (student_kd_multiscale.yaml). Use with an intervention config that sets
+# `student_update_mode: frozen`. kd_weight 0 needs no teacher; the selector that
+# is trained alongside the repairs is discarded (it is refit in Stage B).
+# No quality or convergence claim; see plans/16_baseline_and_repair_action_runs.md.
+schema: student_joint_learning.v1
+stereo_architecture: multiscale
+width: 64
+bins: 64
+minimum_effective_px: 0.25
+student_epochs: 0
+joint_epochs: 1
+learning_rate: 0.001
+reconstruction_weight: 1.0
+kd_weight: 0.0
+repair_weight: 1.0
+checkpoint_every: 100
+# The seed is part of the scientific construction identity; model-only warm start from the KD
+# checkpoint is rejected unless it equals the KD run's seed.
+seed: 20261006

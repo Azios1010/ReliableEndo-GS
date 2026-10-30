@@ -1,0 +1,448 @@
+{
+  "schema": "repair_selector_revision_review.v1",
+  "created_utc": "2026-10-28T05:56:48.537612+00:00",
+  "git_commit": "ac97de8a60ac4e396ca6ffd8ecfb153bf942994e",
+  "workspace_was_dirty_before_task": true,
+  "scope": "Only changes relative to the dirty workspace at start of this task; not a commit diff.",
+  "source_before_sha256": "3da44062db72dd2041e8dd8bec15f8b9b4e42287c44893a933962fe634cdd613",
+  "source_after_sha256": "ae9b986e19b3a55ade29a7b41c31f16560f11a8ed32bfe5bbbc601fb213989e4",
+  "changed_files": [
+    {
+      "path": "src/reliable_endo_gs/cli/selection.py",
+      "kind": "modified",
+      "before_sha256": "2a4506a44ab9edaa0d9959fba2d7369d2a4f8aaa237082b497a303feae33c61f",
+      "after_sha256": "2c58a63c26cf51ab99d52100d83aacd7d34e8d2baf3a5fdfcdbad32c6ebdee76"
+    },
+    {
+      "path": "src/reliable_endo_gs/cli/selector_evidence.py",
+      "kind": "added",
+      "before_sha256": null,
+      "after_sha256": "90d49bc54a087b1a0c85d1947b6a09e82eba4afe639750a217640d78a336158d"
+    },
+    {
+      "path": "src/reliable_endo_gs/cli/selector_prepare.py",
+      "kind": "modified",
+      "before_sha256": "d281473736a4e494ed31e78fbdf94ab9c6455244af7a4fc6f917a3409cdfdda4",
+      "after_sha256": "faba36002fd5330a5ae17c63b30521278100ab1e3902b59efd51d135ab9b60cf"
+    },
+    {
+      "path": "src/reliable_endo_gs/cli/selector_refit.py",
+      "kind": "modified",
+      "before_sha256": "d6a05de14aa8f48eb9cd89375bb6de72d73786bf90d559f48b789518a90b6f25",
+      "after_sha256": "c0f2c426f805083f4212ad19052ca89f99f9b104f639d0ad850067bd435cb071"
+    },
+    {
+      "path": "src/reliable_endo_gs/cli/selector_study.py",
+      "kind": "added",
+      "before_sha256": null,
+      "after_sha256": "7e3413ec8f4f7805d0a261c8dab9987c66416c4d1d6c403fdafc090a0c69d5e7"
+    },
+    {
+      "path": "src/reliable_endo_gs/cli/student.py",
+      "kind": "modified",
+      "before_sha256": "686331265c62cb2bd213970826ebce4a08967152d3fcf873967400064e76807f",
+      "after_sha256": "28b5becb7fa060f7e3ac7e586d8e7d5519d45171fbb20b627b0a51cf329049b3"
+    },
+    {
+      "path": "src/reliable_endo_gs/config/intervention.py",
+      "kind": "modified",
+      "before_sha256": "59ee18c1a011aaeb1431d0c273dc984f11ad3c8d1df3f60aef949e3a1f50204f",
+      "after_sha256": "af3279af620f7ed4b1737598dd90e271d24e70cd172fe1148847addf20b7bb04"
+    },
+    {
+      "path": "src/reliable_endo_gs/config/selector_refit.py",
+      "kind": "modified",
+      "before_sha256": "6d9a699d52c069f33af0e04c635bd96e4148d1c31c5c70d1970cd22bb4cd6b32",
+      "after_sha256": "edf01a0cecbc307e6ac58b9c9f18efc10ca653140ebcd90bf50e21c87930cabd"
+    },
+    {
+      "path": "src/reliable_endo_gs/config/selector_study.py",
+      "kind": "added",
+      "before_sha256": null,
+      "after_sha256": "b3b5b6fc6d07f4cbc0d65e5b1993ba5fbb279d2454e46baca1d759366269caef"
+    },
+    {
+      "path": "src/reliable_endo_gs/data/scared_a00.py",
+      "kind": "modified",
+      "before_sha256": "a25bc85b9155ecf9145103dee0605eae40f02706d4b0366da2d2164b5ac1508e",
+      "after_sha256": "f36498b8f24debfefbc3f1adb5c31397e52705ceae069346038aa52a4907c3f7"
+    },
+    {
+      "path": "src/reliable_endo_gs/data/selector_cohort.py",
+      "kind": "modified",
+      "before_sha256": "b45d000c48c9d3aa8314dd729875938b427d281a66651c83a1a821bfa2130b87",
+      "after_sha256": "0733c6861d3d0539ca0cfb6339e44b3801b49aacea811fb64196ce69b5fafee5"
+    },
+    {
+      "path": "src/reliable_endo_gs/evaluation/intervention_selection.py",
+      "kind": "modified",
+      "before_sha256": "2e7f55c28dab7b3cc29b8d2e625d28ab67e8eb6a9224937baeeb040fbd9949b0",
+      "after_sha256": "fc8f73267575e1940950e7804e7337f892dbeae03d345397c8150ba6d4bf1cc7"
+    },
+    {
+      "path": "src/reliable_endo_gs/evaluation/selector_evidence.py",
+      "kind": "added",
+      "before_sha256": null,
+      "after_sha256": "a296fb28da4dff3dfcd1ade79383bfff54560a05af16b9cad65fb050a8d19165"
+    },
+    {
+      "path": "src/reliable_endo_gs/evaluation/selector_policy.py",
+      "kind": "added",
+      "before_sha256": null,
+      "after_sha256": "9e5ae1d0716db536a09944c77b26982a12a8ed6c165f9f2aba24ce920fe5b103"
+    },
+    {
+      "path": "src/reliable_endo_gs/evaluation/selector_promotion.py",
+      "kind": "added",
+      "before_sha256": null,
+      "after_sha256": "88b438ad0001dd469d28fa6d2a9f1a9448d6578e4b7dc9553275f319c8e0e1ae"
+    },
+    {
+      "path": "src/reliable_endo_gs/routing/artifact_identity.py",
+      "kind": "added",
+      "before_sha256": null,
+      "after_sha256": "d52d03ad8cf0610dcb99b633643cf7132cfa27bcf832bb08fdd2c51b6755be7a"
+    },
+    {
+      "path": "src/reliable_endo_gs/routing/calibrated_selector.py",
+      "kind": "modified",
+      "before_sha256": "07e9c28498a1ead93ed9939f2e60acb3406af71233eaae2130374c6b9329c5d0",
+      "after_sha256": "21946e871dd6836870956689566c61da03f4071653b42f5840335660b354145e"
+    },
+    {
+      "path": "src/reliable_endo_gs/routing/support_grid.py",
+      "kind": "added",
+      "before_sha256": null,
+      "after_sha256": "b2908cd0541b9076acc04c41e1a89e51d0d93e4f8d4900dd276b85b1159a09b6"
+    },
+    {
+      "path": "src/reliable_endo_gs/training/deployment_costs.py",
+      "kind": "modified",
+      "before_sha256": "a9e7695b9766f30f2a1289dc0476bff1ad4044790f894c6cd2bf7fd2667c7d3e",
+      "after_sha256": "775541c938942a5790dbc523bfa71e109c9ac9d9a2c4848b8bdbb4280a70e604"
+    },
+    {
+      "path": "src/reliable_endo_gs/training/metric_quality.py",
+      "kind": "modified",
+      "before_sha256": "d7339867b36b6c30e69c9a222d9b6d627b8720c467f5c0452891e4b9db2d8ff7",
+      "after_sha256": "b292304275ad8de29c90ec2672187b56290370932e3ac3fdccc5de86cbef3c94"
+    },
+    {
+      "path": "src/reliable_endo_gs/training/selector_fitting.py",
+      "kind": "modified",
+      "before_sha256": "2af1132b74c03aea0f4f5503695ab628bc9beee821dbc9a6212d3fa939aeb5e7",
+      "after_sha256": "20c28a2fb3a56d64a9ec35c1281471fc42bea03339ef764d315304a4f9143270"
+    },
+    {
+      "path": "src/reliable_endo_gs/training/selector_operating_points.py",
+      "kind": "added",
+      "before_sha256": null,
+      "after_sha256": "b7deae2b7826b4705a83d14d0526535d054cef83f135974a137eb365adc17ff5"
+    },
+    {
+      "path": "src/reliable_endo_gs/training/selector_outcomes.py",
+      "kind": "modified",
+      "before_sha256": "e34bac936753b8783cb277dd2204252a74a478b9edf8d15c3b0faa4191f173a8",
+      "after_sha256": "8250a07f3c6eea978bfce5df12f2affa1b79a03f7a0ebbe3883aefe6759678c0"
+    },
+    {
+      "path": "src/reliable_endo_gs/training/selector_refit.py",
+      "kind": "modified",
+      "before_sha256": "221bb57f2e2ba4eedd42142bc3fd2f81be5a7e4767526490a7a6c44726fa71d2",
+      "after_sha256": "6d2ced5ea3b46dd14f0b7e4a8d43674741dda2a85298c3c98a076a6d5862f6d1"
+    },
+    {
+      "path": "src/reliable_endo_gs/training/selector_shards.py",
+      "kind": "modified",
+      "before_sha256": "8a4a0d6b39badfc8b7b5cbe5e58b5dab4994b649f7d398af0f6206e0ed853508",
+      "after_sha256": "1726ee3cbcdcdf622781a377c954602072c5e12af7e4141a5f91ab34711edc72"
+    },
+    {
+      "path": "src/reliable_endo_gs/training/selector_study.py",
+      "kind": "added",
+      "before_sha256": null,
+      "after_sha256": "2a00535c73dbbcacadc7ccc649acacf437c3caf174248f7c96a457a49f09ead5"
+    },
+    {
+      "path": "src/reliable_endo_gs/training/student_checkpoint.py",
+      "kind": "modified",
+      "before_sha256": "a58043d1f707f19e02fe24d14e31b02c4ddc64243f6086db791ae62b91865321",
+      "after_sha256": "3bd9e1ec121caa55e0846e38cababfbf691a87fb4353ce2a2904e1cd216ed663"
+    },
+    {
+      "path": "src/reliable_endo_gs/training/student_learning.py",
+      "kind": "modified",
+      "before_sha256": "b4806b30b01a67266ccec908992c278e29328d8b3ac2f88023853e47b2894043",
+      "after_sha256": "b6c9bacff61b4f9cf7367da6276e433e3c6b1e06ff262785eeb10518b72c42fb"
+    },
+    {
+      "path": "src/reliable_endo_gs/training/student_runtime.py",
+      "kind": "modified",
+      "before_sha256": "a45093970c6f806a777795dc98b67fae389b80b19d1f6b225b359aff92298a2b",
+      "after_sha256": "8bb1d95746c17502406c96d6daf14b8f2ac65675383ff3fbc2fcbb63814d3f4e"
+    },
+    {
+      "path": "configs/routing/intervention_metric_geometry_frozen_student.yaml",
+      "kind": "modified",
+      "before_sha256": "e82e13b6b33eca6a1ac1059b51c654836066d033cdf39cbc36c00d41fe84b371",
+      "after_sha256": "687d86ab7c46b06e841377c70ec6607e6d7a3b8ef0d5b65bc0e832b9a4a1e5b3"
+    },
+    {
+      "path": "configs/routing/intervention_metric_mask_tokens_frozen_student.yaml",
+      "kind": "modified",
+      "before_sha256": "02c87f22d93110f898b1fa325e1893e72bb1ca17b84acf59237e52582f0fe881",
+      "after_sha256": "6b42a0331df08ee2dc9242b6c0dc7bffb7ead7cf6eabe0ab4f918dc02b0dc3cd"
+    },
+    {
+      "path": "configs/routing/intervention_metric_signed_gain_frozen_student.yaml",
+      "kind": "modified",
+      "before_sha256": "e442ab968c8cb213c87ddb1df8cb7c31c7dff61775d7dc86f22edd45319d40b2",
+      "after_sha256": "099b395edb67fcba8d626f3bc088b55c2b4f1b501c8612a2e9caa990b57b5ab6"
+    },
+    {
+      "path": "configs/routing/selector_refit_frozen.yaml",
+      "kind": "added",
+      "before_sha256": null,
+      "after_sha256": "6c8385a6b4e21fb8812309418be41024a90bec02945d80ed9a5e53d117ea14cf"
+    },
+    {
+      "path": "configs/routing/selector_study.yaml",
+      "kind": "added",
+      "before_sha256": null,
+      "after_sha256": "8cabaca3a11269dde70452e79f2041c5874c3efc323109c57f31ac37f33ffca4"
+    },
+    {
+      "path": "plans/16_baseline_and_repair_action_runs.md",
+      "kind": "modified",
+      "before_sha256": "62808fd435d2fb86ad0519494983e4978aee0ae0d686edc5da15044e264f5ba6",
+      "after_sha256": "662d84f6f0f2ae9b6ba332dc34bccb673055d68db050c69d5ea760b10454171a"
+    },
+    {
+      "path": "plans/17_selector_training_stage_b.md",
+      "kind": "modified",
+      "before_sha256": "57db0bb054ab23eea811c8d3d3a0ad49fbdd19c876e6c0592272757901bfe6f7",
+      "after_sha256": "f7849a629196815c3d660c7419d33bf93ceb2001b00f331c1e2d9e8c244faf97"
+    },
+    {
+      "path": "plans/18_frozen_repair_selector_corrections.md",
+      "kind": "added",
+      "before_sha256": null,
+      "after_sha256": "e712b7d5fa58d46c354108658a1680926ff2be718f04430f99ab703294ba8dcf"
+    },
+    {
+      "path": "docs/frozen_selector_study.md",
+      "kind": "added",
+      "before_sha256": null,
+      "after_sha256": "9a10a933b4953d7911787c71ea420bb0acec56176acd455fd7103ce3d6469e89"
+    },
+    {
+      "path": "docs/repair_selector_revision_report_2026-10-28.md",
+      "kind": "added",
+      "before_sha256": null,
+      "after_sha256": "ce86fd8e086976846b29963396f6c36507b9a9484c91cfd17e8731c8a8dcb677"
+    },
+    {
+      "path": "tests/evaluation/test_mask_validation.py",
+      "kind": "modified",
+      "before_sha256": "eb59b882fe64abb0475b3cba8d00427511b7352de14c0a064767414224e4e2a4",
+      "after_sha256": "93e6013dfba256b0fd50532cab34c6a893272919414a95ef26cfa72987def325"
+    },
+    {
+      "path": "tests/routing/test_frozen_selector_study.py",
+      "kind": "added",
+      "before_sha256": null,
+      "after_sha256": "c6ad9efba01ac8b9af66cdc56f1ad85621ac1869a6a6f39eacf969ddb5d5ce6b"
+    },
+    {
+      "path": "tests/routing/test_selector_validation_guard.py",
+      "kind": "modified",
+      "before_sha256": "cd98d6318f950e34ddeaef34579e73c133afbe417b2c52f4885b20dfef49102a",
+      "after_sha256": "da4ed0fc1858660de90b1e465a68e7e7c652e286bc9292986d53e1a653fa4266"
+    },
+    {
+      "path": "tests/routing/test_signed_gain.py",
+      "kind": "modified",
+      "before_sha256": "576425634e9705c518d3fe6bbfdb5a2b3d63d6ba42523fbab30af69917d5e639",
+      "after_sha256": "91252fb19b997faf81f9f0afb95011b5d23aefaa0a57dbd16bed446e957fbe08"
+    },
+    {
+      "path": "tests/training/test_student_runtime.py",
+      "kind": "modified",
+      "before_sha256": "30790dc34f83b01bdc2fcb172c1453bffffa63018117ab34c035810824a2cf71",
+      "after_sha256": "1a981c1786655e7d854369ee4b438d4d14283f4fefcae301df35a3e1db676329"
+    }
+  ],
+  "validation": {
+    "tests": 499,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 13,
+    "passed": 486,
+    "seconds": 138.299,
+    "device": "cpu; CUDA_VISIBLE_DEVICES empty",
+    "junit_sha256": "038860516329d761b36b562dd9084da12ecb8bcd348aa2f811ddd631e63fb3bc",
+    "junit_artifact": "/home/bkai/.local/share/reliableendo-gs/reports/repair-selector-revision-20261028T055433Z/validation.xml",
+    "ruff_check": "passed",
+    "ruff_format_check": "34 files already formatted",
+    "git_diff_check": "passed",
+    "cli_help_checks": 6,
+    "native_cuda_experiment_executed": false,
+    "new_scientific_training_executed": false
+  },
+  "real_manifest_check": {
+    "status": "real_manifest_contracts_verified_without_data_decode",
+    "manifest_sizes": [
+      13150,
+      4056
+    ],
+    "manifest_hashes": [
+      "2fc2a5c57b7b20001b512641c5a53dc55ee222c4447f2970d9bae025ba678901",
+      "2f6ad431b63b12a382c8ff05d61fa3d8d89865944ad296ce520582cd77918574"
+    ],
+    "cohort_sizes": [
+      240,
+      64
+    ],
+    "keyframe_counts": {
+      "fit": 7,
+      "validation": 4,
+      "calibration": 4
+    },
+    "partition_sha256": "078b2014eab2c800095365529343a078ad14bcc07d567190ac27535c74868b5d",
+    "study_config_hash": "1d8903881d7aced2cfcc949d7f8a3fcfa98489971df027c53c8f9385f1066129",
+    "candidate_identity": "f5226f2fc122e57bd64ae7e63fa9c4dc16e71cf65e05d78792816562ca01ce6b",
+    "GT_or_RGB_decoded": false,
+    "training_executed": false
+  },
+  "baseline_status": {
+    "utc": "2026-10-28T05:51:20.678041+00:00",
+    "run_root": "/home/bkai/.local/share/reliableendo-gs/runs/endo-baseline-a00-train1236-20261026T171147Z/io-continuation-20261028T024455Z",
+    "status": {
+      "utc": "2026-10-28T05:02:32Z",
+      "event": "training",
+      "attempt": 1,
+      "console": "/home/bkai/.local/share/reliableendo-gs/runs/endo-baseline-a00-train1236-20261026T171147Z/io-continuation-20261028T024455Z/console-attempt-01.log"
+    },
+    "start_record": {
+      "stage": "stage1",
+      "stage_updates": 58001,
+      "total_updates": 58001,
+      "sample_id": "dataset_3/keyframe_2/frame_data000563",
+      "loss": 1.4605371952056885,
+      "disparity_loss": 1.4605371952056885,
+      "rgb_l1": null,
+      "rgb_one_minus_ssim": null,
+      "gradient_norm_before_clip": 55.29332733154297,
+      "step_seconds": 38.736203715001466,
+      "amp_overflow_retries": [],
+      "lr": 8.496196329730874e-05,
+      "elapsed_s": 253.66643832001137
+    },
+    "last_update": {
+      "stage": "stage1",
+      "stage_updates": 84511,
+      "total_updates": 84511,
+      "sample_id": "dataset_3/keyframe_1/frame_data000225",
+      "loss": 1.827157735824585,
+      "disparity_loss": 1.827157735824585,
+      "rgb_l1": null,
+      "rgb_one_minus_ssim": null,
+      "gradient_norm_before_clip": 30.534969329833984,
+      "step_seconds": 0.0808649419923313,
+      "amp_overflow_retries": [],
+      "lr": 3.146012380346927e-05,
+      "elapsed_s": 2579.1132244260225
+    },
+    "steps_observed": 26511,
+    "contiguous_updates": true,
+    "finite_loss_gradient": true,
+    "overflow_rows": 0,
+    "launch_hashes_unchanged": {
+      "train_baseline.py": true,
+      "supervise_baseline.py": true,
+      "envrun.sh": true,
+      "usable_ids.json": true,
+      "COMPARISON_PLAN.md": true,
+      "train/config.json": true,
+      "checkpoint-migration.json": true
+    },
+    "source_sha256": "3da44062db72dd2041e8dd8bec15f8b9b4e42287c44893a933962fe634cdd613",
+    "log_mtime_utc": "2026-10-28T05:51:20.604787+00:00",
+    "checkpoints": [
+      "ckpt-s1-050000.pt",
+      "ckpt-s1-060000.pt",
+      "ckpt-s1-070000.pt",
+      "ckpt-s1-080000.pt",
+      "ckpt-s1-083500.pt",
+      "ckpt-s1-084000.pt",
+      "ckpt-s1-084500.pt"
+    ]
+  },
+  "review_artifact_root": "/home/bkai/.local/share/reliableendo-gs/reports/repair-selector-revision-20261028T055433Z",
+  "patch_sha256": "c94295da93c4d1d0538f9f0f97d0093fadbe12df116cf1c1e9a0d3bc63ec6008",
+  "not_executed": [
+    "full Stage A",
+    "new native Stage B outcome collection",
+    "scientific selector fitting",
+    "FPS benchmark",
+    "final_test 8/9"
+  ],
+  "research_gates_certified": false,
+  "prior_validation_failures": {
+    "first_broad_run": {
+      "passed": 474,
+      "failed": 10,
+      "skipped": 13
+    },
+    "preexisting_fixture_error_reproduced_on_before_source": true,
+    "fixed_fixture": "per-action optimizer update counts were not copied",
+    "updated_expectations": [
+      "historical hash with nullable seed fields",
+      "frozen KD token width 64"
+    ]
+  },
+  "baseline_final_host_check": {
+    "utc": "2026-10-28T05:57:42.734305+00:00",
+    "processes": [
+      {
+        "pid": 4889,
+        "ppid": 4888,
+        "elapsed": "50:39",
+        "state": "Ss+",
+        "args": "/usr/bin/python3 /home/bkai/.local/share/reliableendo-gs/runs/endo-baseline-a00-train1236-20261026T171147Z/io-continuation-20261028T024455Z/supervise_baseline.py"
+      },
+      {
+        "pid": 4925,
+        "ppid": 4889,
+        "elapsed": "50:33",
+        "state": "Rl+",
+        "args": "/home/bkai/miniconda3/envs/endo_e2e_gs/bin/python -B -u /home/bkai/.local/share/reliableendo-gs/runs/endo-baseline-a00-train1236-20261026T171147Z/io-continuation-20261028T024455Z/train_baseline.py --run-root /home/bkai/.local/share/reliableendo-gs/runs/endo-baseline-a00-train1236-20261026T171147Z/io-continuation-20261028T024455Z/train"
+      }
+    ],
+    "global_lock_held": true,
+    "last_update": {
+      "stage": "stage1",
+      "stage_updates": 88476,
+      "total_updates": 88476,
+      "sample_id": "dataset_2/keyframe_4/frame_data000637",
+      "loss": 0.528600811958313,
+      "disparity_loss": 0.528600811958313,
+      "rgb_l1": null,
+      "rgb_one_minus_ssim": null,
+      "gradient_norm_before_clip": 35.48598098754883,
+      "step_seconds": 0.07973166700685397,
+      "amp_overflow_retries": [],
+      "lr": 2.345805690067508e-05,
+      "elapsed_s": 2926.235245418997
+    },
+    "log_mtime_utc": "2026-10-28T05:57:42.716042+00:00",
+    "supervisor_status": {
+      "utc": "2026-10-28T05:02:32Z",
+      "event": "training",
+      "attempt": 1,
+      "console": "/home/bkai/.local/share/reliableendo-gs/runs/endo-baseline-a00-train1236-20261026T171147Z/io-continuation-20261028T024455Z/console-attempt-01.log"
+    }
+  },
+  "generated_manifest_path": "docs/repair_selector_revision_manifest_2026-10-28.json",
+  "manifest_excluded_from_own_patch": true
+}

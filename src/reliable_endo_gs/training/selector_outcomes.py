@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 from collections import Counter
@@ -16,9 +17,11 @@ from reliable_endo_gs.actions.repair import eligible
 from reliable_endo_gs.config.intervention import InterventionConfig
 from reliable_endo_gs.data.scared_a00 import ScaredA00Sample
 from reliable_endo_gs.regions.masks import MaskRegion
+from reliable_endo_gs.routing.artifact_identity import repair_execution_config
 from reliable_endo_gs.routing.balanced import BalancedSelector
+from reliable_endo_gs.routing.context import BALANCED_FEATURE_NAMES
 from reliable_endo_gs.routing.metric_selection import module_state_sha256
-from reliable_endo_gs.routing.tokens import selector_feature_names
+from reliable_endo_gs.routing.tokens import mask_feature_tokens, selector_feature_names
 from reliable_endo_gs.training.balanced_interventions import BalancedHarness
 from reliable_endo_gs.training.metric_quality import (
     OfflineMetricTruth,
@@ -90,7 +93,7 @@ class SelectorOutcomes:
             "coverage_is_deployment_feature": False,
         }
 
-    def view(self, ids: tuple[str, ...]) -> SelectorOutcomes:
+    def view(self, ids: tuple[str, ...], *, allow_empty: bool = False) -> SelectorOutcomes:
         selected = set(ids)
         if (
             not ids
@@ -101,7 +104,7 @@ class SelectorOutcomes:
         index = torch.tensor(
             [i for i, s in enumerate(self.sample_ids) if s in selected], dtype=torch.long
         )
-        if not len(index):
+        if not len(index) and not allow_empty:
             raise ValueError("internal TRAIN role has no known metric labels")
         return SelectorOutcomes(
             self.metadata,
@@ -123,6 +126,7 @@ def collect_selector_outcomes(
     collection_role: str,
     provenance: Mapping[str, object],
     output_dir: Path,
+    store_feature_bank: bool = False,
 ) -> dict[str, Any]:
     """Execute shared real STOP/STEREO/GAUSSIAN; no selector or optimizer update.
 
@@ -181,7 +185,11 @@ def collect_selector_outcomes(
                         "frozen outcome inputs must be unique GT-free original TRAIN samples"
                     )
                 ids.append(sid)
-                state = learner.state(sample)
+                state = (
+                    learner.state(sample, include_feature_tokens=True)
+                    if store_feature_bank
+                    else learner.state(sample)
+                )
                 regions = tuple(
                     r for r in learner.candidate_regions(state, sid) if eligible(state, r)
                 )
@@ -190,6 +198,23 @@ def collect_selector_outcomes(
                     if regions
                     else state.batch.left.new_empty((0, len(selector_feature_names(cfg))))
                 )
+                bank = None
+                if store_feature_bank:
+                    if learner.mask_config is None or any(
+                        not isinstance(r, MaskRegion) for r in regions
+                    ):
+                        raise ValueError(
+                            "shared feature bank requires an explicit mask candidate protocol"
+                        )
+                    bank = features[:, : len(BALANCED_FEATURE_NAMES)]
+                    tokens = (
+                        mask_feature_tokens(state, regions, learner.config.width)
+                        if regions
+                        else features.new_empty((0, 3 * learner.config.width))
+                    )
+                    if learner.mask_config.feature_evidence == "gaussian":
+                        tokens = torch.zeros_like(tokens)
+                    bank = torch.cat((bank, tokens), 1)
                 truth = gt_provider(sid)
                 truth.validate(sid, state.batch.left[:, :1].shape)
                 truth = replace(
@@ -207,6 +232,7 @@ def collect_selector_outcomes(
                     "sample_id": sid,
                     "gt_resampling_identity": truth.resampling_identity,
                     "features_raw": features.cpu().tolist(),
+                    **({"feature_bank_raw": bank.cpu().tolist()} if bank is not None else {}),
                     "valid_regions": [True] * len(regions),
                     "interventions": [
                         {
@@ -228,6 +254,7 @@ def collect_selector_outcomes(
                                             "risk_global": row.risk_global,
                                         }
                                         if cfg.selector_risk_mode == "local_global"
+                                        or store_feature_bank
                                         else {}
                                     ),
                                     "metric_changes": row.metric_changes,
@@ -272,12 +299,36 @@ def collect_selector_outcomes(
         "collection_role": collection_role,
         "sample_ids": ids,
         "action_identity": identity,
+        **(
+            {
+                "operative_action_identity": learner.operative_action_identity(),
+                "candidate_protocol_identity": learner.candidate_protocol_identity(),
+                "selector_width": learner.routing.width,
+                "student_feature_channels": learner.config.width,
+                "feature_bank_names": list(
+                    selector_feature_names(
+                        replace(
+                            cfg,
+                            selector_feature_mode="mask_tokens",
+                            selector_token_channels=learner.config.width,
+                        )
+                    )
+                ),
+            }
+            if store_feature_bank
+            else {}
+        ),
         "intervention_config": cfg.to_dict(),
         "feature_names": list(selector_feature_names(cfg)),
         "samples_sha256": hashlib.sha256((output_dir / "samples.jsonl").read_bytes()).hexdigest(),
         "weights_unchanged": True,
         "teacher_inference_executed": False,
         "selector_executed": False,
+        **(
+            {"deployment_costs_ms": learner.deployment_cost_calibration.estimated_ms.cpu().tolist()}
+            if learner.deployment_cost_calibration is not None
+            else {}
+        ),
     }
     write_json_atomic(output_dir / "result.json", result)
     return result
@@ -317,6 +368,22 @@ def load_selector_outcomes(
     components = []
     for record in records:
         raw = record["features_raw"]
+        if "feature_bank_names" in meta:
+            bank = torch.tensor(record.get("feature_bank_raw", []), dtype=torch.float32)
+            expected = (len(raw), len(meta["feature_bank_names"]))
+            if bank.numel() == 0:
+                bank = bank.reshape(expected)
+            if tuple(bank.shape) != expected or not bool(torch.isfinite(bank).all()):
+                raise ValueError("invalid shared deployment feature bank")
+            if list(meta["feature_bank_names"][: len(BALANCED_FEATURE_NAMES)]) != list(
+                BALANCED_FEATURE_NAMES
+            ):
+                raise ValueError("shared bank must retain the canonical statistics prefix")
+            if raw and not torch.equal(
+                bank[:, : len(BALANCED_FEATURE_NAMES)],
+                torch.tensor(raw)[:, : len(BALANCED_FEATURE_NAMES)],
+            ):
+                raise ValueError("shared bank/statistics correspondence mismatch")
         if len(raw) != len(record["interventions"]) or len(raw) != len(record["valid_regions"]):
             raise ValueError("frozen feature/intervention correspondence mismatch")
         for f, region in zip(raw, record["interventions"], strict=True):
@@ -410,5 +477,75 @@ def load_selector_outcomes(
         torch.tensor(locals_, dtype=torch.float32).reshape(-1, 3),
         torch.tensor(harms, dtype=torch.float32).reshape(-1, 3),
         tuple(known_ids),
+        torch.tensor(components, dtype=torch.float32).reshape(-1, 3, 2),
+    )
+
+
+def project_selector_outcomes(
+    table: SelectorOutcomes, config: InterventionConfig
+) -> SelectorOutcomes:
+    """Pure derived view: reuse actor/regions/raw deltas; never recollect or rewrite labels.
+
+    Feature projection selects named columns from the stored superset. Utility is
+    recomputed by metric_targets; physical guards must match the collection arm.
+    Unknown/unavailable rows stay in records and never become safe training rows.
+    """
+    from reliable_endo_gs.training.metric_quality import metric_action_policy
+
+    parent = InterventionConfig(**table.metadata["intervention_config"])
+    if repair_execution_config(parent) != repair_execution_config(config) or any(
+        metric_action_policy(parent, a).minimum_changes
+        != metric_action_policy(config, a).minimum_changes
+        for a in (1, 2)
+    ):
+        raise ValueError("projection cannot change repair execution or physical guards")
+    names = table.metadata.get("feature_bank_names", table.metadata["feature_names"])
+    requested = selector_feature_names(config)
+    if len(names) != len(set(names)) or not set(requested) <= set(names):
+        raise ValueError("outcome store lacks requested features; collect the superset once")
+    columns = [names.index(name) for name in requested]
+    records = copy.deepcopy(table.records)
+    features, gains, locals_, harms, components, ids = [], [], [], [], [], []
+    for record in records:
+        source = record.get("feature_bank_raw", record["features_raw"])
+        record["features_raw"] = [[row[c] for c in columns] for row in source]
+        for f, region in zip(record["features_raw"], record["interventions"], strict=True):
+            rows = region["actions"]
+            triples, events = [(0.0, 0.0, False)], [(False, False)]
+            for ai, row in enumerate(rows[1:], 1):
+                if row["selector_label_available"]:
+                    triple = metric_targets(row["metric_changes"], config, ai)
+                    event = metric_risk_targets(row["metric_changes"], config, ai)
+                    row.update(
+                        global_gain=triple[0],
+                        local_gain=triple[1],
+                        harm=triple[2],
+                        risk_local=event[0],
+                        risk_global=event[1],
+                    )
+                    triples.append(triple)
+                    events.append(event[:2])
+            if len(triples) != 3:
+                continue
+            features.append(f)
+            gains.append([t[0] for t in triples])
+            locals_.append([t[1] for t in triples])
+            harms.append([float(t[2]) for t in triples])
+            components.append(events)
+            ids.append(record["sample_id"])
+    return SelectorOutcomes(
+        {
+            **table.metadata,
+            "intervention_config": config.to_dict(),
+            "feature_names": list(requested),
+            "projection_parent_config_hash": parent.config_hash,
+            "projection_parent_samples_sha256": table.metadata["samples_sha256"],
+        },
+        records,
+        torch.tensor(features, dtype=torch.float32).reshape(-1, len(requested)),
+        torch.tensor(gains, dtype=torch.float32).reshape(-1, 3),
+        torch.tensor(locals_, dtype=torch.float32).reshape(-1, 3),
+        torch.tensor(harms, dtype=torch.float32).reshape(-1, 3),
+        tuple(ids),
         torch.tensor(components, dtype=torch.float32).reshape(-1, 3, 2),
     )
