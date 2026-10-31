@@ -1,0 +1,33 @@
+SUCCESS BAR FOR THE CONFIRMATORY RUN (repair module + base comparison): PRE-REGISTERED, written 2026-10-31, before any sealed-64 or final_test frame is evaluated
+Hash in SUCCESS_BAR.sha256. Status: sections marked [USER OK] take effect when the user confirms them; nothing else is open.
+
+FROZEN OBJECTS. Student: Stage A KD student (checkpoint sha256 ef7fa35f...). Refiner: L6_relaxed_bounds (refiner.pt sha256 9df810ca...), spec in the ladder. No re-training, no
+re-selection, no threshold change after any result below exists. Deployment configurations are inference-only transforms of the same weights:
+  B1 = static grid layout + one CUDA graph (bit-identical to the part-A path)       -> PRIMARY, designated by the user's OK  [USER OK: the pre-registered rule of
+  C2 = B1 + torch.compile of four pure kernels (rounding-level approximation)          CRITERIA_BC section 6 would select C2; choosing B1 is a deviation]
+Both are evaluated and both are reported; the bar below is applied to the primary one. Disparity is untouched by the repair, so geometry metrics are identical to STOP by construction.
+
+DATA. S1 = sealed 64 frames (runs/phase2-frozen-actions-20261028T114155Z/cohort/worklist.json, key "development"; dataset 7, same sequence as development, so a replication on
+unseen frames, not an independent sequence). S2 = ALL frames of SCARED_A00 datasets 8 and 9 (final_test) listed by the A01 role manifest; the count is recorded at run time.
+S2 is evaluated ONCE per configuration after the freeze; a rerun after a defect is declared and both runs are reported. S1 runs first; S2 runs regardless of the S1 outcome
+unless S1 exposes a defect of the runner (declared). Optional S3 = an external stereo dataset, zero-shot, descriptive only, not part of the bar.
+
+PRIMARY ENDPOINT (repair claim "supported"), per dataset d in {8, 9} separately and for S1: right-view PSNR gain G = refined - STOP, per frame, then the mean.
+  (P1) mean G >= +0.5 dB on dataset 8 AND on dataset 9;  (P2) the lower end of the paired 95% bootstrap interval over frames (5,000 resamples) is > 0 on each;
+  (P3) G > 0 on >= 80% of the frames of each dataset;  (P4) the mean G of every keyframe is > 0.
+  Left-view gain is reported but is NOT an endpoint (mostly source-image reconstruction).
+NON-INFERIORITY (all required, same datasets): right SSIM gain mean >= 0 with the lower bound of its 95% interval >= -0.005; right LPIPS change mean <= 0 with the upper bound
+  <= +0.005; right-view squared error in the last 80 columns <= 1.05 x STOP's; no non-finite output; peak GPU memory reported.
+COST (reported with hardware and load average; measured only on an idle GPU, otherwise "not measured" and no speed statement is made): refiner marginal latency
+  (refined - STOP, same process) <= 2 ms and <= 10% of the STOP latency at 512x640; deployed refined path >= 30 FPS at 512x640.
+RESULT CATEGORIES. "Supported" = P1-P4 and all non-inferiority conditions on BOTH datasets (and the cost line for any speed statement). "Not supported" = anything else; it is
+  reported with the failing condition, and the paper's repair claim is then limited to the development evidence, labelled as such. Mixed results are reported as mixed.
+
+BASE-MODEL COMPARISON (KD student vs matched baseline) follows COMPARISON_PLAN.md (sha c0378cf0): a "better than the baseline" statement for a metric needs it to hold on BOTH
+datasets 8 and 9 with the paired interval excluding zero; headline metrics left PSNR/SSIM/LPIPS, EPE, depth MAE/RMSE; secondary right-view metrics. The baseline is the matched
+Stage-2 checkpoint (final), disclosed as a re-training whose native parity is unverified; the released SCARED-C checkpoints are references.
+Evaluated in the same run for the paper tables (inference only): STOP, refined (B1, C2), the GT-only and matched-KD 3-epoch students with their own refiners (A1 refiners), the
+teacher (EPE reference), the matched baseline, the released SCARED-C stage 1/2 checkpoints. Per-dataset (8, 9) and pooled means with 95% bootstrap intervals and paired win rates.
+
+NOT PART OF THIS BAR: the KD-vs-GT attribution (CRITERIA.txt, matched arm), seed stability (CRITERIA_ACTION.txt A2), speed comparison against the baseline (requires the baseline
+to get the same deployment treatment), any claim about novel-view synthesis.

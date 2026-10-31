@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Protocol
 
 import torch
 from torch.nn import functional as F
@@ -11,6 +12,34 @@ from reliable_endo_gs.config.intervention import InterventionConfig
 from reliable_endo_gs.contracts.deployment import DeploymentStereoBatch
 from reliable_endo_gs.teachers import AlignedTeacherTarget
 from reliable_endo_gs.teachers.quality import screen_target
+
+
+class DisparityTarget(Protocol):
+    """What the loss reads from a target: disparity [B,1,H,W] and boolean validity/support masks."""
+
+    disparity: torch.Tensor
+    validity: torch.Tensor
+    support: torch.Tensor
+
+
+@dataclass(frozen=True, slots=True)
+class GroundTruthDisparity:
+    """Training-only GT disparity as a loss target (never an input of the student).
+
+    ``validity`` is the A00 GT validity mask; ``support`` is the sensor support of the batch.
+    """
+
+    disparity: torch.Tensor
+    validity: torch.Tensor
+    support: torch.Tensor
+
+    def __post_init__(self) -> None:
+        if self.disparity.ndim != 4 or self.disparity.shape[1] != 1:
+            raise ValueError("GT disparity must have shape [B,1,H,W]")
+        for name in ("validity", "support"):
+            mask = getattr(self, name)
+            if mask.dtype != torch.bool or mask.shape != self.disparity.shape:
+                raise ValueError(f"GT {name} must be bool with the disparity shape")
 
 
 @dataclass(frozen=True)
@@ -23,7 +52,7 @@ class DistillationResult:
 
 def stereo_distillation(
     prediction: torch.Tensor,
-    target: AlignedTeacherTarget,
+    target: DisparityTarget,
     batch: DeploymentStereoBatch,
     config: InterventionConfig | None = None,
 ) -> DistillationResult:
@@ -50,6 +79,8 @@ def stereo_distillation(
         mask = declared
         scale = 1.0
     else:
+        if not isinstance(target, AlignedTeacherTarget):
+            raise TypeError("physical screening is defined for teacher targets only")
         quality = screen_target(batch, target, config)
         mask = quality.mask
         scale = config.kd_scale_px

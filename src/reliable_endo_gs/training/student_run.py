@@ -9,6 +9,7 @@ from typing import Protocol
 
 from reliable_endo_gs.data.scared_a00 import ScaredA00Sample
 from reliable_endo_gs.teachers import AlignedTeacherTarget
+from reliable_endo_gs.training.distillation import DisparityTarget
 from reliable_endo_gs.training.harness import TrainingLog, TrainingSignals
 from reliable_endo_gs.training.metric_quality import OfflineMetricTruth
 from reliable_endo_gs.training.student_checkpoint import (
@@ -40,6 +41,7 @@ def run_student_training(
     resume: Path | None = None,
     target_provider: Callable[[ScaredA00Sample], AlignedTeacherTarget] | None = None,
     metric_truth_provider: Callable[[ScaredA00Sample], OfflineMetricTruth] | None = None,
+    gt_provider: Callable[[ScaredA00Sample], DisparityTarget] | None = None,
 ) -> dict[str, object]:
     """max_steps bounds consumed samples across warmup/joint epochs and resume.
 
@@ -63,6 +65,8 @@ def run_student_training(
         raise ValueError("empty student training manifest")
     if learner.config.kd_weight and target_provider is None:
         raise ValueError("KD requires a frozen aligned target provider")
+    if learner.config.gt_weight and gt_provider is None:
+        raise ValueError("GT-disparity supervision requires a TRAIN ground-truth provider")
     if (
         learner.intervention_config is not None
         and learner.intervention_config.metric_quality is not None
@@ -110,6 +114,11 @@ def run_student_training(
                     if learner.config.kd_weight and target_provider
                     else None
                 )
+                gt_extra = (
+                    {"gt_target": gt_provider(sample)}
+                    if learner.config.gt_weight and gt_provider
+                    else {}
+                )
                 joint = cursor["epoch"] >= learner.config.student_epochs
                 needs_truth = joint or (
                     learner.intervention_config is not None
@@ -155,6 +164,7 @@ def run_student_training(
                         position=cursor["samples_seen"],
                         metric_truth=truth,
                         selector_context=selector_context,
+                        **gt_extra,
                     )
                 elif truth is not None:
                     losses = learner.step(
@@ -163,6 +173,7 @@ def run_student_training(
                         teacher_target=target,
                         position=cursor["samples_seen"],
                         metric_truth=truth,
+                        **gt_extra,
                     )
                 else:
                     losses = learner.step(
@@ -170,6 +181,7 @@ def run_student_training(
                         joint=joint,
                         teacher_target=target,
                         position=cursor["samples_seen"],
+                        **gt_extra,
                     )
                 cursor["samples_seen"] += 1
                 cursor["optimizer_steps"] += 1

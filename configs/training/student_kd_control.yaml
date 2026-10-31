@@ -1,0 +1,17 @@
+# KD-attribution matched KD arm: student_kd_multiscale.yaml with a coarser checkpoint cadence (checkpoint_every does not change the optimisation).
+schema: student_joint_learning.v1
+stereo_architecture: multiscale
+width: 64
+bins: 64
+minimum_effective_px: 0.25
+student_epochs: 10
+joint_epochs: 0
+learning_rate: 0.001
+model_lr_schedule: cosine_epochs
+model_lr_decay_epochs: 10
+model_lr_min_ratio: 0.1
+reconstruction_weight: 1.0
+kd_weight: 1.0
+repair_weight: 1.0
+checkpoint_every: 1000
+seed: 20261006

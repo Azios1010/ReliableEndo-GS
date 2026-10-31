@@ -22,6 +22,7 @@ class StudentLearningConfig:
     learning_rate: float = 0.001
     reconstruction_weight: float = 1.0
     kd_weight: float = 1.0
+    gt_weight: float = 0.0
     repair_weight: float = 1.0
     checkpoint_every: int = 100
     seed: int = 0
@@ -50,6 +51,7 @@ class StudentLearningConfig:
             "learning_rate",
             "reconstruction_weight",
             "kd_weight",
+            "gt_weight",
             "repair_weight",
         ):
             value = getattr(self, name)
@@ -86,6 +88,8 @@ class StudentLearningConfig:
     def to_dict(self) -> dict[str, object]:
         """Omit neutral schedule fields to preserve historical checkpoint identities."""
         values = asdict(self)
+        if not self.gt_weight:
+            values.pop("gt_weight")  # GT-disparity supervision is opt-in; historical identities stay valid
         if self.stereo_architecture == "compact":
             values.pop("stereo_architecture")
         if self.model_lr_schedule == "constant":

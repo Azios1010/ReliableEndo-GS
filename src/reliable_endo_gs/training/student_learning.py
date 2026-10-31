@@ -71,7 +71,7 @@ from reliable_endo_gs.routing.tokens import mask_feature_tokens
 from reliable_endo_gs.routing.tradeoff import TradeoffConfig
 from reliable_endo_gs.teachers import AlignedTeacherTarget
 from reliable_endo_gs.training.a04_reference import _move_batch
-from reliable_endo_gs.training.distillation import stereo_distillation
+from reliable_endo_gs.training.distillation import DisparityTarget, stereo_distillation
 from reliable_endo_gs.training.gradient_balance import GradientBalance
 from reliable_endo_gs.training.interventions import (
     InterventionHarness,
@@ -487,8 +487,19 @@ class StudentLearner:
         position: int = 0,
         metric_truth: OfflineMetricTruth | None = None,
         selector_context: tuple[tuple[ScaredA00Sample, OfflineMetricTruth], ...] = (),
+        gt_target: DisparityTarget | None = None,
     ) -> Mapping[str, object]:
-        """One bounded update; finite gradients checked before any optimizer step."""
+        """One bounded update; finite gradients checked before any optimizer step.
+
+        ``gt_target`` (required iff ``config.gt_weight``) is the TRAIN ground-truth disparity of the plain student path; it goes
+        through the same ``stereo_distillation`` loss as the teacher target, with its diagnostics renamed ``gt_*``.
+        """
+        if self.config.gt_weight and (gt_target is None or self.intervention_config is not None):
+            raise ValueError(
+                "GT-disparity supervision needs an explicit GT target and the plain student path"
+            )
+        if gt_target is not None and not self.config.gt_weight:
+            raise ValueError("a GT target was given but gt_weight is zero")
         if metric_truth is not None and (
             self.intervention_config is None or self.intervention_config.metric_quality is None
         ):
@@ -548,6 +559,14 @@ class StudentLearner:
             distillation = stereo_distillation(base.disparity, teacher_target, state.batch)
             kd = distillation.loss
             diagnostics.update(distillation.diagnostics)
+        gt = rgb.new_zeros(())
+        if self.config.gt_weight:
+            assert gt_target is not None
+            ground_truth = stereo_distillation(base.disparity, gt_target, state.batch)
+            gt = ground_truth.loss
+            diagnostics.update(
+                {key.replace("kd_", "gt_", 1): value for key, value in ground_truth.diagnostics.items()}
+            )
         repair = rgb.new_zeros(())
         selector_loss = rgb.new_zeros(())
         if joint:
@@ -582,6 +601,7 @@ class StudentLearner:
         loss = (
             self.config.reconstruction_weight * rgb
             + self.config.kd_weight * kd
+            + (self.config.gt_weight * gt if self.config.gt_weight else 0)
             + (self.config.repair_weight * repair if joint else 0)
         )
         if not bool(torch.isfinite(loss)):
@@ -606,6 +626,7 @@ class StudentLearner:
             "loss": float(loss.detach()),
             "reconstruction": float(rgb.detach()),
             "kd": float(kd.detach()),
+            **({"gt": float(gt.detach())} if self.config.gt_weight else {}),
             "repair": float(repair.detach()),
             "selector": float(selector_loss.detach()),
             **diagnostics,

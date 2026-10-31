@@ -523,6 +523,30 @@ def _run_student_command(arguments: argparse.Namespace, resources: ExitStack) ->
             target_provider = provide
         elif arguments.teacher_factory is not None or arguments.cache_root is not None:
             raise ValueError("teacher/cache inputs require positive KD weight")
+        gt_provider = None
+        if config.gt_weight:
+            from reliable_endo_gs.training.distillation import GroundTruthDisparity
+
+            identity["gt_disparity_supervision"] = "a00_supervision_smooth_l1.v1"
+
+            def provide_gt(sample: ScaredA00Sample) -> GroundTruthDisparity:
+                if gpu_input:
+                    supervision = adapter.load_supervision(sample)
+                else:
+                    supervision = adapter.load(
+                        sample.sample_id,
+                        data_role="final_train",
+                        include_supervision=True,
+                        output_hw=construction.runtime.resolution_hw,
+                    ).supervision
+                assert supervision is not None
+                return GroundTruthDisparity(
+                    supervision.disparity.to(device),
+                    supervision.valid_mask.to(device),
+                    sample.batch.support.to(device),
+                )
+
+            gt_provider = provide_gt
         metric_truth_provider = None
         if intervention_config is not None and intervention_config.metric_quality is not None:
             from reliable_endo_gs.training.metric_quality import OfflineMetricTruth
@@ -628,6 +652,7 @@ def _run_student_command(arguments: argparse.Namespace, resources: ExitStack) ->
             resume=arguments.checkpoint,
             target_provider=target_provider,
             metric_truth_provider=metric_truth_provider,
+            gt_provider=gt_provider,
         )
         if staged is not None:
             io_report = {

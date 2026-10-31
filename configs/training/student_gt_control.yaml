@@ -1,0 +1,19 @@
+# KD-attribution control: the multiscale student of student_kd_multiscale.yaml supervised by GT disparity (same SmoothL1 loss form, same
+# weight) instead of the frozen-teacher disparity. Same architecture, schedule, seed and RGB loss; run for 3 epochs of the 10-epoch cosine schedule.
+schema: student_joint_learning.v1
+stereo_architecture: multiscale
+width: 64
+bins: 64
+minimum_effective_px: 0.25
+student_epochs: 10
+joint_epochs: 0
+learning_rate: 0.001
+model_lr_schedule: cosine_epochs
+model_lr_decay_epochs: 10
+model_lr_min_ratio: 0.1
+reconstruction_weight: 1.0
+kd_weight: 0.0
+gt_weight: 1.0
+repair_weight: 1.0
+checkpoint_every: 1000
+seed: 20261006
