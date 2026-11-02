@@ -62,10 +62,12 @@ class StudentLearningConfig:
                 or value < 0
             ):
                 raise ValueError(f"{name} must be finite and nonnegative")
-        if min(self.minimum_effective_px, self.learning_rate, self.reconstruction_weight) <= 0:
-            raise ValueError(
-                "minimum disparity, learning rate and reconstruction weight must be positive"
-            )
+        if min(self.minimum_effective_px, self.learning_rate) <= 0:
+            raise ValueError("minimum disparity and learning rate must be positive")
+        # A zero photometric weight is allowed for a distillation-only (or GT-only) student; the stereo
+        # network then has no photometric gradient and the attribute head receives none at all.
+        if self.reconstruction_weight == 0 and not (self.kd_weight > 0 or self.gt_weight > 0):
+            raise ValueError("a zero reconstruction weight needs a positive kd or gt weight")
         if self.joint_epochs and self.repair_weight <= 0:
             raise ValueError("joint learning requires positive repair weight")
         if self.model_lr_schedule not in ("constant", "cosine_epochs"):

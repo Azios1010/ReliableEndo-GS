@@ -1,0 +1,17 @@
+# Distillation-only control: identical to student_kd_control.yaml except reconstruction_weight 0.0 (no photometric term; the attribute head receives no gradient, so only geometry is comparable).
+schema: student_joint_learning.v1
+stereo_architecture: multiscale
+width: 64
+bins: 64
+minimum_effective_px: 0.25
+student_epochs: 10
+joint_epochs: 0
+learning_rate: 0.001
+model_lr_schedule: cosine_epochs
+model_lr_decay_epochs: 10
+model_lr_min_ratio: 0.1
+reconstruction_weight: 0.0
+kd_weight: 1.0
+repair_weight: 1.0
+checkpoint_every: 1000
+seed: 20261006

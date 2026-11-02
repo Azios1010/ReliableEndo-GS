@@ -259,3 +259,34 @@ def test_skip_unread_surface_covariance_scope_is_exact_and_resets(setup):  # noq
     assert full.cov_surface is not None and lean.cov_surface is None
     for name in ("rotations", "scales", "opacities", "colors", "means3d", "valid_mask"):
         assert torch.equal(getattr(lean, name), getattr(full, name)), name
+
+
+def test_active_outputs_default_is_neutral_and_restricts_the_residual_groups():
+    # the neutral default is omitted, so historical identities stay valid
+    assert "active_outputs" not in FieldRefinerConfig().to_dict()
+    assert FieldRefinerConfig(active_outputs=("scale",)).to_dict()["active_outputs"] == ["scale"]
+    for bad in ((), ("scale", "scale"), ("size",)):
+        with pytest.raises(ValueError, match="active_outputs"):
+            FieldRefinerConfig(active_outputs=bad)
+    context = torch.randn(2, 9, 13)
+    full = FieldRefiner(FieldRefinerConfig(hidden_dims=(8, 8)))
+    only = FieldRefiner(FieldRefinerConfig(hidden_dims=(8, 8), active_outputs=("scale",)))
+    # the unused output rows are kept, untrained
+    assert only.parameter_count == full.parameter_count
+    _randomise(full, scale=0.5)
+    only.load_state_dict(full.state_dict())
+    a, b = full(context).attributes, only(context).attributes
+    assert torch.equal(a.delta_log_scale, b.delta_log_scale)
+    assert not torch.equal(a.delta_rotation, torch.zeros_like(a.delta_rotation))
+    assert torch.equal(b.delta_rotation, torch.zeros_like(b.delta_rotation))
+    assert torch.equal(b.delta_alpha_logit, torch.zeros_like(b.delta_alpha_logit))
+
+
+def test_inactive_output_rows_receive_no_gradient():
+    refiner = FieldRefiner(FieldRefinerConfig(hidden_dims=(8, 8), active_outputs=("scale",)))
+    _randomise(refiner, scale=0.5)
+    refiner(torch.randn(2, 9, 13)).attributes.delta_log_scale.square().sum().backward()
+    grad = refiner.output.weight.grad
+    assert grad[3:6].abs().sum() > 0 and refiner.output.bias.grad[3:6].abs().sum() > 0
+    for row in (0, 1, 2, 6):
+        assert grad[row].abs().sum() == 0 and refiner.output.bias.grad[row] == 0

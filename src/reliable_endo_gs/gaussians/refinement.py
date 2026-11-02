@@ -25,6 +25,7 @@ CONTEXT_CHANNEL_NAMES: tuple[str, ...] = (
     "scale_a", "scale_b", "scale_c",
     "alpha0",
 )  # fmt: skip
+RESIDUAL_GROUPS: tuple[str, ...] = ("rotation", "scale", "opacity")
 ALL_CONTEXT_CHANNELS: tuple[int, ...] = tuple(range(len(CONTEXT_CHANNEL_NAMES)))
 # Absolute image position enters only through mu_x / mu_y; mu_z (depth) is kept.
 NO_ABSOLUTE_XY_CHANNELS: tuple[int, ...] = tuple(i for i in ALL_CONTEXT_CHANNELS if i not in (3, 4))
@@ -39,8 +40,17 @@ class FieldRefinerConfig:
     color_residual: bool = False
     max_color_delta: float = 0.1
     bounds: ResidualBounds = field(default_factory=ResidualBounds)
+    # Residual groups that may be non-zero; a group left out is multiplied by zero after its bound, so its
+    # output rows receive no gradient (they stay at their zero initialisation).
+    active_outputs: tuple[str, ...] = RESIDUAL_GROUPS
 
     def __post_init__(self) -> None:
+        if (
+            not self.active_outputs
+            or len(set(self.active_outputs)) != len(self.active_outputs)
+            or any(group not in RESIDUAL_GROUPS for group in self.active_outputs)
+        ):
+            raise ValueError(f"active_outputs must be a non-empty subset of {RESIDUAL_GROUPS}")
         if any(type(w) is not int or w < 1 for w in self.hidden_dims):
             raise ValueError("hidden_dims must contain positive integers")
         if any(
@@ -54,13 +64,17 @@ class FieldRefinerConfig:
             raise ValueError("max_color_delta must lie in (0, 1]")
 
     def to_dict(self) -> dict[str, object]:
-        return {
+        values: dict[str, object] = {
             "hidden_dims": list(self.hidden_dims),
             "input_channels": [CONTEXT_CHANNEL_NAMES[c] for c in self.input_channels],
             "color_residual": self.color_residual,
             "max_color_delta": self.max_color_delta,
             "bounds": self.bounds.to_dict(),
         }
+        # The neutral default is omitted so that historical identities stay valid.
+        if self.active_outputs != RESIDUAL_GROUPS:
+            values["active_outputs"] = list(self.active_outputs)
+        return values
 
 
 @dataclass(frozen=True, slots=True)
@@ -127,6 +141,11 @@ class FieldRefiner(nn.Module):
         rotation = bounds.max_rotation_rad * torch.tanh(raw[..., 0:3] / bounds.max_rotation_rad)
         log_scale = bounds.max_log_scale * torch.tanh(raw[..., 3:6] / bounds.max_log_scale)
         alpha = bounds.max_alpha_logit * torch.tanh(raw[..., 6:7] / bounds.max_alpha_logit)
+        if len(self.config.active_outputs) != len(RESIDUAL_GROUPS):
+            groups = self.config.active_outputs
+            rotation = rotation if "rotation" in groups else torch.zeros_like(rotation)
+            log_scale = log_scale if "scale" in groups else torch.zeros_like(log_scale)
+            alpha = alpha if "opacity" in groups else torch.zeros_like(alpha)
         delta_color = None
         if self.color_output is not None:
             limit = self.config.max_color_delta
