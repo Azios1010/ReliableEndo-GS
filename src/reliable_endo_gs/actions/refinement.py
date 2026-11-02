@@ -38,6 +38,7 @@ from reliable_endo_gs.gaussians.refinement import FieldRefiner
 from reliable_endo_gs.gaussians.sampling import fixed_grid_cells
 from reliable_endo_gs.reconstruction.model import ReferenceReconstructionModel
 from reliable_endo_gs.regions.grid import Region
+from reliable_endo_gs.rendering.field import FieldRenderRequest
 from reliable_endo_gs.utils.inference_mode import (
     compiled_kernels,
     reuse_camera_settings,
@@ -102,6 +103,41 @@ def refined_gaussian_field(
     return merge_field(base.gaussians, changed, core), tuple(names)
 
 
+EDGE_STRIP_DISPARITY_COLUMNS = 8
+EDGE_STRIP_QUANTILE = 0.90
+
+
+def right_edge_strip_mask(disparity: torch.Tensor) -> torch.Tensor:
+    """Right-view columns the left view cannot observe: ``[1, 1, 1, W]`` float, 1 where the strip applies.
+
+    ``disparity`` is the left-view map ``[1, 1, H, W]`` in pixels. For a rectified pair with ``x_R = x_L - d`` a
+    right-view column ``x_R >= W - d`` would need ``x_L >= W``, which the left view does not contain. The strip width is
+    ``d_hat``, the ``EDGE_STRIP_QUANTILE`` quantile over rows of the largest disparity in the last
+    ``EDGE_STRIP_DISPARITY_COLUMNS`` columns (a conservative statistic: the outermost disparities are the least reliable).
+    A non-finite ``d_hat`` makes the whole width the strip, i.e. the guard falls back to the unrefined image.
+    Chosen on development frames only (analysis EDGE_GUARD_DEV_SPEC, candidate C1); a hypothesis-driven design, not an
+    established result. ``d_hat`` has a heavy tail (35-221 px on development frames), so a strip can be very wide.
+    """
+    if disparity.ndim != 4 or disparity.shape[:2] != (1, 1):
+        raise ValueError(f"right_edge_strip_mask expects a [1, 1, H, W] disparity map, got {tuple(disparity.shape)}")
+    width = int(disparity.shape[-1])
+    edge = disparity[0, 0, :, -EDGE_STRIP_DISPARITY_COLUMNS:].amax(dim=1).float()
+    d_hat = torch.nan_to_num(torch.quantile(edge, EDGE_STRIP_QUANTILE), nan=float("inf"))
+    columns = torch.arange(width, device=disparity.device, dtype=torch.float32)
+    return (columns >= width - d_hat).to(torch.float32).reshape(1, 1, 1, width)
+
+
+def guard_right_edge(result: ActionResult, stop_right: torch.Tensor) -> ActionResult:
+    """Replace the right-view image in the strip of :func:`right_edge_strip_mask` by the unrefined (STOP) right image.
+
+    ``stop_right`` is ``[1, C, H, W]``, the right render of the unrefined field. Only ``right.image`` is composited; the
+    left image, ``right.depth``/``right.visibility`` (from the refined render), the field and the disparity are untouched.
+    """
+    mask = right_edge_strip_mask(result.disparity).to(result.right.image.dtype)
+    image = result.right.image * (1.0 - mask) + stop_right.to(result.right.image.dtype) * mask
+    return replace(result, right=replace(result.right, image=image))
+
+
 def refine_gaussian_field(
     state: RepairState,
     refiner: FieldRefiner,
@@ -110,8 +146,13 @@ def refine_gaussian_field(
     composition_alpha_epsilon: float,
     region: Region | None = None,
     exact_zero_identity: bool = True,
+    edge_guard: bool = False,
 ) -> ActionResult:
-    """Apply ``refiner`` to the primitives of ``region`` (default: all) and render both views."""
+    """Apply ``refiner`` to the primitives of ``region`` (default: all) and render both views.
+
+    ``edge_guard`` (opt-in, default off) leaves the strip of :func:`right_edge_strip_mask` of the right view at the
+    unrefined render, which the fully rendered base state already holds.
+    """
     field, names = refined_gaussian_field(
         state,
         refiner,
@@ -120,9 +161,14 @@ def refine_gaussian_field(
         region=region,
         exact_zero_identity=exact_zero_identity,
     )
-    return _render_outcome(
+    result = _render_outcome(
         state, field, state.base.target.disparity, reference, Action.GAUSSIAN, names
     )
+    if edge_guard:
+        if state.base.render_right is None:
+            raise ValueError("edge_guard needs the unrefined right render of the base state")
+        result = guard_right_edge(result, state.base.render_right.image)
+    return result
 
 
 class _BaseRenderSkipper:
@@ -218,6 +264,10 @@ class RefinedInference:
     copied into the static buffers only when the caller's camera tensors changed (identity, address or in-place version; torch
     bumps the version of every in-place op). Count diagnostics inside the graph are placeholders, and the returned field and
     disparity are fresh copies (``copy_outputs``), so they survive the next call.
+
+    ``edge_guard`` (opt-in, default off; no effect without a refiner) keeps the strip of :func:`right_edge_strip_mask` of the right view
+    at the unrefined render. The base renders are skipped, so this costs one extra right-view rasterisation of the unrefined field
+    (latency not measured). With the guard off the outputs are bit-identical to before.
     """
 
     def __init__(
@@ -231,6 +281,7 @@ class RefinedInference:
         static_layout: bool = False,
         copy_outputs: bool = True,
         compile_kernels: bool = False,
+        edge_guard: bool = False,
     ) -> None:
         if model.renderer is None:
             raise ValueError("RefinedInference requires a model with an injected renderer")
@@ -242,6 +293,7 @@ class RefinedInference:
         self.static_layout = static_layout
         self.copy_outputs = copy_outputs
         self.compile_kernels = compile_kernels
+        self.edge_guard = edge_guard
         # A refined and an unrefined (STOP) instance normally share one model: they share one skipper, so closing order is irrelevant.
         if isinstance(model.renderer, _BaseRenderSkipper):
             self._skipper = model.renderer
@@ -395,6 +447,12 @@ class RefinedInference:
         if captured.checks is not None:
             raise_first_failure([captured.checks])
 
+    def _unrefined_right_image(self, batch: DeploymentStereoBatch, base: Any) -> torch.Tensor:
+        """Right render of the unrefined field (the base renders were skipped)."""
+        field = replace(base.gaussians, cov_surface=None, cov_center=None, cov_effective=None)
+        hw = (int(batch.left.shape[-2]), int(batch.left.shape[-1]))
+        return self.model.renderer.render(FieldRenderRequest(field, batch.camera, hw, "right")).image
+
     def __call__(self, batch: Any, **forward_kwargs: Any) -> ActionResult:
         with self._scopes():
             captured = self._lookup(batch, forward_kwargs)
@@ -413,6 +471,8 @@ class RefinedInference:
             result = _render_outcome(
                 RepairState(batch, base), field, disparity, self.model, action, names
             )
+            if self.edge_guard and self.refiner is not None:
+                result = guard_right_edge(result, self._unrefined_right_image(batch, base))
             if captured is not None and self.copy_outputs:
                 result = replace(
                     result,
@@ -429,4 +489,10 @@ class RefinedInference:
             return result
 
 
-__all__ = ["RefinedInference", "full_frame_region", "refine_gaussian_field"]
+__all__ = [
+    "RefinedInference",
+    "full_frame_region",
+    "guard_right_edge",
+    "refine_gaussian_field",
+    "right_edge_strip_mask",
+]
