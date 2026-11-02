@@ -72,6 +72,8 @@ def build_predictor(
             device,
             weights_from=Path(entry["weights_from"]) if entry.get("weights_from") else None,
             weights_from_sha256=entry.get("weights_from_sha256"),
+            grid_stride=entry.get("grid_stride"),
+            grid_cap=entry.get("grid_cap"),
         )
         refiner = None
         if entry.get("refiner_dir"):

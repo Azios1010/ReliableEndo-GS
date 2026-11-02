@@ -39,6 +39,30 @@ from reliable_endo_gs.training.student_config import StudentLearningConfig
 from reliable_endo_gs.training.student_learning import StudentLearner
 
 
+def with_grid_sampling(
+    config: ReferenceConfig, stride: int | None, cap: int | None
+) -> ReferenceConfig:
+    """Copy of a construction config whose fixed Gaussian grid has another ``stride`` (inference-only density diagnostic).
+
+    ``stride`` only selects which pixels of the left image receive a Gaussian: the surface frame and size of a Gaussian come from the
+    full-resolution pixel neighbourhood and do not depend on it. The reference config needs a finite cap equal to ``max_samples``,
+    which must be at least the number of grid cells. ``stride=None`` returns the config unchanged (the default of every other model).
+    """
+    if stride is None:
+        if cap is not None:
+            raise ValueError("grid_cap needs grid_stride")
+        return config
+    if cap is None:
+        raise ValueError(
+            "grid_stride needs an explicit grid_cap (the number of grid cells or more)"
+        )
+    sampling = config.prior_policy.sampling
+    if sampling.mode != "fixed":
+        raise ValueError("the grid stride can only be changed for a fixed grid")
+    changed = replace(sampling, stride=int(stride), cap=int(cap), max_samples=int(cap))
+    return replace(config, prior_policy=replace(config.prior_policy, sampling=changed))
+
+
 def build_student(
     stage_a_checkpoint: Path,
     stage_a_sha256: str,
@@ -46,8 +70,14 @@ def build_student(
     *,
     weights_from: Path | None = None,
     weights_from_sha256: str | None = None,
+    grid_stride: int | None = None,
+    grid_cap: int | None = None,
 ) -> tuple[StudentReconstructionModel, float]:
-    """Frozen eval-mode student and the composition alpha epsilon. ``weights_from`` replaces the student weights."""
+    """Frozen eval-mode student and the composition alpha epsilon. ``weights_from`` replaces the student weights.
+
+    ``grid_stride`` and ``grid_cap`` (both ``None`` by default) change the density of the fixed Gaussian grid at inference only
+    (see :func:`with_grid_sampling`); no weight is changed.
+    """
     raw = read_student_checkpoint(stage_a_checkpoint)
     construction = ReferenceConfig.from_dict(raw["construction_config"])
     learning = StudentLearningConfig(**raw["student_config"])
@@ -68,6 +98,8 @@ def build_student(
     )
     import_frozen_student_actions(stage_a_checkpoint, learner, expected_sha256=stage_a_sha256)
     epsilon = learner.actions.gaussian_bounds.alpha_logit_epsilon
+    # The frozen-action import checks the construction identity of the checkpoint, so the density override is applied after it.
+    model.config = with_grid_sampling(model.config, grid_stride, grid_cap)
     if weights_from is not None:
         if hashlib.sha256(weights_from.read_bytes()).hexdigest() != weights_from_sha256:
             raise ValueError("student weights file hash differs from the frozen one")
