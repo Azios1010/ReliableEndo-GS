@@ -32,6 +32,12 @@ the files of a snapshot that are byte-identical to the committed file, and the f
 - tree hash: `6927b7407ffe9a911114d5036c3ba21251939923136da0660f7a579d6f4192cf`; files: 398; identical to the committed/working file: 395; differing: 3; not in the repository: 0
 - differing files (the snapshot has the older version): `src/reliable_endo_gs/baseline/comparison/posed_ft.py`, `src/reliable_endo_gs/baseline/posed_gaussians.py`, `src/reliable_endo_gs/evaluation/comparison_runner.py`
 
+## 2026-11-03 additions (training arms of the review response; outputs under `/mnt/d/3DGS_runs/reliableendo-gs/`)
+- photometric-only student (`insight-ablations-20261102-reconly/source-snapshot`): tree hash `4570fb0ca280c616e5f7e8cf7276d44b83c23a8027e052e3e37793a1af69662c` = the ablations A/B snapshot plus `configs/training/student_rec_only.yaml`; protocol `PROTOCOL_C.txt`.
+- seed replicates (`insight-ablations-20261103-seeds/source-snapshot`): tree hash `e7d8e8788c9ea53b046e0a192cdb55fc1f6a82213740f8017dd84ee058faefd3` = the ablations A/B snapshot plus three configs that differ from the matched arms only in the seed; the replicates start from a fresh initialisation of their seed; protocol `PROTOCOL_D.txt`.
+- visibility-masked photometric loss (`insight-ablations-20261103-visible/source-snapshot`): tree hash `413b3bbc200ca36df2dc5f2f18caf9cec92294cdfaa360dd58830095f57ce08a` = the ablations A/B snapshot plus `geometry/visibility.py` and the versions of `training/interventions.py`, `training/student_config.py`, `training/student_learning.py` committed in `3cfcde7`, plus `configs/training/student_kd_visible.yaml`; protocol `PROTOCOL_E.txt`.
+- the grid-density diagnostic and the qualitative figure were run from snapshots that contained the code committed in `47a19ec`.
+
 Notes
 - The files that differ between the E1 snapshot and the commits are the opt-in options added afterwards (zero photometric weight, `active_outputs`, `left_source_only`); their defaults reproduce the earlier behaviour and are covered by unit tests.
 - Protocols, amendments, freezes and the revision policy are hashed files under `reports/comparison-20261101/plan/` and `reports/insight-ablations-20261101/plan/` (outside the repository).
