@@ -46,3 +46,9 @@ third_party/endo_e2e_gs/*.png
 .idea/
 .vscode/
 .DS_Store
+
+
+
+/paper
+/paper*
+/tmp
