@@ -22,25 +22,35 @@ from reliable_endo_gs.actions.repair import (
     RepairState,
     action_eligible,
 )
+from reliable_endo_gs.geometry.visibility import right_visible_support
 from reliable_endo_gs.reconstruction.model import ReferenceReconstructionModel
 from reliable_endo_gs.regions.grid import Region
 from reliable_endo_gs.rendering.cross_view import RobustLossConfig, cross_view_loss
 
 
 def reconstruction_loss(
-    state: RepairState, outcome: ActionResult, region: Region | None = None
+    state: RepairState,
+    outcome: ActionResult,
+    region: Region | None = None,
+    *,
+    mask_right_strip: bool = False,
 ) -> torch.Tensor:
     """Mean of left/right Charbonnier RGB losses on fixed deployment masks.
 
     Phase II explicitly supervises BOTH views. A04's old left-only training is
     unchanged. Right support is the sensor mask, not left-disparity GT validity.
     This is a photometric objective, not an assertion of metric GT improvement.
+    With ``mask_right_strip`` the right-view columns that no Gaussian anchored in the left image can cover (the
+    strip at the right border, width from the detached predicted disparity) are excluded from the right term.
     """
     core = torch.ones_like(state.support) if region is None else region.mask(state.batch.left)
+    right_support = state.batch.support & core
+    if mask_right_strip:
+        right_support = right_visible_support(right_support, outcome.disparity)
     losses = []
     for render, observation, mask in (
         (outcome.left, state.batch.left, state.support & core),
-        (outcome.right, state.batch.right, state.batch.support & core),
+        (outcome.right, state.batch.right, right_support),
     ):
         if not bool(torch.isfinite(render.image).all()):
             raise ValueError("nonfinite intervention render")

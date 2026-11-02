@@ -14,7 +14,6 @@ entry of the model equals the frozen entry.
 from __future__ import annotations
 
 import json
-import math
 import os
 import time
 from dataclasses import replace
@@ -29,22 +28,14 @@ from reliable_endo_gs.evaluation.comparison_runner import build_predictor, sha25
 from reliable_endo_gs.evaluation.multi_model import finished_ids, run_rows, state_hash
 from reliable_endo_gs.evaluation.perceptual import LPIPSAlexNet
 from reliable_endo_gs.evaluation.rendering import psnr, windowed_ssim
+from reliable_endo_gs.geometry.visibility import (  # noqa: F401  (canonical formula, re-exported)
+    BORDER_COLUMNS,
+    STRIP_QUANTILE,
+    strip_width,
+)
 from reliable_endo_gs.teachers import load_a01_roles
 
-BORDER_COLUMNS = 8
-STRIP_QUANTILE = 0.95
 REFERENCE_MODEL = "ours_base"
-
-
-def strip_width(disparity: torch.Tensor) -> int:
-    """Width in pixels of the right-view strip not visible from the left image; ``disparity`` is [1,1,H,W] in pixels (d = u_left - u_right)."""
-    if disparity.ndim != 4 or disparity.shape[0] != 1 or disparity.shape[1] != 1:
-        raise ValueError("disparity must have shape [1,1,H,W]")
-    border = disparity[..., -BORDER_COLUMNS:]
-    values = border[torch.isfinite(border)]
-    if values.numel() == 0:
-        raise ValueError("no finite disparity at the right border")
-    return int(math.ceil(float(torch.quantile(values.float().flatten(), STRIP_QUANTILE))))
 
 
 def crop_columns(image: torch.Tensor, strip_px: int) -> torch.Tensor:

@@ -30,12 +30,15 @@ class StudentLearningConfig:
     model_lr_decay_epochs: int = 10
     model_lr_min_ratio: float = 0.1
     stereo_architecture: str = "compact"
+    right_visibility_mask: bool = False
 
     def __post_init__(self) -> None:
         if self.schema != "student_joint_learning.v1":
             raise ValueError("unsupported student schema")
         if self.stereo_architecture not in ("compact", "multiscale"):
             raise ValueError("unsupported stereo student architecture")
+        if type(self.right_visibility_mask) is not bool:
+            raise ValueError("right_visibility_mask must be a boolean")
         for name in ("width", "bins", "checkpoint_every"):
             if type(getattr(self, name)) is not int or getattr(self, name) < 1:
                 raise ValueError(f"{name} must be a positive integer")
@@ -94,6 +97,8 @@ class StudentLearningConfig:
             values.pop("gt_weight")  # GT-disparity supervision is opt-in; historical identities stay valid
         if self.stereo_architecture == "compact":
             values.pop("stereo_architecture")
+        if not self.right_visibility_mask:
+            values.pop("right_visibility_mask")  # opt-in; historical identities stay valid
         if self.model_lr_schedule == "constant":
             for name in ("model_lr_schedule", "model_lr_decay_epochs", "model_lr_min_ratio"):
                 values.pop(name)
