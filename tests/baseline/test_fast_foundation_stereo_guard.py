@@ -28,10 +28,14 @@ _OBSERVED = [
 
 
 def _patch_globals(monkeypatch: pytest.MonkeyPatch, names: list[str]) -> None:
-    monkeypatch.setattr(torch.serialization, "get_unsafe_globals_in_checkpoint", lambda _path: list(names))
+    monkeypatch.setattr(
+        torch.serialization, "get_unsafe_globals_in_checkpoint", lambda _path: list(names)
+    )
 
 
-def test_guard_accepts_the_globals_of_the_inspected_checkpoints(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_guard_accepts_the_globals_of_the_inspected_checkpoints(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     _patch_globals(monkeypatch, _OBSERVED)
     ffs._assert_allowed_globals(Path("unused.pth"))
 
@@ -53,14 +57,18 @@ def test_guard_accepts_the_globals_of_the_inspected_checkpoints(monkeypatch: pyt
         "coreutils.run",
     ],
 )
-def test_guard_refuses_anything_else_even_next_to_allowed_names(monkeypatch: pytest.MonkeyPatch, hostile: str) -> None:
+def test_guard_refuses_anything_else_even_next_to_allowed_names(
+    monkeypatch: pytest.MonkeyPatch, hostile: str
+) -> None:
     _patch_globals(monkeypatch, [*_OBSERVED, hostile])
     with pytest.raises(ffs.FastFoundationStereoError, match="unexpected globals") as raised:
         ffs._assert_allowed_globals(Path("unused.pth"))
     assert hostile in str(raised.value)
 
 
-def test_checkpoint_hash_is_checked_before_the_pickle_is_inspected(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_checkpoint_hash_is_checked_before_the_pickle_is_inspected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     checkpoint = tmp_path / "model.pth"
     checkpoint.write_bytes(b"not a checkpoint")
     monkeypatch.setattr(ffs, "_git_revision", lambda _root: "r" * 40)
@@ -70,10 +78,16 @@ def test_checkpoint_hash_is_checked_before_the_pickle_is_inspected(tmp_path: Pat
 
     monkeypatch.setattr(ffs, "_assert_allowed_globals", unreachable)
     with pytest.raises(ffs.FastFoundationStereoError, match="hash differs"):
-        ffs.build_fast_foundation_stereo(tmp_path, "r" * 40, checkpoint, "0" * 64, torch.device("cpu"))
+        ffs.build_fast_foundation_stereo(
+            tmp_path, "r" * 40, checkpoint, "0" * 64, torch.device("cpu")
+        )
 
 
-def test_upstream_revision_mismatch_is_refused(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_upstream_revision_mismatch_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setattr(ffs, "_git_revision", lambda _root: "a" * 40)
     with pytest.raises(ffs.FastFoundationStereoError, match="recorded revision"):
-        ffs.build_fast_foundation_stereo(tmp_path, "b" * 40, tmp_path / "missing.pth", "0" * 64, torch.device("cpu"))
+        ffs.build_fast_foundation_stereo(
+            tmp_path, "b" * 40, tmp_path / "missing.pth", "0" * 64, torch.device("cpu")
+        )

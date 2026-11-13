@@ -119,7 +119,9 @@ def right_edge_strip_mask(disparity: torch.Tensor) -> torch.Tensor:
     established result. ``d_hat`` has a heavy tail (35-221 px on development frames), so a strip can be very wide.
     """
     if disparity.ndim != 4 or disparity.shape[:2] != (1, 1):
-        raise ValueError(f"right_edge_strip_mask expects a [1, 1, H, W] disparity map, got {tuple(disparity.shape)}")
+        raise ValueError(
+            f"right_edge_strip_mask expects a [1, 1, H, W] disparity map, got {tuple(disparity.shape)}"
+        )
     width = int(disparity.shape[-1])
     edge = disparity[0, 0, :, -EDGE_STRIP_DISPARITY_COLUMNS:].amax(dim=1).float()
     d_hat = torch.nan_to_num(torch.quantile(edge, EDGE_STRIP_QUANTILE), nan=float("inf"))
@@ -451,7 +453,9 @@ class RefinedInference:
         """Right render of the unrefined field (the base renders were skipped)."""
         field = replace(base.gaussians, cov_surface=None, cov_center=None, cov_effective=None)
         hw = (int(batch.left.shape[-2]), int(batch.left.shape[-1]))
-        return self.model.renderer.render(FieldRenderRequest(field, batch.camera, hw, "right")).image
+        return self.model.renderer.render(
+            FieldRenderRequest(field, batch.camera, hw, "right")
+        ).image
 
     def __call__(self, batch: Any, **forward_kwargs: Any) -> ActionResult:
         with self._scopes():

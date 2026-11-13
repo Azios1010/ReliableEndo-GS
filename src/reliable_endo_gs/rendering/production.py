@@ -699,7 +699,9 @@ class ProductionFieldRenderer:
         self.zfar_m = zfar_m
         self.native_units_per_metre = GRAPHDECO_NEAR_THRESHOLD / znear_m
         # (camera tensors are kept alive so their id/storage cannot be recycled while an entry exists)
-        self._camera_cache: dict[tuple[object, ...], tuple[tuple[torch.Tensor, ...], NativeCameraBatch]] = {}
+        self._camera_cache: dict[
+            tuple[object, ...], tuple[tuple[torch.Tensor, ...], NativeCameraBatch]
+        ] = {}
         self.identity = (
             f"graphdeco_{GRAPHDECO_RASTERIZER_REVISION[:7]}_a00_camera_v3_halfpixel"
             f"_near_{znear_m:.17g}m_far_{zfar_m:.17g}m"
@@ -735,7 +737,8 @@ class ProductionFieldRenderer:
             return build()
         tensors = (camera.K_L, camera.K_R, camera.T_R_from_L)
         key = (view.value, tuple(image_hw)) + tuple(
-            (id(t), t.data_ptr(), t._version, tuple(t.shape), t.dtype, str(t.device)) for t in tensors
+            (id(t), t.data_ptr(), t._version, tuple(t.shape), t.dtype, str(t.device))
+            for t in tensors
         )
         hit = self._camera_cache.get(key)
         if hit is not None:

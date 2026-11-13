@@ -32,7 +32,12 @@ def right_visible_support(support: torch.Tensor, disparity: torch.Tensor) -> tor
 
     At least one column must remain; the input is not modified.
     """
-    if support.dtype != torch.bool or support.ndim != 4 or support.shape[0] != 1 or support.shape[1] != 1:
+    if (
+        support.dtype != torch.bool
+        or support.ndim != 4
+        or support.shape[0] != 1
+        or support.shape[1] != 1
+    ):
         raise ValueError("support must be a bool tensor of shape [1,1,H,W]")
     strip = strip_width(disparity.detach())
     width = support.shape[-1]

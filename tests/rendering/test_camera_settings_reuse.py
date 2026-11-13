@@ -80,7 +80,8 @@ def test_cache_is_bounded_and_keeps_keyed_tensors_alive():
             built = renderer._native_camera(camera, (6, 8), CameraView.LEFT)
             del camera  # the cache holds the tensors, so their ids/storage cannot be recycled
             assert _same(
-                built, _renderer()._native_camera(_camera(shift=1.0 + index), (6, 8), CameraView.LEFT)
+                built,
+                _renderer()._native_camera(_camera(shift=1.0 + index), (6, 8), CameraView.LEFT),
             )
         assert len(renderer._camera_cache) <= 16
 
