@@ -128,8 +128,9 @@ def test_refine_gaussian_field_default_is_unchanged_and_the_guard_uses_the_base_
 
 
 def test_refined_inference_guard_matches_the_shared_action_and_costs_one_extra_right_render(
-    setup, monkeypatch
-):  # noqa: F811
+    setup,  # noqa: F811
+    monkeypatch,
+):
     learner, state = setup
     model = learner.reference
     refiner = _refiner(model)
