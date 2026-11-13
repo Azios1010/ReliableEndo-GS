@@ -118,6 +118,30 @@ def read_student_checkpoint(path: Path) -> dict[str, Any]:
     return raw
 
 
+# Corrected-renderer experiment (compatibility amendment, nothing scientific): the shared initial.pt records the historical renderer identity
+# "..._a00_camera_v2_..." inside its construction config. The weights carry no renderer dependence, but the live model now binds
+# "..._a00_camera_v3_halfpixel_...". The ONLY permitted difference between stored and live construction is exactly that version bump.
+_RENDERER_IDENTITY_HISTORICAL = "_a00_camera_v2"
+_RENDERER_IDENTITY_CORRECTED = "_a00_camera_v3_halfpixel"
+
+
+def _warm_start_construction_matches(stored: object, live: dict[str, Any]) -> bool:
+    if stored == live:
+        return True
+    if not isinstance(stored, dict) or set(stored) != set(live):
+        return False
+    live_identity = str(live.get("renderer_identity"))
+    if _RENDERER_IDENTITY_CORRECTED not in live_identity:
+        return False
+    if stored.get("renderer_identity") != live_identity.replace(
+        _RENDERER_IDENTITY_CORRECTED, _RENDERER_IDENTITY_HISTORICAL, 1
+    ):
+        return False
+    return {k: v for k, v in stored.items() if k != "renderer_identity"} == {
+        k: v for k, v in live.items() if k != "renderer_identity"
+    }
+
+
 def initialize_student_model(
     path: Path, learner: StudentLearner, *, require_trained: bool = False
 ) -> dict[str, str]:
@@ -134,7 +158,7 @@ def initialize_student_model(
         model_updates = updates.get("model", cursor.get("optimizer_steps", 0))
         if type(model_updates) is not int or model_updates < 1:
             raise ValueError("frozen initialization requires a trained Phase I model checkpoint")
-    if raw.get("construction_config") != learner.model.config.to_dict():
+    if not _warm_start_construction_matches(raw.get("construction_config"), learner.model.config.to_dict()):
         raise ValueError("warm-start scientific construction mismatch")
     architecture = raw.get("student_config")
     if not isinstance(architecture, dict) or any(
