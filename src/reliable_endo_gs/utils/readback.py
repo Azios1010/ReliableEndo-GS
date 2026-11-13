@@ -55,7 +55,7 @@ def read_diagnostic_scalars(values: Sequence[torch.Tensor]) -> list[float]:
     discarded after the capture, only the captured tensors are replayed.
     """
     if _CAPTURE_DIAGNOSTICS.get():
-        if not torch.cuda.is_current_stream_capturing():
+        if not (torch.cuda.is_available() and torch.cuda.is_current_stream_capturing()):
             raise RuntimeError(
                 "graph_capture_diagnostics is only valid while a CUDA graph is being captured"
             )

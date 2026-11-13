@@ -262,7 +262,7 @@ def _run_student_command(arguments: argparse.Namespace, resources: ExitStack) ->
             raise ValueError(
                 "medical target-mask index and arrays must stay outside the repository"
             )
-        target_masks = TargetMaskIndex(mask_index_path)
+        target_masks = TargetMaskIndex(mask_index_path)  # type: ignore[assignment]
     roles = load_a01_roles(arguments.roles)
     manifest = load_a01_manifest(arguments.manifest, roles=roles)
     adapter = ScaredA00Adapter(arguments.data_root, manifest, roles=roles)
@@ -288,7 +288,7 @@ def _run_student_command(arguments: argparse.Namespace, resources: ExitStack) ->
 
         member_index = deployment_file_index(
             [entry.sample_id for entry in manifest.entries if entry.data_role == "final_train"],
-            stage_inventory,
+            stage_inventory,  # type: ignore[arg-type]
         )
         event_lock = threading.Lock()
         event_path = Path(str(output) + ".input.jsonl")
@@ -533,7 +533,7 @@ def _run_student_command(arguments: argparse.Namespace, resources: ExitStack) ->
                 if gpu_input:
                     supervision = adapter.load_supervision(sample)
                 else:
-                    supervision = adapter.load(
+                    supervision = adapter.load(  # type: ignore[assignment]
                         sample.sample_id,
                         data_role="final_train",
                         include_supervision=True,

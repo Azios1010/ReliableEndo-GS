@@ -58,9 +58,16 @@ def test_a_strip_wider_than_the_image_is_the_whole_image():
 
 def _result(refined_right: float, width: int = 64) -> ActionResult:
     image = torch.full((1, 3, 6, width), refined_right)
-    render = RenderOutput(image, depth=torch.ones(1, 1, 6, width), visibility=torch.ones(1, 1, 6, width))
+    render = RenderOutput(
+        image, depth=torch.ones(1, 1, 6, width), visibility=torch.ones(1, 1, 6, width)
+    )
     return ActionResult(
-        Action.GAUSSIAN, None, _disparity(rows=6, width=width, value=10.0), render, render, ("scale",)  # type: ignore[arg-type]
+        Action.GAUSSIAN,
+        None,
+        _disparity(rows=6, width=width, value=10.0),
+        render,
+        render,
+        ("scale",),  # type: ignore[arg-type]
     )
 
 
@@ -70,17 +77,28 @@ def test_guard_replaces_only_the_right_image_inside_the_strip():
     guarded = guard_right_edge(result, stop)
     assert torch.equal(guarded.right.image[..., :54], result.right.image[..., :54])
     assert torch.equal(guarded.right.image[..., 54:], stop[..., 54:])
-    assert guarded.left is result.left and guarded.field is result.field and guarded.disparity is result.disparity
-    assert guarded.right.depth is result.right.depth and guarded.right.visibility is result.right.visibility
+    assert (
+        guarded.left is result.left
+        and guarded.field is result.field
+        and guarded.disparity is result.disparity
+    )
+    assert (
+        guarded.right.depth is result.right.depth
+        and guarded.right.visibility is result.right.visibility
+    )
 
 
 def _with_disparity(state, value: float):
-    target = replace(state.base.target, disparity=torch.full_like(state.base.target.disparity, value))
+    target = replace(
+        state.base.target, disparity=torch.full_like(state.base.target.disparity, value)
+    )
     return replace(state, base=replace(state.base, target=target))
 
 
 def _refiner(model) -> FieldRefiner:
-    refiner = FieldRefiner(FieldRefinerConfig(hidden_dims=(8, 8), bounds=model.config.residual_bounds))
+    refiner = FieldRefiner(
+        FieldRefinerConfig(hidden_dims=(8, 8), bounds=model.config.residual_bounds)
+    )
     generator = torch.Generator().manual_seed(1)
     with torch.no_grad():
         for parameter in refiner.parameters():
@@ -95,8 +113,12 @@ def test_refine_gaussian_field_default_is_unchanged_and_the_guard_uses_the_base_
     refiner = _refiner(model)
     eps = learner.actions.gaussian_bounds.alpha_logit_epsilon
     plain = refine_gaussian_field(state, refiner, model, composition_alpha_epsilon=eps)
-    explicit_off = refine_gaussian_field(state, refiner, model, composition_alpha_epsilon=eps, edge_guard=False)
-    guarded = refine_gaussian_field(state, refiner, model, composition_alpha_epsilon=eps, edge_guard=True)
+    explicit_off = refine_gaussian_field(
+        state, refiner, model, composition_alpha_epsilon=eps, edge_guard=False
+    )
+    guarded = refine_gaussian_field(
+        state, refiner, model, composition_alpha_epsilon=eps, edge_guard=True
+    )
     assert torch.equal(plain.right.image, explicit_off.right.image)
     strip = right_edge_strip_mask(state.base.target.disparity).flatten().bool()
     assert 0 < int(strip.sum()) < strip.numel()
@@ -105,7 +127,10 @@ def test_refine_gaussian_field_default_is_unchanged_and_the_guard_uses_the_base_
     assert torch.equal(guarded.left.image, plain.left.image)
 
 
-def test_refined_inference_guard_matches_the_shared_action_and_costs_one_extra_right_render(setup, monkeypatch):  # noqa: F811
+def test_refined_inference_guard_matches_the_shared_action_and_costs_one_extra_right_render(
+    setup,  # noqa: F811
+    monkeypatch,
+):
     learner, state = setup
     model = learner.reference
     refiner = _refiner(model)
@@ -117,7 +142,9 @@ def test_refined_inference_guard_matches_the_shared_action_and_costs_one_extra_r
     monkeypatch.setattr(
         "reliable_endo_gs.actions.refinement.right_edge_strip_mask", lambda disparity: partial
     )
-    expected = refine_gaussian_field(state, refiner, model, composition_alpha_epsilon=eps, edge_guard=True)
+    expected = refine_gaussian_field(
+        state, refiner, model, composition_alpha_epsilon=eps, edge_guard=True
+    )
     original = model.renderer
     calls: list[str] = []
     real_render = original.render
@@ -130,13 +157,19 @@ def test_refined_inference_guard_matches_the_shared_action_and_costs_one_extra_r
     try:
         off = RefinedInference(model, refiner, composition_alpha_epsilon=eps)
         plain = off(
-            state.batch, target=state.base.target, sample_ids=("dataset_1/keyframe_1/frame_data000000",)
+            state.batch,
+            target=state.base.target,
+            sample_ids=("dataset_1/keyframe_1/frame_data000000",),
         )
         assert calls == ["left", "right"]
         off.close()
         calls.clear()
         on = RefinedInference(model, refiner, composition_alpha_epsilon=eps, edge_guard=True)
-        actual = on(state.batch, target=state.base.target, sample_ids=("dataset_1/keyframe_1/frame_data000000",))
+        actual = on(
+            state.batch,
+            target=state.base.target,
+            sample_ids=("dataset_1/keyframe_1/frame_data000000",),
+        )
         assert calls == ["left", "right", "right"]
         on.close()
     finally:
@@ -144,7 +177,9 @@ def test_refined_inference_guard_matches_the_shared_action_and_costs_one_extra_r
     assert torch.equal(actual.right.image, expected.right.image)
     assert torch.equal(actual.left.image, expected.left.image)
     assert torch.equal(actual.right.image[..., :-2], plain.right.image[..., :-2])
-    assert not torch.equal(actual.right.image[..., -2:], plain.right.image[..., -2:])  # the guard changed the strip
+    assert not torch.equal(
+        actual.right.image[..., -2:], plain.right.image[..., -2:]
+    )  # the guard changed the strip
 
 
 def test_guard_is_inert_for_a_stop_instance(setup):  # noqa: F811

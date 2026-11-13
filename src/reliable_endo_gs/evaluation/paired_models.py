@@ -11,7 +11,7 @@ import time
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import torch
 
@@ -177,7 +177,7 @@ def benchmark_frozen_predictor(
             nonlocal position
             sample = inputs[position % len(inputs)]
             position += 1
-            return predictor(sample)
+            return cast(FrozenModelPrediction, predictor(sample))
 
         with torch.no_grad():
             profile, last = profile_callable(
@@ -203,7 +203,7 @@ def benchmark_frozen_predictor(
         raise ValueError("read-only benchmark mutated model weights/buffers")
     by_keyframe: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in rows:
-        by_keyframe[row["sample_id"].rsplit("/", 1)[0]].append(row)
+        by_keyframe[str(row["sample_id"]).rsplit("/", 1)[0]].append(row)
     result = {
         **provenance,
         "status": "development_benchmark_complete",
@@ -323,7 +323,7 @@ def compare_frozen_benchmarks(
         "|---|---:|---:|---:|---:|",
     ]
 
-    def fmt(x):
+    def fmt(x: Any) -> str:
         return "unavailable" if x is None else f"{float(x):.6g}"
 
     for name, row in table.items():

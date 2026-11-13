@@ -47,7 +47,7 @@ def verify_gate_a(
     """A prior gate belongs to the exact frozen actors and candidate protocol."""
     if path is None:
         raise ValueError("Stage B requires --gate-a-report from native repair evaluation")
-    report = json.loads(path.read_text())
+    report: dict[str, Any] = json.loads(path.read_text())
     if (
         report.get("schema") != "frozen_repair_gate_a.v1"
         or report.get("status") != "pass"

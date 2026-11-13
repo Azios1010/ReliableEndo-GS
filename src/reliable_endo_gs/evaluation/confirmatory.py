@@ -135,7 +135,7 @@ def confirmatory_verdict(datasets: Mapping[str, FrameRows], *, seed: int = 0) ->
     if missing:
         raise ValueError(f"missing datasets: {missing}")
     per = {d: dataset_verdict(datasets[d], seed=seed) for d in REQUIRED_DATASETS}
-    failing = {d: [name for name, ok in v["checks"].items() if not ok] for d, v in per.items()}  # type: ignore[union-attr]
+    failing = {d: [name for name, ok in v["checks"].items() if not ok] for d, v in per.items()}  # type: ignore[attr-defined]
     return {
         "verdict": "supported" if all(v["passed"] for v in per.values()) else "not supported",
         "failing": failing,

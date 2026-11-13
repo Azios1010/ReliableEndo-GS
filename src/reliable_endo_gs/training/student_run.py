@@ -173,7 +173,7 @@ def run_student_training(
                         teacher_target=target,
                         position=cursor["samples_seen"],
                         metric_truth=truth,
-                        **gt_extra,
+                        **gt_extra,  # type: ignore[arg-type]
                     )
                 else:
                     losses = learner.step(
@@ -181,7 +181,7 @@ def run_student_training(
                         joint=joint,
                         teacher_target=target,
                         position=cursor["samples_seen"],
-                        **gt_extra,
+                        **gt_extra,  # type: ignore[arg-type]
                     )
                 cursor["samples_seen"] += 1
                 cursor["optimizer_steps"] += 1

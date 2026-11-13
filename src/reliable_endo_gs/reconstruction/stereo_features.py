@@ -70,7 +70,7 @@ class ParallelMomentsGroupNorm(nn.GroupNorm):
             shift = self.bias.view(channel_shape).to(work.dtype) - mean * scale
         else:
             shift = -mean * scale
-        return cast(torch.Tensor, torch.addcmul(shift, work, scale).to(image.dtype))
+        return torch.addcmul(shift, work, scale).to(image.dtype)
 
 
 class _ResidualBlock(nn.Module):

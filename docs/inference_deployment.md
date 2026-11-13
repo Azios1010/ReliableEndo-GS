@@ -7,14 +7,14 @@ configs, checkpoints and training defaults are untouched; nothing here changes a
 from reliable_endo_gs.reconstruction.deployment import optimize_student_for_inference
 
 record = optimize_student_for_inference(
-    model,                                  # StudentReconstructionModel, eval(), requires_grad_(False)
-    parallel_group_norm=True,               # numerical approximation, see below
-    stereo_cuda_graph=True,                 # bit-exact; one graph per example grid
-    example_batches=[example_batch],        # one DeploymentStereoBatch per input grid
-    deferred_validation=True,               # bit-exact; validation errors surface at the end of forward()
+    model,  # StudentReconstructionModel, eval(), requires_grad_(False)
+    parallel_group_norm=True,  # numerical approximation, see below
+    stereo_cuda_graph=True,  # bit-exact; one graph per example grid
+    example_batches=[example_batch],  # one DeploymentStereoBatch per input grid
+    deferred_validation=True,  # bit-exact; validation errors surface at the end of forward()
 )
-record.to_dict()   # states exactly what was applied and whether every transform is bit-exact
-record.undo()      # restores the original modules and eager methods
+record.to_dict()  # states exactly what was applied and whether every transform is bit-exact
+record.undo()  # restores the original modules and eager methods
 ```
 
 ## What each option does

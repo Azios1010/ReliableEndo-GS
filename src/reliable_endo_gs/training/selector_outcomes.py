@@ -438,12 +438,12 @@ def load_selector_outcomes(
                     ):
                         raise ValueError("invalid physical metric changes")
                     triples.append(metric_targets(vector, cfg, ai))
-                expected = triples[-1]
+                expected_triple = triples[-1]
                 if (
-                    row["global_gain"] != expected[0]
-                    or row["local_gain"] != expected[1]
+                    row["global_gain"] != expected_triple[0]
+                    or row["local_gain"] != expected_triple[1]
                     or type(row["harm"]) is not bool
-                    or row["harm"] != expected[2]
+                    or row["harm"] != expected_triple[2]
                 ):
                     raise ValueError("frozen labels differ from canonical utility/guards")
                 events = (

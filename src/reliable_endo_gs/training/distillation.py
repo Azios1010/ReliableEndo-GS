@@ -17,9 +17,14 @@ from reliable_endo_gs.teachers.quality import screen_target
 class DisparityTarget(Protocol):
     """What the loss reads from a target: disparity [B,1,H,W] and boolean validity/support masks."""
 
-    disparity: torch.Tensor
-    validity: torch.Tensor
-    support: torch.Tensor
+    @property
+    def disparity(self) -> torch.Tensor: ...
+
+    @property
+    def validity(self) -> torch.Tensor: ...
+
+    @property
+    def support(self) -> torch.Tensor: ...
 
 
 @dataclass(frozen=True, slots=True)

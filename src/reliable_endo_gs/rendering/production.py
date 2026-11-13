@@ -30,6 +30,11 @@ GRAPHDECO_RASTERIZER_REVISION = "59f5f77e3ddbac3ed9db93ec2cfe99ed6c5d121d"
 GRAPHDECO_COVARIANCE_ORDER = ("xx", "xy", "xz", "yy", "yz", "zz")
 # Pinned auxiliary.h::in_frustum culls p_view.z <= 0.2 in native scene units.
 GRAPHDECO_NEAR_THRESHOLD = 0.2
+# The pinned rasterizer maps NDC to pixels as ((ndc + 1) * S - 1) / 2 and evaluates pixel index j at coordinate j
+# (cuda_rasterizer/auxiliary.h:41-44, forward.cu:233,282,333), i.e. its frustum expects an edge-based principal point. The A00 contract
+# uses integer pixel centres (geometry/conventions.py). The frustum is therefore built with the principal point shifted by half a pixel,
+# once, here only; K, backprojection and Gaussian centres are untouched. Measured: without it a Gaussian renders 0.500 px up-left.
+NATIVE_FRUSTUM_PRINCIPAL_POINT_OFFSET_PX = 0.5
 
 
 def pack_graphdeco_covariance(covariance: torch.Tensor) -> torch.Tensor:
@@ -125,7 +130,8 @@ def native_camera_batch_from_rectified(
     viewmatrix = world_to_camera.transpose(-1, -2).contiguous()
     height, width = image_hw
     fx, fy = intrinsics[:, 0, 0], intrinsics[:, 1, 1]
-    cx, cy = intrinsics[:, 0, 2], intrinsics[:, 1, 2]
+    cx = intrinsics[:, 0, 2] + NATIVE_FRUSTUM_PRINCIPAL_POINT_OFFSET_PX
+    cy = intrinsics[:, 1, 2] + NATIVE_FRUSTUM_PRINCIPAL_POINT_OFFSET_PX
     raise_first_failure(
         [
             (
@@ -693,9 +699,11 @@ class ProductionFieldRenderer:
         self.zfar_m = zfar_m
         self.native_units_per_metre = GRAPHDECO_NEAR_THRESHOLD / znear_m
         # (camera tensors are kept alive so their id/storage cannot be recycled while an entry exists)
-        self._camera_cache: dict[tuple[object, ...], tuple[tuple[torch.Tensor, ...], NativeCameraBatch]] = {}
+        self._camera_cache: dict[
+            tuple[object, ...], tuple[tuple[torch.Tensor, ...], NativeCameraBatch]
+        ] = {}
         self.identity = (
-            f"graphdeco_{GRAPHDECO_RASTERIZER_REVISION[:7]}_a00_camera_v2"
+            f"graphdeco_{GRAPHDECO_RASTERIZER_REVISION[:7]}_a00_camera_v3_halfpixel"
             f"_near_{znear_m:.17g}m_far_{zfar_m:.17g}m"
             f"_units_{self.native_units_per_metre:.17g}"
         )
@@ -729,7 +737,8 @@ class ProductionFieldRenderer:
             return build()
         tensors = (camera.K_L, camera.K_R, camera.T_R_from_L)
         key = (view.value, tuple(image_hw)) + tuple(
-            (id(t), t.data_ptr(), t._version, tuple(t.shape), t.dtype, str(t.device)) for t in tensors
+            (id(t), t.data_ptr(), t._version, tuple(t.shape), t.dtype, str(t.device))
+            for t in tensors
         )
         hit = self._camera_cache.get(key)
         if hit is not None:

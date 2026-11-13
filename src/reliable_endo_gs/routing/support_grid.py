@@ -120,7 +120,7 @@ class AutomaticSupportGrid:
                 (tile, int(pixels), int(primitives), (cy0 + cy1) / (2 * h), (cx0 + cx1) / (2 * w))
             )
         n = min(self.limits.max_regions, len(candidates))
-        result = []
+        result: list[MaskRegion] = []
         remaining_pixels, remaining_primitives = self.limits.max_pixels, self.limits.max_primitives
         strata_rows = max(1, math.isqrt(n))
         strata_columns = math.ceil(n / strata_rows)

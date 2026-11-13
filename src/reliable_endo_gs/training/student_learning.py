@@ -550,9 +550,7 @@ class StudentLearner:
         height, width = state.batch.left.shape[-2:]
         full = grid_regions((height, width), (height, width), self.routing.halo)[0]
         base = self.actions.execute(state, full, Action.STOP, self.model)
-        rgb = reconstruction_loss(
-            state, base, mask_right_strip=self.config.right_visibility_mask
-        )
+        rgb = reconstruction_loss(state, base, mask_right_strip=self.config.right_visibility_mask)
         kd = rgb.new_zeros(())
         diagnostics: dict[str, float] = {}
         if self.config.kd_weight:
@@ -567,7 +565,10 @@ class StudentLearner:
             ground_truth = stereo_distillation(base.disparity, gt_target, state.batch)
             gt = ground_truth.loss
             diagnostics.update(
-                {key.replace("kd_", "gt_", 1): value for key, value in ground_truth.diagnostics.items()}
+                {
+                    key.replace("kd_", "gt_", 1): value
+                    for key, value in ground_truth.diagnostics.items()
+                }
             )
         repair = rgb.new_zeros(())
         selector_loss = rgb.new_zeros(())

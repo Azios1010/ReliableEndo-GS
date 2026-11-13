@@ -94,7 +94,9 @@ class StudentLearningConfig:
         """Omit neutral schedule fields to preserve historical checkpoint identities."""
         values = asdict(self)
         if not self.gt_weight:
-            values.pop("gt_weight")  # GT-disparity supervision is opt-in; historical identities stay valid
+            values.pop(
+                "gt_weight"
+            )  # GT-disparity supervision is opt-in; historical identities stay valid
         if self.stereo_architecture == "compact":
             values.pop("stereo_architecture")
         if not self.right_visibility_mask:

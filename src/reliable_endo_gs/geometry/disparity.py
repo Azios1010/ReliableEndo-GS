@@ -281,11 +281,11 @@ def _validate_camera_scalars(
         value_checks.append(
             (
                 torch.all(torch.isfinite(scalar)),
-                lambda name=name: ValueError(f"{name} must be finite"),
+                lambda name=name: ValueError(f"{name} must be finite"),  # type: ignore[misc]
             )
         )
         value_checks.append(
-            (torch.all(scalar > 0), lambda name=name: ValueError(f"{name} must be positive"))
+            (torch.all(scalar > 0), lambda name=name: ValueError(f"{name} must be positive"))  # type: ignore[misc]
         )
     raise_first_failure(value_checks)
 

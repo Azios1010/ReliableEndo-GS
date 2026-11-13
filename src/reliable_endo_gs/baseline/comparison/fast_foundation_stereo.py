@@ -90,10 +90,14 @@ def _upstream_on_path(root: Path) -> Iterator[None]:
 def _assert_allowed_globals(checkpoint: Path) -> None:
     names = torch.serialization.get_unsafe_globals_in_checkpoint(str(checkpoint))
     rejected = sorted(
-        name for name in names if name not in _ALLOWED_GLOBAL_NAMES and not name.startswith(_ALLOWED_GLOBAL_PREFIXES)
+        name
+        for name in names
+        if name not in _ALLOWED_GLOBAL_NAMES and not name.startswith(_ALLOWED_GLOBAL_PREFIXES)
     )
     if rejected:
-        raise FastFoundationStereoError(f"the checkpoint would import unexpected globals: {rejected}")
+        raise FastFoundationStereoError(
+            f"the checkpoint would import unexpected globals: {rejected}"
+        )
 
 
 class FastFoundationStereoPredictor(nn.Module):

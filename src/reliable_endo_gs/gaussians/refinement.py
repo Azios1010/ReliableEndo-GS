@@ -88,6 +88,8 @@ class FieldResiduals:
 class FieldRefiner(nn.Module):
     """Context [B,N,13] -> bounded rotation [B,N,3], log-scale [B,N,3], alpha-logit [B,N,1] (+ colour [B,N,3])."""
 
+    _channels: torch.Tensor
+
     def __init__(self, config: FieldRefinerConfig | None = None) -> None:
         super().__init__()
         self.config = config or FieldRefinerConfig()

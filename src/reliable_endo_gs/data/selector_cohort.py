@@ -472,7 +472,7 @@ def temporal_keyframe_cohort(sample_ids: tuple[str, ...], per_keyframe: int) -> 
     groups: dict[str, list[str]] = defaultdict(list)
     for sid in sorted(sample_ids):
         groups[sid.rsplit("/", 1)[0]].append(sid)
-    chosen = []
+    chosen: list[str] = []
     for ids in groups.values():
         n = min(per_keyframe, len(ids))
         chosen.extend(ids[(2 * i + 1) * len(ids) // (2 * n)] for i in range(n))

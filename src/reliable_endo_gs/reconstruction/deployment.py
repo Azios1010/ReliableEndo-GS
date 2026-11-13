@@ -193,7 +193,7 @@ def optimize_student_for_inference(
             with deferred_validation_scope():
                 return inner(*args, **kwargs)
 
-        model.forward = forward_with_deferred_validation  # type: ignore[method-assign]
+        model.forward = forward_with_deferred_validation
         record.deferred_validation = True
         record._undo.append(lambda: model.__dict__.pop("forward", None))
     return record
