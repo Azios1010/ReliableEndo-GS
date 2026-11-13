@@ -33,9 +33,6 @@ def build_posed_predictor(
     any model. DepthSplat's native constructor may populate TORCH_HOME with
     DINOv2; the launch environment must direct that cache to D:.
     """
-    from dacite import from_dict
-    from omegaconf import OmegaConf
-
     PosedGaussianConfig(near_m, far_m, 0)
     upstream = upstream.resolve()
     commit = subprocess.check_output(
@@ -47,6 +44,10 @@ def build_posed_predictor(
     )
     if commit != upstream_commit or dirty:
         raise ValueError("upstream commit changed or tracked source is modified")
+    # Third-party imports follow the identity check, so a changed upstream is refused before anything is imported.
+    from dacite import from_dict
+    from omegaconf import OmegaConf
+
     package = importlib.import_module("src")
     if upstream / "src" not in [Path(p).resolve() for p in package.__path__]:
         raise ValueError("wrong upstream src package; launch from its repository")
