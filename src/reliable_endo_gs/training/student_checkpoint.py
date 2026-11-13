@@ -158,7 +158,9 @@ def initialize_student_model(
         model_updates = updates.get("model", cursor.get("optimizer_steps", 0))
         if type(model_updates) is not int or model_updates < 1:
             raise ValueError("frozen initialization requires a trained Phase I model checkpoint")
-    if not _warm_start_construction_matches(raw.get("construction_config"), learner.model.config.to_dict()):
+    if not _warm_start_construction_matches(
+        raw.get("construction_config"), learner.model.config.to_dict()
+    ):
         raise ValueError("warm-start scientific construction mismatch")
     architecture = raw.get("student_config")
     if not isinstance(architecture, dict) or any(

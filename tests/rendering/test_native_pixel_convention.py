@@ -53,7 +53,9 @@ def _camera(name: str) -> RectifiedStereoCamera:
     device = torch.device("cuda")
 
     def k(cx: float) -> torch.Tensor:
-        return torch.tensor([[f, 0, cx], [0, f, cy], [0, 0, 1.0]], dtype=torch.float32, device=device)[None]
+        return torch.tensor(
+            [[f, 0, cx], [0, f, cy], [0, 0, 1.0]], dtype=torch.float32, device=device
+        )[None]
 
     t = torch.eye(4, dtype=torch.float32, device=device)[None].clone()
     t[0, 0, 3] = -BASELINE_M
@@ -79,7 +81,12 @@ def _render(renderer, camera, view, point, sigma_m):
         valid_mask=torch.ones(1, 1, dtype=torch.bool, device="cuda"),
     )
     with torch.no_grad():
-        return renderer.render(FieldRenderRequest(replace(field), camera, (H, W), view)).image[0, 0].double().cpu()
+        return (
+            renderer.render(FieldRenderRequest(replace(field), camera, (H, W), view))
+            .image[0, 0]
+            .double()
+            .cpu()
+        )
 
 
 def _centroid(image: torch.Tensor) -> tuple[float, float]:
@@ -89,7 +96,12 @@ def _centroid(image: torch.Tensor) -> tuple[float, float]:
     return float((image.sum(0) * xs).sum() / total), float((image.sum(1) * ys).sum() / total)
 
 
-def _offsets(camera_name: str, view: str, renderer: ProductionFieldRenderer, camera: RectifiedStereoCamera | None = None):
+def _offsets(
+    camera_name: str,
+    view: str,
+    renderer: ProductionFieldRenderer,
+    camera: RectifiedStereoCamera | None = None,
+):
     camera = camera or _camera(camera_name)
     f = float(camera.K_L[0, 0, 0])
     cx, cy = float(camera.K_L[0, 0, 2]), float(camera.K_L[0, 1, 2])
@@ -109,21 +121,45 @@ def _offsets(camera_name: str, view: str, renderer: ProductionFieldRenderer, cam
 
 @pytest.mark.parametrize("camera_name", sorted(CAMERAS))
 @pytest.mark.parametrize("view", ["left", "right"])
-def test_native_centroid_matches_integer_pixel_centre_projection(camera_name: str, view: str) -> None:
+def test_native_centroid_matches_integer_pixel_centre_projection(
+    camera_name: str, view: str
+) -> None:
     rows = _offsets(camera_name, view, ProductionFieldRenderer())
-    assert len(rows) >= 40, "too few valid measurements; the fixture grid no longer covers the image"
+    assert len(rows) >= 40, (
+        "too few valid measurements; the fixture grid no longer covers the image"
+    )
     du = torch.tensor([r[0] for r in rows])
     dv = torch.tensor([r[1] for r in rows])
-    assert abs(float(du.mean())) <= TOLERANCE_MEAN_PX and abs(float(dv.mean())) <= TOLERANCE_MEAN_PX, (float(du.mean()), float(dv.mean()))
-    assert float(du.abs().max()) <= TOLERANCE_MAX_PX and float(dv.abs().max()) <= TOLERANCE_MAX_PX, (float(du.abs().max()), float(dv.abs().max()))
+    assert (
+        abs(float(du.mean())) <= TOLERANCE_MEAN_PX and abs(float(dv.mean())) <= TOLERANCE_MEAN_PX
+    ), (float(du.mean()), float(dv.mean()))
+    assert (
+        float(du.abs().max()) <= TOLERANCE_MAX_PX and float(dv.abs().max()) <= TOLERANCE_MAX_PX
+    ), (float(du.abs().max()), float(dv.abs().max()))
 
 
 def test_native_projection_test_detects_a_half_pixel_error() -> None:
     """Sensitivity control: removing the correction at the camera (principal point - 0.5) must be detected as -0.5 px."""
     camera = _camera("real_dataset7")
     shifted = RectifiedStereoCamera(
-        camera.K_L - torch.tensor([[0, 0, NATIVE_FRUSTUM_PRINCIPAL_POINT_OFFSET_PX], [0, 0, NATIVE_FRUSTUM_PRINCIPAL_POINT_OFFSET_PX], [0, 0, 0]], device="cuda"),
-        camera.K_R - torch.tensor([[0, 0, NATIVE_FRUSTUM_PRINCIPAL_POINT_OFFSET_PX], [0, 0, NATIVE_FRUSTUM_PRINCIPAL_POINT_OFFSET_PX], [0, 0, 0]], device="cuda"),
+        camera.K_L
+        - torch.tensor(
+            [
+                [0, 0, NATIVE_FRUSTUM_PRINCIPAL_POINT_OFFSET_PX],
+                [0, 0, NATIVE_FRUSTUM_PRINCIPAL_POINT_OFFSET_PX],
+                [0, 0, 0],
+            ],
+            device="cuda",
+        ),
+        camera.K_R
+        - torch.tensor(
+            [
+                [0, 0, NATIVE_FRUSTUM_PRINCIPAL_POINT_OFFSET_PX],
+                [0, 0, NATIVE_FRUSTUM_PRINCIPAL_POINT_OFFSET_PX],
+                [0, 0, 0],
+            ],
+            device="cuda",
+        ),
         camera.T_R_from_L,
         True,
     )
