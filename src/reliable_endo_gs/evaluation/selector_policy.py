@@ -94,7 +94,7 @@ def replay_policy(
             decision = model.select(features, costs, available, repair_budget_ms)
             ri, ai = decision.region_index, int(decision.action)
         selected = None if ri is None else regions[ri]["actions"][ai]
-        known = selected is None or selected["selector_label_available"]
+        label_known = selected is None or selected["selector_label_available"]
         gain = 0.0 if selected is None else selected["global_gain"]
         cost = 0.0 if selected is None else float(costs_vector[ai])
         changes = [0.0] * len(COMPONENT_NAMES) if selected is None else selected["metric_changes"]
@@ -105,8 +105,8 @@ def replay_policy(
                 "action": ("STOP", "STEREO", "GAUSSIAN")[ai],
                 "gain": gain,
                 "net_gain": None if gain is None else gain - config.cost_weight_per_ms * cost,
-                "harm": (False if selected is None else selected["harm"]) if known else None,
-                "known": bool(known),
+                "harm": (False if selected is None else selected["harm"]) if label_known else None,
+                "known": bool(label_known),
                 "estimated_repair_ms": cost,
                 "metric_changes": changes,
             }
@@ -156,7 +156,7 @@ def replay_risk_report(
         table, model.config, "selector", repair_budget_ms=repair_budget_ms, model=model
     )
     pools: dict[tuple[str, str, str], list[tuple[float, bool]]] = defaultdict(list)
-    unknown = Counter()
+    unknown: Counter[Any] = Counter()
     for record, decision in zip(table.records, selected, strict=True):
         if not record["interventions"]:
             continue

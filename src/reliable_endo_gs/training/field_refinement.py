@@ -18,7 +18,7 @@ import hashlib
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 import torch
 from torch import nn
@@ -92,7 +92,7 @@ def train_field_refinement(
         for parameter in trainable:
             parameter.requires_grad_(True)
         model.head.train()
-        frozen_before = {"stereo_student": state_digest(model.stereo_student)}
+        frozen_before = {"stereo_student": state_digest(cast(nn.Module, model.stereo_student))}
     else:
         assert refiner is not None
         trainable = list(refiner.parameters())
@@ -152,7 +152,7 @@ def train_field_refinement(
             window.clear()
         del state, base, outcome, loss
     if config.arm == "head":
-        after = {"stereo_student": state_digest(model.stereo_student)}
+        after = {"stereo_student": state_digest(cast(nn.Module, model.stereo_student))}
     else:
         after = {"model": state_digest(model)}
     if after != frozen_before:

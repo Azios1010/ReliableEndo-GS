@@ -13,7 +13,7 @@ import copy
 from collections.abc import Mapping, Sequence
 from contextlib import ExitStack
 from dataclasses import dataclass, fields, replace
-from typing import Any
+from typing import Any, cast
 
 import torch
 
@@ -38,7 +38,7 @@ from reliable_endo_gs.gaussians.refinement import FieldRefiner
 from reliable_endo_gs.gaussians.sampling import fixed_grid_cells
 from reliable_endo_gs.reconstruction.model import ReferenceReconstructionModel
 from reliable_endo_gs.regions.grid import Region
-from reliable_endo_gs.rendering.field import FieldRenderRequest
+from reliable_endo_gs.rendering.field import FieldRenderer, FieldRenderRequest
 from reliable_endo_gs.utils.inference_mode import (
     compiled_kernels,
     reuse_camera_settings,
@@ -126,7 +126,7 @@ def right_edge_strip_mask(disparity: torch.Tensor) -> torch.Tensor:
     edge = disparity[0, 0, :, -EDGE_STRIP_DISPARITY_COLUMNS:].amax(dim=1).float()
     d_hat = torch.nan_to_num(torch.quantile(edge, EDGE_STRIP_QUANTILE), nan=float("inf"))
     columns = torch.arange(width, device=disparity.device, dtype=torch.float32)
-    return (columns >= width - d_hat).to(torch.float32).reshape(1, 1, 1, width)
+    return cast(torch.Tensor, (columns >= width - d_hat).to(torch.float32).reshape(1, 1, 1, width))
 
 
 def guard_right_edge(result: ActionResult, stop_right: torch.Tensor) -> ActionResult:
@@ -453,9 +453,8 @@ class RefinedInference:
         """Right render of the unrefined field (the base renders were skipped)."""
         field = replace(base.gaussians, cov_surface=None, cov_center=None, cov_effective=None)
         hw = (int(batch.left.shape[-2]), int(batch.left.shape[-1]))
-        return self.model.renderer.render(
-            FieldRenderRequest(field, batch.camera, hw, "right")
-        ).image
+        renderer = cast(FieldRenderer, self.model.renderer)
+        return renderer.render(FieldRenderRequest(field, batch.camera, hw, "right")).image
 
     def __call__(self, batch: Any, **forward_kwargs: Any) -> ActionResult:
         with self._scopes():

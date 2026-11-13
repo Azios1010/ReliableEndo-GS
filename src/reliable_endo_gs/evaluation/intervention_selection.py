@@ -261,7 +261,7 @@ def _evaluate_intervention_selection(
     elif (mask_config is None) != (target_mask_index is None):
         raise ValueError("mask checkpoint requires its explicit deployment ROI index")
     else:
-        masks = None if target_mask_index is None else TargetMaskIndex(target_mask_index)
+        masks = None if target_mask_index is None else TargetMaskIndex(target_mask_index)  # type: ignore[assignment]
     if masks is not None:
         if construction.runtime.resolution_hw is None:
             raise ValueError("mask evaluation requires a pinned output grid")

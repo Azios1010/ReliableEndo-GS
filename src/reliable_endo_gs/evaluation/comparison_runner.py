@@ -130,7 +130,7 @@ def _freeze_guard(spec: dict[str, Any], name: str) -> dict[str, Any]:
         raise SystemExit("REFUSED: FREEZE_COMPARISON.json (or its hash file) does not exist")
     if sha256_file(freeze_path) != sha_path.read_text().split()[0]:
         raise SystemExit("REFUSED: FREEZE_COMPARISON.json changed since it was hashed")
-    frozen = json.loads(freeze_path.read_text())
+    frozen: dict[str, Any] = json.loads(freeze_path.read_text())
     if os.environ.get("SNAPSHOT_SHA256") != frozen.get("snapshot_tree_sha256"):
         raise SystemExit("REFUSED: the running source snapshot is not the frozen one")
     if frozen["models"].get(name) != spec["models"][name]:

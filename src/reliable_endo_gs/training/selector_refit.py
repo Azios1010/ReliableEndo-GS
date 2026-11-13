@@ -186,7 +186,7 @@ def run_selector_refit(
                 "legacy refit needs masks; grid Stage A requires explicit --study-protocol-path"
             )
         mask_config = MaskProposalConfig(**raw["mask_config"])
-        masks = TargetMaskIndex(target_mask_index)
+        masks = TargetMaskIndex(target_mask_index)  # type: ignore[assignment]
     if masks.identity != work.get("target_mask_index_sha256"):
         raise ValueError("deployment target mask identity mismatch")
     resolved_cost_path = cost_calibration_path or output_dir / "cost_calibration.pt"
